@@ -36,6 +36,7 @@
 #include <thrust/device_vector.h>
 
 #include "cstone/cuda/cuda_utils.cuh"
+#include "cstone/primitives/math.hpp"
 #include "cstone/findneighbors.hpp"
 
 #include "cstone/traversal/find_neighbors.cuh"
@@ -171,8 +172,8 @@ auto findNeighborsBT(size_t firstBody,
     return interactions;
 }
 
-template<class T, class StrongKeyType>
-void benchmarkGpu()
+template<class T, class StrongKeyType, class FindNeighborsGpuF, class NeighborIndexF>
+void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborIndex)
 {
     using KeyType = typename StrongKeyType::ValueType;
 
@@ -262,11 +263,8 @@ void benchmarkGpu()
 
     auto findNeighborsLambda = [&]()
     {
-        // findNeighborsKernel<<<iceil(n, 128), 128>>>(rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), 0, n, box,
-        //                                             nsViewGpu, ngmax, rawPtr(d_neighbors), rawPtr(d_neighborsCount));
-
-        findNeighborsBT(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), nsViewGpu, box,
-                        rawPtr(d_neighborsCount), rawPtr(d_neighbors), ngmax);
+        findNeighborsGpu(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), nsViewGpu, box,
+                         rawPtr(d_neighborsCount), rawPtr(d_neighbors), ngmax);
     };
 
     float gpuTime = timeGpu(findNeighborsLambda);
@@ -287,12 +285,7 @@ void benchmarkGpu()
         std::vector<cstone::LocalIndex> nilist(neighborsCountGPU[i]);
         for (unsigned j = 0; j < neighborsCountGPU[i]; ++j)
         {
-            size_t warpOffset = (i / TravConfig::targetSize) * TravConfig::targetSize * ngmax;
-            size_t laneOffset = i % TravConfig::targetSize;
-            nilist[j]         = neighborsGPU[warpOffset + TravConfig::targetSize * j + laneOffset];
-            nilist[j]         = neighborsGPU[warpOffset + TravConfig::targetSize * j + laneOffset];
-
-            // nilist[j] = neighborsGPU[i * ngmax + j];
+            nilist[j] = neighborsGPU[neighborIndex(i, j, ngmax)];
         }
         std::sort(nilist.begin(), nilist.end());
 
@@ -314,4 +307,30 @@ void benchmarkGpu()
     std::cout << "numFailsList " << numFailsList << std::endl;
 }
 
-int main() { benchmarkGpu<double, HilbertKey<uint64_t>>(); }
+int main()
+{
+    using Tc      = double;
+    using KeyType = HilbertKey<uint64_t>;
+
+    std::cout << "--- NAIVE ---" << std::endl;
+    auto naive = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
+                    const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
+    {
+        findNeighborsKernel<<<iceil(lastBody - firstBody, 128), 128>>>(x, y, z, h, firstBody, lastBody, box, tree,
+                                                                       ngmax, nidx, nc);
+    };
+    auto neighborIndexNaive = [](unsigned i, unsigned j, unsigned ngmax) { return i * ngmax + j; };
+    benchmarkGpu<Tc, KeyType>(naive, neighborIndexNaive);
+
+    std::cout << "--- BATCHED ---" << std::endl;
+    auto batched = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
+                      const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
+    { findNeighborsBT(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
+    auto neighborIndexBatched = [](unsigned i, unsigned j, unsigned ngmax)
+    {
+        auto warpOffset = (i / TravConfig::targetSize) * TravConfig::targetSize * ngmax;
+        auto laneOffset = i % TravConfig::targetSize;
+        return warpOffset + TravConfig::targetSize * j + laneOffset;
+    };
+    benchmarkGpu<Tc, KeyType>(batched, neighborIndexBatched);
+}
