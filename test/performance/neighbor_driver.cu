@@ -33,7 +33,7 @@
 #include <iostream>
 #include <iterator>
 
-#include <thrust/device_vector.h>
+#include <thrust/universal_vector.h>
 
 #include "cstone/cuda/cuda_utils.cuh"
 #include "cstone/primitives/math.hpp"
@@ -143,7 +143,7 @@ auto findNeighborsBT(size_t firstBody,
     unsigned numBodies = lastBody - firstBody;
     unsigned numBlocks = TravConfig::numBlocks(numBodies);
     unsigned poolSize  = TravConfig::poolSize(numBodies);
-    thrust::device_vector<int> globalPool(poolSize);
+    thrust::universal_vector<int> globalPool(poolSize);
 
     printf("launching %d blocks\n", numBlocks);
     resetTraversalCounters<<<1, 1>>>();
@@ -238,27 +238,27 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
     std::vector<cstone::LocalIndex> neighborsGPU(ngmax * n);
     std::vector<unsigned> neighborsCountGPU(n);
 
-    thrust::device_vector<T> d_x(coords.x().begin(), coords.x().end());
-    thrust::device_vector<T> d_y(coords.y().begin(), coords.y().end());
-    thrust::device_vector<T> d_z(coords.z().begin(), coords.z().end());
-    thrust::device_vector<T> d_h = h;
+    thrust::universal_vector<T> d_x(coords.x().begin(), coords.x().end());
+    thrust::universal_vector<T> d_y(coords.y().begin(), coords.y().end());
+    thrust::universal_vector<T> d_z(coords.z().begin(), coords.z().end());
+    thrust::universal_vector<T> d_h = h;
 
-    thrust::device_vector<KeyType> d_prefixes             = octree.prefixes;
-    thrust::device_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
-    thrust::device_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
-    thrust::device_vector<TreeNodeIndex> d_levelRange     = octree.levelRange;
-    thrust::device_vector<LocalIndex> d_layout            = layout;
-    thrust::device_vector<Vec3<T>> d_centers              = centers;
-    thrust::device_vector<Vec3<T>> d_sizes                = sizes;
+    thrust::universal_vector<KeyType> d_prefixes             = octree.prefixes;
+    thrust::universal_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
+    thrust::universal_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
+    thrust::universal_vector<TreeNodeIndex> d_levelRange     = octree.levelRange;
+    thrust::universal_vector<LocalIndex> d_layout            = layout;
+    thrust::universal_vector<Vec3<T>> d_centers              = centers;
+    thrust::universal_vector<Vec3<T>> d_sizes                = sizes;
 
     OctreeNsView<T, KeyType> nsViewGpu{rawPtr(d_prefixes),   rawPtr(d_childOffsets), rawPtr(d_internalToLeaf),
                                        rawPtr(d_levelRange), rawPtr(d_layout),       rawPtr(d_centers),
                                        rawPtr(d_sizes)};
 
-    thrust::device_vector<LocalIndex> d_neighbors(neighborsGPU.size());
-    thrust::device_vector<unsigned> d_neighborsCount(neighborsCountGPU.size());
+    thrust::universal_vector<LocalIndex> d_neighbors(neighborsGPU.size());
+    thrust::universal_vector<unsigned> d_neighborsCount(neighborsCountGPU.size());
 
-    thrust::device_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
+    thrust::universal_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
     const auto* deviceKeys = (const KeyType*)(rawPtr(d_codes));
 
     auto findNeighborsLambda = [&]()
@@ -312,25 +312,88 @@ int main()
     using Tc      = double;
     using KeyType = HilbertKey<uint64_t>;
 
-    std::cout << "--- NAIVE ---" << std::endl;
-    auto naive = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
-                    const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
-    {
-        findNeighborsKernel<<<iceil(lastBody - firstBody, 128), 128>>>(x, y, z, h, firstBody, lastBody, box, tree,
-                                                                       ngmax, nidx, nc);
-    };
-    auto neighborIndexNaive = [](unsigned i, unsigned j, unsigned ngmax) { return i * ngmax + j; };
-    benchmarkGpu<Tc, KeyType>(naive, neighborIndexNaive);
+    // std::cout << "--- NAIVE ---" << std::endl;
+    // auto naive = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
+    //                 const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
+    //{
+    //     findNeighborsKernel<<<iceil(lastBody - firstBody, 128), 128>>>(x, y, z, h, firstBody, lastBody, box, tree,
+    //                                                                    ngmax, nidx, nc);
+    // };
+    // auto neighborIndexNaive = [](unsigned i, unsigned j, unsigned ngmax) { return i * ngmax + j; };
+    // benchmarkGpu<Tc, KeyType>(naive, neighborIndexNaive);
 
-    std::cout << "--- BATCHED ---" << std::endl;
-    auto batched = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
-                      const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
-    { findNeighborsBT(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
+    // std::cout << "--- BATCHED ---" << std::endl;
+    // auto batched = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
+    //                   const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
+    //{ findNeighborsBT(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
     auto neighborIndexBatched = [](unsigned i, unsigned j, unsigned ngmax)
     {
         auto warpOffset = (i / TravConfig::targetSize) * TravConfig::targetSize * ngmax;
         auto laneOffset = i % TravConfig::targetSize;
         return warpOffset + TravConfig::targetSize * j + laneOffset;
     };
-    benchmarkGpu<Tc, KeyType>(batched, neighborIndexBatched);
+    // benchmarkGpu<Tc, KeyType>(batched, neighborIndexBatched);
+
+    std::cout << "--- CLUSTERED ---" << std::endl;
+    auto clustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
+                         const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
+    {
+        findNeighborsBT(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax);
+
+        constexpr unsigned iClusterSize = 8;
+        constexpr unsigned jClusterSize = 4;
+
+        auto ncmax = (ngmax + jClusterSize - 1) / jClusterSize; // this assumes well-behaved clusters
+        thrust::universal_vector<unsigned> clusterNeighbors((lastBody * ncmax + iClusterSize - 1) / iClusterSize);
+        thrust::universal_vector<unsigned> clusterNeighborsCount((lastBody + iClusterSize - 1) / iClusterSize, 0);
+
+        for (auto i = firstBody; i < lastBody; ++i)
+        {
+            auto iCluster               = i / iClusterSize;
+            unsigned* iClusterNeighbors = rawPtr(clusterNeighbors) + iCluster * ncmax;
+            unsigned nci                = nc[i];
+            for (unsigned j = 0; j < nci; ++j)
+            {
+                unsigned nj       = nidx[neighborIndexBatched(i, j, ngmax)];
+                unsigned jCluster = nj / jClusterSize;
+                bool alreadyIn    = false;
+                for (unsigned k = 0; k < clusterNeighborsCount[iCluster]; ++k)
+                {
+                    if (iClusterNeighbors[k] == jCluster)
+                    {
+                        alreadyIn = true;
+                        break;
+                    }
+                }
+                if (!alreadyIn) iClusterNeighbors[clusterNeighborsCount[iCluster]++] = jCluster;
+            }
+        }
+        std::memset(nc, 0, lastBody - firstBody);
+        std::memset(nidx, 0, (lastBody - firstBody) * ngmax);
+        for (auto i = firstBody; i < lastBody; ++i)
+        {
+            const Vec4<Tc> iPos                = {x[i], y[i], z[i], 2 * h[i]};
+            auto iCluster                      = i / iClusterSize;
+            const auto* iClustersNeighbors     = rawPtr(clusterNeighbors) + iCluster * ncmax;
+            const auto iClustersNeighborsCount = clusterNeighborsCount[iCluster];
+            for (unsigned jc = 0; jc < iClustersNeighborsCount; ++jc)
+            {
+                auto jCluster = iClustersNeighbors[jc];
+                for (unsigned j = jCluster * jClusterSize;
+                     j < std::min((jCluster + 1) * jClusterSize, (unsigned)lastBody); ++j)
+                {
+                    const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                    const Tc d2         = distanceSq<true>(iPos[0], iPos[1], iPos[2], jPos[0], jPos[1], jPos[2], box);
+                    if (d2 < iPos[3] * iPos[3] && nc[i] < ngmax) nidx[nc[i]++] = j;
+                }
+            }
+        }
+    };
+    auto neighborIndexClustered = [](unsigned i, unsigned j, unsigned ngmax)
+    {
+        auto warpOffset = (i / TravConfig::targetSize) * TravConfig::targetSize * ngmax;
+        auto laneOffset = i % TravConfig::targetSize;
+        return warpOffset + TravConfig::targetSize * j + laneOffset;
+    };
+    benchmarkGpu<Tc, KeyType>(clustered, neighborIndexClustered);
 }

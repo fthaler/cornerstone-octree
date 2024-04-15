@@ -2,6 +2,7 @@
 
 #include <type_traits>
 #include <thrust/device_vector.h>
+#include <thrust/universal_vector.h>
 #include <cuda_runtime.h>
 
 #include "cuda_stubs.h"
@@ -24,6 +25,19 @@ const T* rawPtr(const thrust::device_vector<T, Alloc>& p)
 {
     return thrust::raw_pointer_cast(p.data());
 }
+
+template<class T, class Alloc>
+T* rawPtr(thrust::universal_vector<T, Alloc>& p)
+{
+    return thrust::raw_pointer_cast(p.data());
+}
+
+template<class T, class Alloc>
+const T* rawPtr(const thrust::universal_vector<T, Alloc>& p)
+{
+    return thrust::raw_pointer_cast(p.data());
+}
+
 
 template<class T>
 void memcpyH2D(const T* src, size_t n, T* dest)
