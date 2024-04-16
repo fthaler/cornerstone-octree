@@ -312,27 +312,28 @@ int main()
     using Tc      = double;
     using KeyType = HilbertKey<uint64_t>;
 
-    // std::cout << "--- NAIVE ---" << std::endl;
-    // auto naive = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
-    //                 const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
-    //{
-    //     findNeighborsKernel<<<iceil(lastBody - firstBody, 128), 128>>>(x, y, z, h, firstBody, lastBody, box, tree,
-    //                                                                    ngmax, nidx, nc);
-    // };
-    // auto neighborIndexNaive = [](unsigned i, unsigned j, unsigned ngmax) { return i * ngmax + j; };
-    // benchmarkGpu<Tc, KeyType>(naive, neighborIndexNaive);
+    std::cout << "--- NAIVE ---" << std::endl;
+    auto naive = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
+                    const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
+    {
+        findNeighborsKernel<<<iceil(lastBody - firstBody, 128), 128>>>(x, y, z, h, firstBody, lastBody, box, tree,
+                                                                       ngmax, nidx, nc);
+    };
+    auto neighborIndexNaive = [](unsigned i, unsigned j, unsigned ngmax) { return i * ngmax + j; };
+    benchmarkGpu<Tc, KeyType>(naive, neighborIndexNaive);
 
-    // std::cout << "--- BATCHED ---" << std::endl;
-    // auto batched = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
-    //                   const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
-    //{ findNeighborsBT(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
+    std::cout << "--- BATCHED ---" << std::endl;
+    auto batched = [](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
+                      const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
+    { findNeighborsBT(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
     auto neighborIndexBatched = [](unsigned i, unsigned j, unsigned ngmax)
     {
         auto warpOffset = (i / TravConfig::targetSize) * TravConfig::targetSize * ngmax;
         auto laneOffset = i % TravConfig::targetSize;
-        return warpOffset + TravConfig::targetSize * j + laneOffset;
+        auto index      = warpOffset + TravConfig::targetSize * j + laneOffset;
+        return index;
     };
-    // benchmarkGpu<Tc, KeyType>(batched, neighborIndexBatched);
+    benchmarkGpu<Tc, KeyType>(batched, neighborIndexBatched);
 
     std::cout << "--- CLUSTERED ---" << std::endl;
     auto clustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
@@ -365,26 +366,43 @@ int main()
                         break;
                     }
                 }
-                if (!alreadyIn) iClusterNeighbors[clusterNeighborsCount[iCluster]++] = jCluster;
+                if (!alreadyIn)
+                {
+                    if (clusterNeighborsCount[iCluster] < ncmax)
+                        iClusterNeighbors[clusterNeighborsCount[iCluster]] = jCluster;
+                    ++clusterNeighborsCount[iCluster];
+                }
             }
         }
-        std::memset(nc, 0, lastBody - firstBody);
-        std::memset(nidx, 0, (lastBody - firstBody) * ngmax);
+        std::memset(nc, 0, (lastBody - firstBody) * sizeof(unsigned));
+        std::memset(nidx, 0, (lastBody - firstBody) * ngmax * sizeof(unsigned));
         for (auto i = firstBody; i < lastBody; ++i)
         {
-            const Vec4<Tc> iPos                = {x[i], y[i], z[i], 2 * h[i]};
-            auto iCluster                      = i / iClusterSize;
+            const Vec3<Tc> iPos = {x[i], y[i], z[i]};
+            auto pbc            = BoundaryType::periodic;
+            bool anyPbc         = box.boundaryX() == pbc || box.boundaryY() == pbc || box.boundaryZ() == pbc;
+            bool usePbc         = anyPbc && !insideBox(iPos, {Tc(2) * h[i], Tc(2) * h[i], Tc(2) * h[i]}, box);
+            auto radiusSq       = h[i] * h[i] * 4;
+            auto iCluster       = i / iClusterSize;
             const auto* iClustersNeighbors     = rawPtr(clusterNeighbors) + iCluster * ncmax;
             const auto iClustersNeighborsCount = clusterNeighborsCount[iCluster];
-            for (unsigned jc = 0; jc < iClustersNeighborsCount; ++jc)
+            for (unsigned jc = 0; jc < std::min(iClustersNeighborsCount, ncmax); ++jc)
             {
                 auto jCluster = iClustersNeighbors[jc];
                 for (unsigned j = jCluster * jClusterSize;
                      j < std::min((jCluster + 1) * jClusterSize, (unsigned)lastBody); ++j)
                 {
-                    const Vec3<Tc> jPos = {x[j], y[j], z[j]};
-                    const Tc d2         = distanceSq<true>(iPos[0], iPos[1], iPos[2], jPos[0], jPos[1], jPos[2], box);
-                    if (d2 < iPos[3] * iPos[3] && nc[i] < ngmax) nidx[nc[i]++] = j;
+                    if (i != j)
+                    {
+                        const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                        auto d2 = usePbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
+                                         : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
+                        if (d2 < radiusSq)
+                        {
+                            if (nc[i] < ngmax) nidx[neighborIndexBatched(i, nc[i], ngmax)] = j;
+                            ++nc[i];
+                        }
+                    }
                 }
             }
         }
