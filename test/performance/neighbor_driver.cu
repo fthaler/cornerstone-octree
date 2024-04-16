@@ -235,7 +235,7 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
     std::copy(neighborsCountCPU.data(), neighborsCountCPU.data() + 64, std::ostream_iterator<int>(std::cout, " "));
     std::cout << std::endl;
 
-    std::vector<cstone::LocalIndex> neighborsGPU(ngmax * n);
+    std::vector<cstone::LocalIndex> neighborsGPU(ngmax * (n + TravConfig::targetSize));
     std::vector<unsigned> neighborsCountGPU(n);
 
     thrust::universal_vector<T> d_x(coords.x().begin(), coords.x().end());
