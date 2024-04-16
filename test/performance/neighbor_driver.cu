@@ -357,7 +357,8 @@ int main()
             {
                 unsigned nj       = nidx[neighborIndexBatched(i, j, ngmax)];
                 unsigned jCluster = nj / jClusterSize;
-                bool alreadyIn    = false;
+                if (jCluster == iCluster) continue;
+                bool alreadyIn = false;
                 for (unsigned k = 0; k < clusterNeighborsCount[iCluster]; ++k)
                 {
                     if (iClusterNeighbors[k] == jCluster)
@@ -386,22 +387,37 @@ int main()
             auto iCluster       = i / iClusterSize;
             const auto* iClustersNeighbors     = rawPtr(clusterNeighbors) + iCluster * ncmax;
             const auto iClustersNeighborsCount = clusterNeighborsCount[iCluster];
+
+            unsigned jCluster = i / jClusterSize;
+            for (unsigned j = jCluster * jClusterSize; j < std::min((jCluster + 1) * jClusterSize, (unsigned)lastBody);
+                 ++j)
+            {
+                if (i != j)
+                {
+                    const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                    auto d2 = usePbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
+                                     : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
+                    if (d2 < radiusSq)
+                    {
+                        if (nc[i] < ngmax) nidx[neighborIndexBatched(i, nc[i], ngmax)] = j;
+                        ++nc[i];
+                    }
+                }
+            }
+
             for (unsigned jc = 0; jc < std::min(iClustersNeighborsCount, ncmax); ++jc)
             {
                 auto jCluster = iClustersNeighbors[jc];
                 for (unsigned j = jCluster * jClusterSize;
                      j < std::min((jCluster + 1) * jClusterSize, (unsigned)lastBody); ++j)
                 {
-                    if (i != j)
+                    const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                    auto d2 = usePbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
+                                     : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
+                    if (d2 < radiusSq)
                     {
-                        const Vec3<Tc> jPos = {x[j], y[j], z[j]};
-                        auto d2 = usePbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
-                                         : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-                        if (d2 < radiusSq)
-                        {
-                            if (nc[i] < ngmax) nidx[neighborIndexBatched(i, nc[i], ngmax)] = j;
-                            ++nc[i];
-                        }
+                        if (nc[i] < ngmax) nidx[neighborIndexBatched(i, nc[i], ngmax)] = j;
+                        ++nc[i];
                     }
                 }
             }
