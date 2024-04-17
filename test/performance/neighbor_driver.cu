@@ -205,14 +205,15 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
         unsigned* warpNidx                   = nidx + targetIdx * TravConfig::targetSize * ngmax;
         const cstone::LocalIndex bodyIdxLane = bodyBegin + laneIdx;
 
+        constexpr auto pbc = BoundaryType::periodic;
+        const bool anyPbc  = box.boundaryX() == pbc || box.boundaryY() == pbc || box.boundaryZ() == pbc;
+
         auto pos_i = loadTarget(bodyBegin, bodyEnd, laneIdx, x, y, z, h);
         unsigned nc_i[TravConfig::nwt];
         for (int k = 0; k < TravConfig::nwt; ++k)
         {
             nc_i[k] = 0;
 
-            auto pbc      = BoundaryType::periodic;
-            bool anyPbc   = box.boundaryX() == pbc || box.boundaryY() == pbc || box.boundaryZ() == pbc;
             bool usePbc   = anyPbc && !insideBox(Vec3<Tc>{pos_i[k][0], pos_i[k][1], pos_i[k][2]},
                                                  {pos_i[k][3], pos_i[k][3], pos_i[k][3]}, box);
             auto radiusSq = pos_i[k][3] * pos_i[k][3];
