@@ -516,7 +516,7 @@ int main()
                 unsigned nj       = nidx[neighborIndexBatched(i, j, ngmax)];
                 unsigned jCluster = nj / jClusterSize;
                 bool alreadyIn    = false;
-                for (unsigned k = 0; k < clusterNeighborsCount[iCluster]; ++k)
+                for (unsigned k = 0; k < std::min(clusterNeighborsCount[iCluster], ncmax); ++k)
                 {
                     if (iClusterNeighbors[k] == jCluster)
                     {
