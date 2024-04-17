@@ -288,8 +288,9 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
         const auto iSuperCluster        = firstBody + GpuConfig::warpSize * targetIdx + laneIdx;
         const auto iSuperClusterClamped = imin(iSuperCluster, lastBody - 1);
 
-        Vec4<Tc> iPosSuperCluster = {x[iSuperClusterClamped], y[iSuperClusterClamped], z[iSuperClusterClamped],
-                                     h[iSuperClusterClamped] * 2};
+        Vec4<Tc> iPosSuperCluster      = {x[iSuperClusterClamped], y[iSuperClusterClamped], z[iSuperClusterClamped],
+                                          h[iSuperClusterClamped] * 2};
+        unsigned neighborsSuperCluster = 0;
 
         for (unsigned c = 0; c < clustersPerWarp; ++c)
         {
@@ -324,8 +325,11 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
             for (unsigned offset = GpuConfig::warpSize / 2; offset >= iClusterSize; offset /= 2)
                 neighbors += shflDownSync(neighbors, offset);
 
-            if (laneIdx < iClusterSize && i < lastBody) nc[i] = neighbors;
+            neighbors = shflSync(neighbors, laneIdx % iClusterSize);
+            if (laneIdx / iClusterSize == c) neighborsSuperCluster = neighbors;
         }
+
+        if (iSuperCluster < lastBody) nc[iSuperCluster] = neighborsSuperCluster;
     }
 }
 
