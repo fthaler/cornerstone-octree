@@ -454,6 +454,14 @@ int main()
                 }
             }
         }
+
+        double r                  = 2 * h[0];
+        double rho                = lastBody - firstBody;
+        double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * rho;
+        auto average_neighbors    = std::accumulate(clusterNeighborsCount.begin(), clusterNeighborsCount.end(), 0) /
+                                 double(clusterNeighborsCount.size()) * jClusterSize;
+        std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
+
         std::memset(nc, 0, (lastBody - firstBody) * sizeof(unsigned));
         std::memset(nidx, 0, (lastBody - firstBody) * ngmax * sizeof(unsigned));
 
