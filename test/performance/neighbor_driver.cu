@@ -388,7 +388,8 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
     float cpuTime = timeCpu(findNeighborsCpu);
 
     std::cout << "CPU time " << cpuTime << " s" << std::endl;
-    std::copy(neighborsCountCPU.data(), neighborsCountCPU.data() + 64, std::ostream_iterator<int>(std::cout, " "));
+    std::copy(neighborsCountCPU.data(), neighborsCountCPU.data() + std::min(n, 64),
+              std::ostream_iterator<int>(std::cout, " "));
     std::cout << std::endl;
 
     std::vector<cstone::LocalIndex> neighborsGPU(ngmax * (n + TravConfig::targetSize));
@@ -429,7 +430,8 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
     thrust::copy(d_neighbors.begin(), d_neighbors.end(), neighborsGPU.begin());
 
     std::cout << "GPU time " << gpuTime / 1000 << " s" << std::endl;
-    std::copy(neighborsCountGPU.data(), neighborsCountGPU.data() + 64, std::ostream_iterator<int>(std::cout, " "));
+    std::copy(neighborsCountGPU.data(), neighborsCountGPU.data() + std::min(n, 64),
+              std::ostream_iterator<int>(std::cout, " "));
     std::cout << std::endl;
 
     int numFails     = 0;
