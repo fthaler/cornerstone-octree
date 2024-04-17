@@ -281,6 +281,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
 
         if (targetIdx >= numTargets) return;
 
+        static_assert(TravConfig::targetSize == GpuConfig::warpSize, "Requires targetSize == warpSize");
         static_assert(iClusterSize * jClusterSize == GpuConfig::warpSize,
                       "Single warp required per cluster-cluster interaction");
         constexpr unsigned clustersPerWarp = GpuConfig::warpSize / iClusterSize;
@@ -551,11 +552,11 @@ int main()
         auto clusteredNeighborSearch = [&]
         {
             unsigned numBodies = lastBody - firstBody;
-            unsigned numBlocks = (numBodies + GpuConfig::warpSize - 1) / GpuConfig::warpSize;
+            unsigned numBlocks = TravConfig::numBlocks(numBodies);
             resetTraversalCounters<<<1, 1>>>();
             findNeighborsClustered2<iClusterSize, jClusterSize>
-                <<<numBlocks, GpuConfig::warpSize>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax,
-                                                     rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
+                <<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax,
+                                                        rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
         };
 
         float gpuTime = timeGpu(clusteredNeighborSearch);
