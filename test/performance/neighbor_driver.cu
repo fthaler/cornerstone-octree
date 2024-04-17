@@ -116,7 +116,16 @@ __global__ __launch_bounds__(TravConfig::numThreads) void traverseBT(cstone::Loc
         const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
         unsigned* warpNidx                 = nidx + targetIdx * TravConfig::targetSize * ngmax;
 
-        auto nc_i = traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, warpNidx, ngmax, globalPool);
+        unsigned nc_i[TravConfig::nwt] = {0};
+
+        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex i, cstone::LocalIndex j)
+        {
+            if (nc_i[warpTarget] < ngmax)
+                warpNidx[nc_i[warpTarget] * TravConfig::targetSize + laneIdx + warpTarget * GpuConfig::warpSize] = j;
+            ++nc_i[warpTarget];
+        };
+
+        traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
 
         const cstone::LocalIndex bodyIdxLane = bodyBegin + laneIdx;
         for (int i = 0; i < TravConfig::nwt; i++)
@@ -208,7 +217,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
         constexpr auto pbc = BoundaryType::periodic;
         const bool anyPbc  = box.boundaryX() == pbc || box.boundaryY() == pbc || box.boundaryZ() == pbc;
 
-        auto pos_i = loadTarget(bodyBegin, bodyEnd, laneIdx, x, y, z, h);
+        auto [_, pos_i] = loadTarget(bodyBegin, bodyEnd, laneIdx, x, y, z, h);
         unsigned nc_i[TravConfig::nwt];
         for (int k = 0; k < TravConfig::nwt; ++k)
         {
