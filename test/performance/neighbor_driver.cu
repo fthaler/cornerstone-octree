@@ -344,7 +344,7 @@ int main()
         constexpr unsigned iClusterSize = 8;
         constexpr unsigned jClusterSize = 4;
 
-        auto ncmax = (ngmax + jClusterSize - 1) / jClusterSize; // this assumes well-behaved clusters
+        auto ncmax = ngmax; // TODO: is there a safe ncmax < ngmax?
         thrust::universal_vector<unsigned> clusterNeighbors((lastBody * ncmax + iClusterSize - 1) / iClusterSize);
         thrust::universal_vector<unsigned> clusterNeighborsCount((lastBody + iClusterSize - 1) / iClusterSize, 0);
 
