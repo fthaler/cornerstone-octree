@@ -466,13 +466,18 @@ int main()
         std::memset(nc, 0, (lastBody - firstBody) * sizeof(unsigned));
         std::memset(nidx, 0, (lastBody - firstBody) * ngmax * sizeof(unsigned));
 
-        unsigned numBodies = lastBody - firstBody;
-        unsigned numBlocks = TravConfig::numBlocks(numBodies);
-        resetTraversalCounters<<<1, 1>>>();
-        findNeighborsClustered<iClusterSize, jClusterSize>
-            <<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax,
-                                                    rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
-        kernelSuccess("findNeighborsClustered");
+        auto clusteredNeighborSearch = [&]
+        {
+            unsigned numBodies = lastBody - firstBody;
+            unsigned numBlocks = TravConfig::numBlocks(numBodies);
+            resetTraversalCounters<<<1, 1>>>();
+            findNeighborsClustered<iClusterSize, jClusterSize>
+                <<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax,
+                                                        rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
+        };
+
+        float gpuTime = timeGpu(clusteredNeighborSearch);
+        std::cout << "Clustered NB time " << gpuTime / 1000 << " " << std::endl;
     };
     auto neighborIndexClustered = [](unsigned i, unsigned j, unsigned ngmax)
     {
