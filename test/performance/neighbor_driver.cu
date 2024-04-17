@@ -253,6 +253,81 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
     }
 }
 
+template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th>
+__global__
+__launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::LocalIndex firstBody,
+                                                                       cstone::LocalIndex lastBody,
+                                                                       const Tc* __restrict__ x,
+                                                                       const Tc* __restrict__ y,
+                                                                       const Tc* __restrict__ z,
+                                                                       const Th* __restrict__ h,
+                                                                       const Box<Tc> box,
+                                                                       unsigned* __restrict__ nc,
+                                                                       unsigned* __restrict__ nidx,
+                                                                       unsigned ngmax,
+                                                                       const unsigned* __restrict__ ncClustered,
+                                                                       const unsigned* __restrict__ nidxClustered,
+                                                                       unsigned ncmax)
+{
+    const unsigned laneIdx    = threadIdx.x & (GpuConfig::warpSize - 1);
+    const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
+    int targetIdx             = 0;
+
+    while (true)
+    {
+        // first thread in warp grabs next target
+        if (laneIdx == 0) { targetIdx = atomicAdd(&targetCounterGlob, 1); }
+        targetIdx = shflSync(targetIdx, 0);
+
+        if (targetIdx >= numTargets) return;
+
+        static_assert(iClusterSize * jClusterSize == GpuConfig::warpSize,
+                      "Single warp required per cluster-cluster interaction");
+        constexpr unsigned clustersPerWarp = GpuConfig::warpSize / iClusterSize;
+
+        const auto iSuperCluster        = firstBody + GpuConfig::warpSize * targetIdx + laneIdx;
+        const auto iSuperClusterClamped = imin(iSuperCluster, lastBody - 1);
+
+        __shared__ Vec4<Tc> iPosSuperCluster[GpuConfig::warpSize];
+
+        iPosSuperCluster[laneIdx] = {x[iSuperClusterClamped], y[iSuperClusterClamped], z[iSuperClusterClamped],
+                                     h[iSuperClusterClamped] * 2};
+
+        for (unsigned c = 0; c < clustersPerWarp; ++c)
+        {
+            const auto i =
+                (iSuperCluster / GpuConfig::warpSize) * GpuConfig::warpSize + laneIdx % iClusterSize + c * iClusterSize;
+            const auto iCluster                   = imin(i, lastBody - 1) / iClusterSize;
+            const unsigned* iClusterNeighbors     = nidxClustered + iCluster * ncmax;
+            const unsigned iClusterNeighborsCount = ncClustered[iCluster];
+
+            const auto iPos     = iPosSuperCluster[laneIdx % iClusterSize + c * iClusterSize];
+            const auto radiusSq = iPos[3] * iPos[3];
+
+            unsigned neighbors = 0;
+            for (unsigned jc = 0; jc < imin(ncmax, iClusterNeighborsCount); ++jc)
+            {
+                const unsigned jCluster = iClusterNeighbors[jc];
+
+                const auto j = jCluster * jClusterSize + laneIdx / iClusterSize;
+                if (j < lastBody)
+                {
+                    // printf("lane %d, target %d: i = %d, j = %d\n", laneIdx, targetIdx, i, j);
+                    const Vec3<Tc> jPos{x[j], y[j], z[j]};
+
+                    const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
+
+                    neighbors += i != j && d2 < radiusSq;
+                }
+            }
+            for (unsigned offset = GpuConfig::warpSize / 2; offset >= iClusterSize; offset /= 2)
+                neighbors += shflDownSync(neighbors, offset);
+
+            if (laneIdx < iClusterSize && i < lastBody) nc[i] = neighbors;
+        }
+    }
+}
+
 template<class T, class StrongKeyType, class FindNeighborsGpuF, class NeighborIndexF>
 void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborIndex)
 {
@@ -469,11 +544,11 @@ int main()
         auto clusteredNeighborSearch = [&]
         {
             unsigned numBodies = lastBody - firstBody;
-            unsigned numBlocks = TravConfig::numBlocks(numBodies);
+            unsigned numBlocks = (numBodies + GpuConfig::warpSize - 1) / GpuConfig::warpSize;
             resetTraversalCounters<<<1, 1>>>();
-            findNeighborsClustered<iClusterSize, jClusterSize>
-                <<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax,
-                                                        rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
+            findNeighborsClustered2<iClusterSize, jClusterSize>
+                <<<numBlocks, GpuConfig::warpSize>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax,
+                                                     rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
         };
 
         float gpuTime = timeGpu(clusteredNeighborSearch);
