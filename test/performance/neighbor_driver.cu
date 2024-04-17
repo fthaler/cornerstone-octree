@@ -288,9 +288,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
         const auto iSuperCluster        = firstBody + GpuConfig::warpSize * targetIdx + laneIdx;
         const auto iSuperClusterClamped = imin(iSuperCluster, lastBody - 1);
 
-        __shared__ Vec4<Tc> iPosSuperCluster[GpuConfig::warpSize];
-
-        iPosSuperCluster[laneIdx] = {x[iSuperClusterClamped], y[iSuperClusterClamped], z[iSuperClusterClamped],
+        Vec4<Tc> iPosSuperCluster = {x[iSuperClusterClamped], y[iSuperClusterClamped], z[iSuperClusterClamped],
                                      h[iSuperClusterClamped] * 2};
 
         for (unsigned c = 0; c < clustersPerWarp; ++c)
@@ -301,7 +299,10 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
             const unsigned* iClusterNeighbors     = nidxClustered + iCluster * ncmax;
             const unsigned iClusterNeighborsCount = ncClustered[iCluster];
 
-            const auto iPos     = iPosSuperCluster[laneIdx % iClusterSize + c * iClusterSize];
+            const Vec4<Tc> iPos{shflSync(iPosSuperCluster[0], laneIdx % iClusterSize + c * iClusterSize),
+                                shflSync(iPosSuperCluster[1], laneIdx % iClusterSize + c * iClusterSize),
+                                shflSync(iPosSuperCluster[2], laneIdx % iClusterSize + c * iClusterSize),
+                                shflSync(iPosSuperCluster[3], laneIdx % iClusterSize + c * iClusterSize)};
             const auto radiusSq = iPos[3] * iPos[3];
 
             unsigned neighbors = 0;
