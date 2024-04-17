@@ -301,10 +301,9 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
             const unsigned* iClusterNeighbors     = nidxClustered + iCluster * ncmax;
             const unsigned iClusterNeighborsCount = ncClustered[iCluster];
 
-            const Vec4<Tc> iPos{shflSync(iPosSuperCluster[0], laneIdx % iClusterSize + c * iClusterSize),
-                                shflSync(iPosSuperCluster[1], laneIdx % iClusterSize + c * iClusterSize),
-                                shflSync(iPosSuperCluster[2], laneIdx % iClusterSize + c * iClusterSize),
-                                shflSync(iPosSuperCluster[3], laneIdx % iClusterSize + c * iClusterSize)};
+            const unsigned iPosSrcLane = laneIdx % iClusterSize + c * iClusterSize;
+            const Vec4<Tc> iPos{shflSync(iPosSuperCluster[0], iPosSrcLane), shflSync(iPosSuperCluster[1], iPosSrcLane),
+                                shflSync(iPosSuperCluster[2], iPosSrcLane), shflSync(iPosSuperCluster[3], iPosSrcLane)};
             const auto radiusSq = iPos[3] * iPos[3];
 
             unsigned neighbors = 0;
