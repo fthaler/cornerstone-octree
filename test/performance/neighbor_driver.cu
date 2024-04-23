@@ -685,59 +685,65 @@ int main()
 
         auto ncmax = ngmax; // TODO: is there a safe ncmax < ngmax?
 
-        auto [clusterNeighborsCount, clusterNeighbors] = findClusterNeighborsCPU<iClusterSize, jClusterSize>(
-            firstBody, lastBody, x, y, z, h, tree, box, ngmax, ncmax);
-
         thrust::universal_vector<unsigned> clusterNeighbors2((lastBody + iClusterSize - 1) / iClusterSize * ncmax, -1);
-        thrust::universal_vector<unsigned> clusterNeighborsCount2((lastBody + iClusterSize - 1) / iClusterSize, 0);
+        thrust::universal_vector<unsigned> clusterNeighborsCount((lastBody + iClusterSize - 1) / iClusterSize, 0);
         unsigned numBodies = lastBody - firstBody;
         unsigned numBlocks = TravConfig::numBlocks(numBodies);
         unsigned poolSize  = TravConfig::poolSize(numBodies);
         thrust::universal_vector<int> globalPool(poolSize);
         resetTraversalCounters<<<1, 1>>>();
         findClusterNeighbors<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
-            firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount2), rawPtr(clusterNeighbors2),
-            ncmax, rawPtr(globalPool));
+            firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors2), ncmax,
+            rawPtr(globalPool));
         kernelSuccess("findClusterNeighbors");
-        if (clusterNeighborsCount != clusterNeighborsCount2)
-        {
-            std::cout << "Cluster neighbor count failed :(" << std::endl;
-            for (std::size_t i = 0; i < clusterNeighborsCount.size(); ++i)
-            {
-                if (clusterNeighborsCount[i] != clusterNeighborsCount2[i])
-                    std::cout << i << " " << clusterNeighborsCount[i] << " " << clusterNeighborsCount2[i] << "\n";
-            }
-            std::cout << "Cluster neighbor count failed ^" << std::endl;
-        }
-        else { std::cout << "Cluster neighbor count passed!" << std::endl; }
-        if (clusterNeighbors != clusterNeighbors2)
-        {
-            bool fail = false;
-            for (std::size_t iCluster = 0; iCluster < clusterNeighborsCount.size(); ++iCluster)
-            {
-                std::sort(clusterNeighbors.begin() + iCluster * ncmax,
-                          clusterNeighbors.begin() + (iCluster + 1) * ncmax);
-                std::sort(clusterNeighbors2.begin() + iCluster * ncmax,
-                          clusterNeighbors2.begin() + (iCluster + 1) * ncmax);
-                for (std::size_t i = iCluster * ncmax; i < (iCluster + 1) * ncmax; ++i)
-                    if (clusterNeighbors[i] != clusterNeighbors2[i])
-                    {
-                        std::cout << iCluster << ":" << (i - iCluster * ncmax) << " " << clusterNeighbors[i] << " "
-                                  << clusterNeighbors2[i] << "\n";
-                        fail = true;
-                    }
-            }
-            if (fail) { std::cout << "Cluster neighbor search failed :(" << std::endl; }
-            else { std::cout << "Cluster neighbor search passed!" << std::endl; }
-        }
-        else { std::cout << "Cluster neighbor search passed!" << std::endl; }
 
-        double r                  = 2 * h[0];
-        double rho                = lastBody - firstBody;
-        double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * rho;
-        auto average_neighbors    = std::accumulate(clusterNeighborsCount.begin(), clusterNeighborsCount.end(), 0) /
-                                 double(clusterNeighborsCount.size()) * jClusterSize;
-        std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
+        if (false) // for debugging cluster neighbors
+        {
+
+            auto [clusterNeighborsCountCPU, clusterNeighborsCPU] = findClusterNeighborsCPU<iClusterSize, jClusterSize>(
+                firstBody, lastBody, x, y, z, h, tree, box, ngmax, ncmax);
+
+            if (clusterNeighborsCountCPU != clusterNeighborsCount)
+            {
+                std::cout << "Cluster neighbor count failed" << std::endl;
+                for (std::size_t i = 0; i < clusterNeighborsCountCPU.size(); ++i)
+                {
+                    if (clusterNeighborsCountCPU[i] != clusterNeighborsCount[i])
+                        std::cout << i << " " << clusterNeighborsCountCPU[i] << " " << clusterNeighborsCount[i] << "\n";
+                }
+                std::cout << "Cluster neighbor count failed ^" << std::endl;
+            }
+            else { std::cout << "Cluster neighbor count passed" << std::endl; }
+            if (clusterNeighborsCPU != clusterNeighbors2)
+            {
+                bool fail = false;
+                for (std::size_t iCluster = 0; iCluster < clusterNeighborsCountCPU.size(); ++iCluster)
+                {
+                    std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
+                              clusterNeighborsCPU.begin() + (iCluster + 1) * ncmax);
+                    std::sort(clusterNeighbors2.begin() + iCluster * ncmax,
+                              clusterNeighbors2.begin() + (iCluster + 1) * ncmax);
+                    for (std::size_t i = iCluster * ncmax; i < (iCluster + 1) * ncmax; ++i)
+                        if (clusterNeighborsCPU[i] != clusterNeighbors2[i])
+                        {
+                            std::cout << iCluster << ":" << (i - iCluster * ncmax) << " " << clusterNeighborsCPU[i]
+                                      << " " << clusterNeighbors2[i] << "\n";
+                            fail = true;
+                        }
+                }
+                if (fail) { std::cout << "Cluster neighbor search failed" << std::endl; }
+                else { std::cout << "Cluster neighbor search passed" << std::endl; }
+            }
+            else { std::cout << "Cluster neighbor search passed" << std::endl; }
+
+            double r                  = 2 * h[0];
+            double rho                = lastBody - firstBody;
+            double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * rho;
+            auto average_neighbors =
+                std::accumulate(clusterNeighborsCountCPU.begin(), clusterNeighborsCountCPU.end(), 0) /
+                double(clusterNeighborsCountCPU.size()) * jClusterSize;
+            std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
+        }
 
         std::memset(nc, 0, (lastBody - firstBody) * sizeof(unsigned));
         std::memset(nidx, 0, (lastBody - firstBody) * ngmax * sizeof(unsigned));
@@ -748,7 +754,7 @@ int main()
             unsigned numBlocks = TravConfig::numBlocks(numBodies);
             resetTraversalCounters<<<1, 1>>>();
             findNeighborsClustered2<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
-                firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax, rawPtr(clusterNeighborsCount2),
+                firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax, rawPtr(clusterNeighborsCount),
                 rawPtr(clusterNeighbors2), ncmax);
         };
 
