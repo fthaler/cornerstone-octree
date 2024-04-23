@@ -316,21 +316,33 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
             const auto radiusSq = iPos[3] * iPos[3];
 
             unsigned neighbors = 0;
+            for (unsigned jCluster = iCluster * iClusterSize / jClusterSize;
+                 jCluster <
+                 (iCluster * iClusterSize + (iClusterSize > jClusterSize ? iClusterSize : jClusterSize)) / jClusterSize;
+                 ++jCluster)
+            {
+                const auto j = jCluster * jClusterSize + laneIdx / iClusterSize;
+                if (j < lastBody && i != j)
+                {
+                    const Vec3<Tc> jPos{x[j], y[j], z[j]};
+                    const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
+                    neighbors += d2 < radiusSq;
+                }
+            }
+
             for (unsigned jc = 0; jc < imin(ncmax, iClusterNeighborsCount); ++jc)
             {
                 const unsigned jCluster = iClusterNeighbors[jc];
 
                 const auto j = jCluster * jClusterSize + laneIdx / iClusterSize;
-                if (j < lastBody)
+                if (j < lastBody && j / iClusterSize != iCluster)
                 {
-                    // printf("lane %d, target %d: i = %d, j = %d\n", laneIdx, targetIdx, i, j);
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
-
                     const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-
-                    neighbors += i != j && d2 < radiusSq;
+                    neighbors += d2 < radiusSq;
                 }
             }
+
             for (unsigned offset = GpuConfig::warpSize / 2; offset >= iClusterSize; offset /= 2)
                 neighbors += shflDownSync(neighbors, offset);
 
@@ -529,7 +541,8 @@ int main()
             {
                 unsigned nj       = nidx[neighborIndexBatched(i, j, ngmax)];
                 unsigned jCluster = nj / jClusterSize;
-                bool alreadyIn    = false;
+                if (i / jClusterSize == jCluster || nj / iClusterSize == iCluster) continue;
+                bool alreadyIn = false;
                 for (unsigned k = 0; k < std::min(clusterNeighborsCount[iCluster], ncmax); ++k)
                 {
                     if (iClusterNeighbors[k] == jCluster)
