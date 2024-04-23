@@ -465,6 +465,56 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
     }
 }
 
+template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th, class KeyType>
+std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBody,
+                                                             std::size_t lastBody,
+                                                             const Tc* x,
+                                                             const Tc* y,
+                                                             const Tc* z,
+                                                             const Th* h,
+                                                             const OctreeNsView<Tc, KeyType>& tree,
+                                                             const Box<Tc>& box,
+                                                             unsigned ngmax,
+                                                             unsigned ncmax)
+{
+    std::vector<unsigned> nc(lastBody), nidx(lastBody * ngmax);
+    for (auto i = firstBody; i < lastBody; ++i)
+        nc[i] = findNeighbors(i, x, y, z, h, tree, box, ngmax, nidx.data() + i * ngmax);
+
+    std::size_t iClusters = (lastBody + iClusterSize - 1) / iClusterSize;
+    std::vector<unsigned> clusterNeighborsCount(iClusters, 0);
+    std::vector<unsigned> clusterNeighbors(iClusters * ncmax, unsigned(-1));
+
+    for (auto i = firstBody; i < lastBody; ++i)
+    {
+        auto iCluster               = i / iClusterSize;
+        unsigned* iClusterNeighbors = rawPtr(clusterNeighbors) + iCluster * ncmax;
+        unsigned nci                = nc[i];
+        for (unsigned j = 0; j < nci; ++j)
+        {
+            unsigned nj       = nidx[i * ngmax + j];
+            unsigned jCluster = nj / jClusterSize;
+            if (i / jClusterSize == jCluster || nj / iClusterSize == iCluster) continue;
+            bool alreadyIn = false;
+            for (unsigned k = 0; k < std::min(clusterNeighborsCount[iCluster], ncmax); ++k)
+            {
+                if (iClusterNeighbors[k] == jCluster)
+                {
+                    alreadyIn = true;
+                    break;
+                }
+            }
+            if (!alreadyIn)
+            {
+                if (clusterNeighborsCount[iCluster] < ncmax)
+                    iClusterNeighbors[clusterNeighborsCount[iCluster]] = jCluster;
+                ++clusterNeighborsCount[iCluster];
+            }
+        }
+    }
+    return {clusterNeighborsCount, clusterNeighbors};
+}
+
 template<class T, class StrongKeyType, class FindNeighborsGpuF, class NeighborIndexF>
 void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborIndex)
 {
@@ -640,38 +690,11 @@ int main()
         constexpr unsigned jClusterSize = 4;
 
         auto ncmax = ngmax; // TODO: is there a safe ncmax < ngmax?
-        thrust::universal_vector<unsigned> clusterNeighbors((lastBody * ncmax + iClusterSize - 1) / iClusterSize, -1);
-        thrust::universal_vector<unsigned> clusterNeighborsCount((lastBody + iClusterSize - 1) / iClusterSize, 0);
 
-        for (auto i = firstBody; i < lastBody; ++i)
-        {
-            auto iCluster               = i / iClusterSize;
-            unsigned* iClusterNeighbors = rawPtr(clusterNeighbors) + iCluster * ncmax;
-            unsigned nci                = nc[i];
-            for (unsigned j = 0; j < nci; ++j)
-            {
-                unsigned nj       = nidx[neighborIndexBatched(i, j, ngmax)];
-                unsigned jCluster = nj / jClusterSize;
-                if (i / jClusterSize == jCluster || nj / iClusterSize == iCluster) continue;
-                bool alreadyIn = false;
-                for (unsigned k = 0; k < std::min(clusterNeighborsCount[iCluster], ncmax); ++k)
-                {
-                    if (iClusterNeighbors[k] == jCluster)
-                    {
-                        alreadyIn = true;
-                        break;
-                    }
-                }
-                if (!alreadyIn)
-                {
-                    if (clusterNeighborsCount[iCluster] < ncmax)
-                        iClusterNeighbors[clusterNeighborsCount[iCluster]] = jCluster;
-                    ++clusterNeighborsCount[iCluster];
-                }
-            }
-        }
+        auto [clusterNeighborsCount, clusterNeighbors] = findClusterNeighborsCPU<iClusterSize, jClusterSize>(
+            firstBody, lastBody, x, y, z, h, tree, box, ngmax, ncmax);
 
-        thrust::universal_vector<unsigned> clusterNeighbors2((lastBody * ncmax + iClusterSize - 1) / iClusterSize, -1);
+        thrust::universal_vector<unsigned> clusterNeighbors2((lastBody + iClusterSize - 1) / iClusterSize * ncmax, -1);
         thrust::universal_vector<unsigned> clusterNeighborsCount2((lastBody + iClusterSize - 1) / iClusterSize, 0);
         unsigned numBodies = lastBody - firstBody;
         unsigned numBlocks = TravConfig::numBlocks(numBodies);
@@ -730,9 +753,9 @@ int main()
             unsigned numBodies = lastBody - firstBody;
             unsigned numBlocks = TravConfig::numBlocks(numBodies);
             resetTraversalCounters<<<1, 1>>>();
-            findNeighborsClustered2<iClusterSize, jClusterSize>
-                <<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax,
-                                                        rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
+            findNeighborsClustered2<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
+                firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax, rawPtr(clusterNeighborsCount2),
+                rawPtr(clusterNeighbors2), ncmax);
         };
 
         float gpuTime = timeGpu(clusteredNeighborSearch);
