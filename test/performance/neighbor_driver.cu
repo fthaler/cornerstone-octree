@@ -684,8 +684,6 @@ int main()
     auto clustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
                          const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
     {
-        findNeighborsBT(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax);
-
         constexpr unsigned iClusterSize = 8;
         constexpr unsigned jClusterSize = 4;
 
