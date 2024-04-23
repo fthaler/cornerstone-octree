@@ -306,6 +306,11 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
         {
             const auto i =
                 (iSuperCluster / GpuConfig::warpSize) * GpuConfig::warpSize + laneIdx % iClusterSize + c * iClusterSize;
+
+            // TODO: remove once nidx is not used anymore
+            if (i < lastBody) nc[i] = 0;
+            __syncthreads();
+
             const auto iCluster                   = imin(i, lastBody - 1) / iClusterSize;
             const unsigned* iClusterNeighbors     = nidxClustered + iCluster * ncmax;
             const unsigned iClusterNeighborsCount = ncClustered[iCluster];
@@ -326,7 +331,13 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-                    neighbors += d2 < radiusSq;
+                    // neighbors += d2 < radiusSq;
+                    if (d2 < radiusSq && iSuperCluster < lastBody)
+                    {
+                        unsigned nb                                                    = atomicAdd(&nc[i], 1);
+                        nidx[(i / TravConfig::targetSize) * TravConfig::targetSize * ngmax +
+                             TravConfig::targetSize * nb + i % TravConfig::targetSize] = j;
+                    }
                 }
             }
 
@@ -339,7 +350,13 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-                    neighbors += d2 < radiusSq;
+                    // neighbors += d2 < radiusSq;
+                    if (d2 < radiusSq && iSuperCluster < lastBody)
+                    {
+                        unsigned nb                                                    = atomicAdd(&nc[i], 1);
+                        nidx[(i / TravConfig::targetSize) * TravConfig::targetSize * ngmax +
+                             TravConfig::targetSize * nb + i % TravConfig::targetSize] = j;
+                    }
                 }
             }
 
@@ -350,7 +367,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
             if (laneIdx / iClusterSize == c) neighborsSuperCluster = neighbors;
         }
 
-        if (iSuperCluster < lastBody) nc[iSuperCluster] = neighborsSuperCluster;
+        // if (iSuperCluster < lastBody) nc[iSuperCluster] = neighborsSuperCluster;
     }
 }
 
