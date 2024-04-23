@@ -222,33 +222,29 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
         {
             assert(i == imin(bodyBegin + laneIdx, bodyEnd - 1));
             const unsigned localIdx = (warpTarget * TravConfig::numThreads + threadIdx.x) / iClusterSize;
-            for (int w = 0; w < 32; ++w)
-            {
-                if (w == laneIdx)
-                {
-                    unsigned jCluster = j / jClusterSize;
-                    unsigned ncc      = nc[localIdx];
-                    unsigned* nidxc   = &nidx[localIdx * ncmax];
+            unsigned jCluster       = j / jClusterSize;
+            unsigned iClusterMask   = ((1 << iClusterSize) - 1) << (laneIdx / iClusterSize * iClusterSize);
+            unsigned mask           = __match_any_sync(__activemask() & iClusterMask, jCluster);
+            unsigned leader         = __ffs(mask) - 1;
 
-                    if (i / jClusterSize != jCluster && j / iClusterSize != i / iClusterSize)
+            if (leader == laneIdx && i / jClusterSize != jCluster && j / iClusterSize != i / iClusterSize)
+            {
+                unsigned ncc    = imin(nc[localIdx], ncmax);
+                unsigned* nidxc = &nidx[localIdx * ncmax];
+                bool alreadyIn  = false;
+                for (unsigned nb = 0; nb < ncc; ++nb)
+                {
+                    if (nidxc[ncc - 1 - nb] == jCluster)
                     {
-                        bool alreadyIn = false;
-                        for (unsigned nb = 0; nb < ncc; ++nb)
-                        {
-                            if (nidxc[nb] == jCluster)
-                            {
-                                alreadyIn = true;
-                                break;
-                            }
-                        }
-                        if (!alreadyIn)
-                        {
-                            unsigned idx = nc[localIdx]++;
-                            if (idx < ncmax) nidxc[idx] = jCluster;
-                        }
+                        alreadyIn = true;
+                        break;
                     }
                 }
-                __syncwarp(__activemask());
+                if (!alreadyIn)
+                {
+                    unsigned idx = nc[localIdx]++;
+                    if (idx < ncmax) nidxc[idx] = jCluster;
+                }
             }
         };
 
