@@ -745,9 +745,6 @@ int main()
             std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
         }
 
-        std::memset(nc, 0, (lastBody - firstBody) * sizeof(unsigned));
-        std::memset(nidx, 0, (lastBody - firstBody) * ngmax * sizeof(unsigned));
-
         auto clusteredNeighborSearch = [&]
         {
             unsigned numBodies = lastBody - firstBody;
