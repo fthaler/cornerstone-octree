@@ -685,17 +685,23 @@ int main()
 
         auto ncmax = ngmax; // TODO: is there a safe ncmax < ngmax?
 
-        thrust::universal_vector<unsigned> clusterNeighbors2((lastBody + iClusterSize - 1) / iClusterSize * ncmax, -1);
+        thrust::universal_vector<unsigned> clusterNeighbors((lastBody + iClusterSize - 1) / iClusterSize * ncmax, -1);
         thrust::universal_vector<unsigned> clusterNeighborsCount((lastBody + iClusterSize - 1) / iClusterSize, 0);
-        unsigned numBodies = lastBody - firstBody;
-        unsigned numBlocks = TravConfig::numBlocks(numBodies);
-        unsigned poolSize  = TravConfig::poolSize(numBodies);
-        thrust::universal_vector<int> globalPool(poolSize);
-        resetTraversalCounters<<<1, 1>>>();
-        findClusterNeighbors<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
-            firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors2), ncmax,
-            rawPtr(globalPool));
-        kernelSuccess("findClusterNeighbors");
+
+        auto findClusterClusterNeighbors = [&]
+        {
+            unsigned numBodies = lastBody - firstBody;
+            unsigned numBlocks = TravConfig::numBlocks(numBodies);
+            unsigned poolSize  = TravConfig::poolSize(numBodies);
+            thrust::universal_vector<int> globalPool(poolSize);
+            resetTraversalCounters<<<1, 1>>>();
+            findClusterNeighbors<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
+                firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors),
+                ncmax, rawPtr(globalPool));
+        };
+
+        float gpuTime = timeGpu(findClusterClusterNeighbors);
+        std::cout << "Clustered NB build time " << gpuTime / 1000 << " " << std::endl;
 
         if (false) // for debugging cluster neighbors
         {
@@ -714,20 +720,20 @@ int main()
                 std::cout << "Cluster neighbor count failed ^" << std::endl;
             }
             else { std::cout << "Cluster neighbor count passed" << std::endl; }
-            if (clusterNeighborsCPU != clusterNeighbors2)
+            if (clusterNeighborsCPU != clusterNeighbors)
             {
                 bool fail = false;
                 for (std::size_t iCluster = 0; iCluster < clusterNeighborsCountCPU.size(); ++iCluster)
                 {
                     std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
                               clusterNeighborsCPU.begin() + (iCluster + 1) * ncmax);
-                    std::sort(clusterNeighbors2.begin() + iCluster * ncmax,
-                              clusterNeighbors2.begin() + (iCluster + 1) * ncmax);
+                    std::sort(clusterNeighbors.begin() + iCluster * ncmax,
+                              clusterNeighbors.begin() + (iCluster + 1) * ncmax);
                     for (std::size_t i = iCluster * ncmax; i < (iCluster + 1) * ncmax; ++i)
-                        if (clusterNeighborsCPU[i] != clusterNeighbors2[i])
+                        if (clusterNeighborsCPU[i] != clusterNeighbors[i])
                         {
                             std::cout << iCluster << ":" << (i - iCluster * ncmax) << " " << clusterNeighborsCPU[i]
-                                      << " " << clusterNeighbors2[i] << "\n";
+                                      << " " << clusterNeighbors[i] << "\n";
                             fail = true;
                         }
                 }
@@ -750,15 +756,13 @@ int main()
             unsigned numBodies = lastBody - firstBody;
             unsigned numBlocks = TravConfig::numBlocks(numBodies);
             resetTraversalCounters<<<1, 1>>>();
-            findNeighborsClustered2<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
-                firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax, rawPtr(clusterNeighborsCount),
-                rawPtr(clusterNeighbors2), ncmax);
+            findNeighborsClustered2<iClusterSize, jClusterSize>
+                <<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax,
+                                                        rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
         };
 
-        float gpuTime = timeGpu(clusteredNeighborSearch);
-        std::cout << "Clustered NB time " << gpuTime / 1000 << " " << std::endl;
         gpuTime = timeGpu(clusteredNeighborSearch);
-        std::cout << "Clustered NB time " << gpuTime / 1000 << " " << std::endl;
+        std::cout << "Clustered NB search time " << gpuTime / 1000 << " " << std::endl;
     };
     auto neighborIndexClustered = [](unsigned i, unsigned j, unsigned ngmax)
     {
