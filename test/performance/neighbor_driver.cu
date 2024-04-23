@@ -181,6 +181,100 @@ auto findNeighborsBT(size_t firstBody,
     return interactions;
 }
 
+template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th, class KeyType>
+__global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(cstone::LocalIndex firstBody,
+                                                                               cstone::LocalIndex lastBody,
+                                                                               const Tc* __restrict__ x,
+                                                                               const Tc* __restrict__ y,
+                                                                               const Tc* __restrict__ z,
+                                                                               const Th* __restrict__ h,
+                                                                               OctreeNsView<Tc, KeyType> tree,
+                                                                               const Box<Tc> box,
+                                                                               unsigned* __restrict__ ncClustered,
+                                                                               unsigned* __restrict__ nidxClustered,
+                                                                               unsigned ncmax,
+                                                                               int* globalPool)
+{
+    const unsigned laneIdx    = threadIdx.x & (GpuConfig::warpSize - 1);
+    const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
+    int targetIdx             = 0;
+
+    __shared__ unsigned nc[TravConfig::numThreads * TravConfig::nwt / iClusterSize];
+    __shared__ unsigned nidx[TravConfig::numThreads * TravConfig::nwt / iClusterSize * 200 /*TODO: ncmax*/];
+
+    while (true)
+    {
+        // first thread in warp grabs next target
+        if (laneIdx == 0) { targetIdx = atomicAdd(&targetCounterGlob, 1); }
+        targetIdx = shflSync(targetIdx, 0);
+
+        if (targetIdx >= numTargets) return;
+
+        const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
+        const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
+
+        for (int warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
+            nc[(warpTarget * TravConfig::numThreads + threadIdx.x) / iClusterSize] = 0;
+
+        __syncwarp();
+
+        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex i, cstone::LocalIndex j)
+        {
+            assert(i == imin(bodyBegin + laneIdx, bodyEnd - 1));
+            const unsigned localIdx = (warpTarget * TravConfig::numThreads + threadIdx.x) / iClusterSize;
+            for (int w = 0; w < 32; ++w)
+            {
+                if (w == laneIdx)
+                {
+                    unsigned jCluster = j / jClusterSize;
+                    unsigned ncc      = nc[localIdx];
+                    unsigned* nidxc   = &nidx[localIdx * ncmax];
+
+                    if (i / jClusterSize != jCluster && j / iClusterSize != i / iClusterSize)
+                    {
+                        bool alreadyIn = false;
+                        for (unsigned nb = 0; nb < ncc; ++nb)
+                        {
+                            if (nidxc[nb] == jCluster)
+                            {
+                                alreadyIn = true;
+                                break;
+                            }
+                        }
+                        if (!alreadyIn)
+                        {
+                            unsigned idx = nc[localIdx]++;
+                            if (idx < ncmax) nidxc[idx] = jCluster;
+                        }
+                    }
+                }
+                __syncwarp(__activemask());
+            }
+        };
+
+        traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
+
+        __syncwarp();
+
+        if (laneIdx % iClusterSize == 0)
+        {
+            for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
+            {
+                if (bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx >= lastBody) continue;
+                const unsigned localIdx = (warpTarget * TravConfig::numThreads + threadIdx.x) / iClusterSize;
+                unsigned nbs            = nc[localIdx];
+                ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx) / iClusterSize] = nbs;
+                unsigned* nidxc = &nidx[localIdx * ncmax];
+                for (unsigned nb = 0; nb < imin(nbs, ncmax); ++nb)
+                {
+                    nidxClustered[(bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx) / iClusterSize * ncmax +
+                                  nb] = nidxc[nb];
+                }
+            }
+        }
+    }
+}
+
 template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th>
 __global__
 __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::LocalIndex firstBody,
@@ -546,7 +640,7 @@ int main()
         constexpr unsigned jClusterSize = 4;
 
         auto ncmax = ngmax; // TODO: is there a safe ncmax < ngmax?
-        thrust::universal_vector<unsigned> clusterNeighbors((lastBody * ncmax + iClusterSize - 1) / iClusterSize);
+        thrust::universal_vector<unsigned> clusterNeighbors((lastBody * ncmax + iClusterSize - 1) / iClusterSize, -1);
         thrust::universal_vector<unsigned> clusterNeighborsCount((lastBody + iClusterSize - 1) / iClusterSize, 0);
 
         for (auto i = firstBody; i < lastBody; ++i)
@@ -577,6 +671,50 @@ int main()
             }
         }
 
+        thrust::universal_vector<unsigned> clusterNeighbors2((lastBody * ncmax + iClusterSize - 1) / iClusterSize, -1);
+        thrust::universal_vector<unsigned> clusterNeighborsCount2((lastBody + iClusterSize - 1) / iClusterSize, 0);
+        unsigned numBodies = lastBody - firstBody;
+        unsigned numBlocks = TravConfig::numBlocks(numBodies);
+        unsigned poolSize  = TravConfig::poolSize(numBodies);
+        thrust::universal_vector<int> globalPool(poolSize);
+        resetTraversalCounters<<<1, 1>>>();
+        findClusterNeighbors<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
+            firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount2), rawPtr(clusterNeighbors2),
+            ncmax, rawPtr(globalPool));
+        kernelSuccess("findClusterNeighbors");
+        if (clusterNeighborsCount != clusterNeighborsCount2)
+        {
+            std::cout << "Cluster neighbor count failed :(" << std::endl;
+            for (std::size_t i = 0; i < clusterNeighborsCount.size(); ++i)
+            {
+                if (clusterNeighborsCount[i] != clusterNeighborsCount2[i])
+                    std::cout << i << " " << clusterNeighborsCount[i] << " " << clusterNeighborsCount2[i] << "\n";
+            }
+            std::cout << "Cluster neighbor count failed ^" << std::endl;
+        }
+        else { std::cout << "Cluster neighbor count passed!" << std::endl; }
+        if (clusterNeighbors != clusterNeighbors2)
+        {
+            bool fail = false;
+            for (std::size_t iCluster = 0; iCluster < clusterNeighborsCount.size(); ++iCluster)
+            {
+                std::sort(clusterNeighbors.begin() + iCluster * ncmax,
+                          clusterNeighbors.begin() + (iCluster + 1) * ncmax);
+                std::sort(clusterNeighbors2.begin() + iCluster * ncmax,
+                          clusterNeighbors2.begin() + (iCluster + 1) * ncmax);
+                for (std::size_t i = iCluster * ncmax; i < (iCluster + 1) * ncmax; ++i)
+                    if (clusterNeighbors[i] != clusterNeighbors2[i])
+                    {
+                        std::cout << iCluster << ":" << (i - iCluster * ncmax) << " " << clusterNeighbors[i] << " "
+                                  << clusterNeighbors2[i] << "\n";
+                        fail = true;
+                    }
+            }
+            if (fail) { std::cout << "Cluster neighbor search failed :(" << std::endl; }
+            else { std::cout << "Cluster neighbor search passed!" << std::endl; }
+        }
+        else { std::cout << "Cluster neighbor search passed!" << std::endl; }
+
         double r                  = 2 * h[0];
         double rho                = lastBody - firstBody;
         double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * rho;
@@ -598,6 +736,8 @@ int main()
         };
 
         float gpuTime = timeGpu(clusteredNeighborSearch);
+        std::cout << "Clustered NB time " << gpuTime / 1000 << " " << std::endl;
+        gpuTime = timeGpu(clusteredNeighborSearch);
         std::cout << "Clustered NB time " << gpuTime / 1000 << " " << std::endl;
     };
     auto neighborIndexClustered = [](unsigned i, unsigned j, unsigned ngmax)
