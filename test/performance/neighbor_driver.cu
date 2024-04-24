@@ -152,7 +152,8 @@ auto findNeighborsBT(size_t firstBody,
     unsigned numBodies = lastBody - firstBody;
     unsigned numBlocks = TravConfig::numBlocks(numBodies);
     unsigned poolSize  = TravConfig::poolSize(numBodies);
-    thrust::universal_vector<int> globalPool(poolSize);
+    static thrust::universal_vector<int> globalPool;
+    globalPool.resize(poolSize);
 
     printf("launching %d blocks\n", numBlocks);
     resetTraversalCounters<<<1, 1>>>();
@@ -607,6 +608,7 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
                          rawPtr(d_neighborsCount), rawPtr(d_neighbors), ngmax);
     };
 
+    findNeighborsLambda();
     float gpuTime = timeGpu(findNeighborsLambda);
 
     thrust::copy(d_neighborsCount.begin(), d_neighborsCount.end(), neighborsCountGPU.begin());
@@ -677,6 +679,8 @@ int main()
     benchmarkGpu<Tc, KeyType>(batched, neighborIndexBatched);
 
     std::cout << "--- CLUSTERED ---" << std::endl;
+    thrust::universal_vector<unsigned> clusterNeighbors, clusterNeighborsCount;
+    thrust::universal_vector<int> globalPool;
     auto clustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
                          const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
     {
@@ -685,15 +689,15 @@ int main()
 
         auto ncmax = ngmax; // TODO: is there a safe ncmax < ngmax?
 
-        thrust::universal_vector<unsigned> clusterNeighbors((lastBody + iClusterSize - 1) / iClusterSize * ncmax);
-        thrust::universal_vector<unsigned> clusterNeighborsCount((lastBody + iClusterSize - 1) / iClusterSize);
+        clusterNeighbors.resize((lastBody + iClusterSize - 1) / iClusterSize * ncmax);
+        clusterNeighborsCount.resize((lastBody + iClusterSize - 1) / iClusterSize);
 
         auto findClusterClusterNeighbors = [&]
         {
             unsigned numBodies = lastBody - firstBody;
             unsigned numBlocks = TravConfig::numBlocks(numBodies);
             unsigned poolSize  = TravConfig::poolSize(numBodies);
-            thrust::universal_vector<int> globalPool(poolSize);
+            globalPool.resize(poolSize);
             resetTraversalCounters<<<1, 1>>>();
             findClusterNeighbors<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
                 firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors),
@@ -709,40 +713,36 @@ int main()
             auto [clusterNeighborsCountCPU, clusterNeighborsCPU] = findClusterNeighborsCPU<iClusterSize, jClusterSize>(
                 firstBody, lastBody, x, y, z, h, tree, box, ngmax, ncmax);
 
-            if (clusterNeighborsCountCPU != clusterNeighborsCount)
+            bool fail = false;
+            for (std::size_t i = 0; i < clusterNeighborsCountCPU.size(); ++i)
             {
-                std::cout << "Cluster neighbor count failed" << std::endl;
-                for (std::size_t i = 0; i < clusterNeighborsCountCPU.size(); ++i)
+                if (clusterNeighborsCountCPU[i] != clusterNeighborsCount[i])
                 {
-                    if (clusterNeighborsCountCPU[i] != clusterNeighborsCount[i])
-                        std::cout << i << " " << clusterNeighborsCountCPU[i] << " " << clusterNeighborsCount[i] << "\n";
+                    std::cout << i << " " << clusterNeighborsCountCPU[i] << " " << clusterNeighborsCount[i] << "\n";
+                    fail = true;
                 }
-                std::cout << "Cluster neighbor count failed ^" << std::endl;
             }
+            if (fail) { std::cout << "Cluster neighbor count failed ^" << std::endl; }
             else
             {
                 std::cout << "Cluster neighbor count passed" << std::endl;
-                if (clusterNeighborsCPU != clusterNeighbors)
+                bool fail = false;
+                for (std::size_t iCluster = 0; iCluster < clusterNeighborsCountCPU.size(); ++iCluster)
                 {
-                    bool fail = false;
-                    for (std::size_t iCluster = 0; iCluster < clusterNeighborsCountCPU.size(); ++iCluster)
-                    {
-                        unsigned nc = clusterNeighborsCountCPU[iCluster];
-                        std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
-                                  clusterNeighborsCPU.begin() + iCluster * ncmax + nc);
-                        std::sort(clusterNeighbors.begin() + iCluster * ncmax,
-                                  clusterNeighbors.begin() + iCluster * ncmax + nc);
-                        for (std::size_t i = iCluster * ncmax; i < iCluster * ncmax + nc; ++i)
-                            if (clusterNeighborsCPU[i] != clusterNeighbors[i])
-                            {
-                                std::cout << iCluster << ":" << (i - iCluster * ncmax) << " " << clusterNeighborsCPU[i]
-                                          << " " << clusterNeighbors[i] << "\n";
-                                fail = true;
-                            }
-                    }
-                    if (fail) { std::cout << "Cluster neighbor search failed" << std::endl; }
-                    else { std::cout << "Cluster neighbor search passed" << std::endl; }
+                    unsigned nc = clusterNeighborsCountCPU[iCluster];
+                    std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
+                              clusterNeighborsCPU.begin() + iCluster * ncmax + nc);
+                    std::sort(clusterNeighbors.begin() + iCluster * ncmax,
+                              clusterNeighbors.begin() + iCluster * ncmax + nc);
+                    for (std::size_t i = iCluster * ncmax; i < iCluster * ncmax + nc; ++i)
+                        if (clusterNeighborsCPU[i] != clusterNeighbors[i])
+                        {
+                            std::cout << iCluster << ":" << (i - iCluster * ncmax) << " " << clusterNeighborsCPU[i]
+                                      << " " << clusterNeighbors[i] << "\n";
+                            fail = true;
+                        }
                 }
+                if (fail) { std::cout << "Cluster neighbor search failed" << std::endl; }
                 else { std::cout << "Cluster neighbor search passed" << std::endl; }
             }
 
