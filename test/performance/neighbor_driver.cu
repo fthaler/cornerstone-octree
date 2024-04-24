@@ -253,6 +253,15 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
 
         __syncwarp();
 
+        if (laneIdx < TravConfig::targetSize / iClusterSize)
+        {
+            for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
+            {
+                ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + laneIdx] =
+                    nc[(warpTarget * TravConfig::numThreads + threadIdx.x) / iClusterSize + laneIdx];
+            }
+        }
+
         if (laneIdx % iClusterSize == 0)
         {
             for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
@@ -260,8 +269,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
                 if (bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx >= lastBody) continue;
                 const unsigned localIdx = (warpTarget * TravConfig::numThreads + threadIdx.x) / iClusterSize;
                 unsigned nbs            = nc[localIdx];
-                ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx) / iClusterSize] = nbs;
-                unsigned* nidxc = &nidx[localIdx * ncmax];
+                unsigned* nidxc         = &nidx[localIdx * ncmax];
                 for (unsigned nb = 0; nb < imin(nbs, ncmax); ++nb)
                 {
                     nidxClustered[(bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx) / iClusterSize * ncmax +
