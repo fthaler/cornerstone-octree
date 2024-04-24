@@ -479,7 +479,7 @@ std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBo
 
     std::size_t iClusters = (lastBody + iClusterSize - 1) / iClusterSize;
     std::vector<unsigned> clusterNeighborsCount(iClusters, 0);
-    std::vector<unsigned> clusterNeighbors(iClusters * ncmax, unsigned(-1));
+    std::vector<unsigned> clusterNeighbors(iClusters * ncmax);
 
     for (auto i = firstBody; i < lastBody; ++i)
     {
@@ -685,8 +685,8 @@ int main()
 
         auto ncmax = ngmax; // TODO: is there a safe ncmax < ngmax?
 
-        thrust::universal_vector<unsigned> clusterNeighbors((lastBody + iClusterSize - 1) / iClusterSize * ncmax, -1);
-        thrust::universal_vector<unsigned> clusterNeighborsCount((lastBody + iClusterSize - 1) / iClusterSize, 0);
+        thrust::universal_vector<unsigned> clusterNeighbors((lastBody + iClusterSize - 1) / iClusterSize * ncmax);
+        thrust::universal_vector<unsigned> clusterNeighborsCount((lastBody + iClusterSize - 1) / iClusterSize);
 
         auto findClusterClusterNeighbors = [&]
         {
@@ -719,28 +719,32 @@ int main()
                 }
                 std::cout << "Cluster neighbor count failed ^" << std::endl;
             }
-            else { std::cout << "Cluster neighbor count passed" << std::endl; }
-            if (clusterNeighborsCPU != clusterNeighbors)
+            else
             {
-                bool fail = false;
-                for (std::size_t iCluster = 0; iCluster < clusterNeighborsCountCPU.size(); ++iCluster)
+                std::cout << "Cluster neighbor count passed" << std::endl;
+                if (clusterNeighborsCPU != clusterNeighbors)
                 {
-                    std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
-                              clusterNeighborsCPU.begin() + (iCluster + 1) * ncmax);
-                    std::sort(clusterNeighbors.begin() + iCluster * ncmax,
-                              clusterNeighbors.begin() + (iCluster + 1) * ncmax);
-                    for (std::size_t i = iCluster * ncmax; i < (iCluster + 1) * ncmax; ++i)
-                        if (clusterNeighborsCPU[i] != clusterNeighbors[i])
-                        {
-                            std::cout << iCluster << ":" << (i - iCluster * ncmax) << " " << clusterNeighborsCPU[i]
-                                      << " " << clusterNeighbors[i] << "\n";
-                            fail = true;
-                        }
+                    bool fail = false;
+                    for (std::size_t iCluster = 0; iCluster < clusterNeighborsCountCPU.size(); ++iCluster)
+                    {
+                        unsigned nc = clusterNeighborsCountCPU[iCluster];
+                        std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
+                                  clusterNeighborsCPU.begin() + iCluster * ncmax + nc);
+                        std::sort(clusterNeighbors.begin() + iCluster * ncmax,
+                                  clusterNeighbors.begin() + iCluster * ncmax + nc);
+                        for (std::size_t i = iCluster * ncmax; i < iCluster * ncmax + nc; ++i)
+                            if (clusterNeighborsCPU[i] != clusterNeighbors[i])
+                            {
+                                std::cout << iCluster << ":" << (i - iCluster * ncmax) << " " << clusterNeighborsCPU[i]
+                                          << " " << clusterNeighbors[i] << "\n";
+                                fail = true;
+                            }
+                    }
+                    if (fail) { std::cout << "Cluster neighbor search failed" << std::endl; }
+                    else { std::cout << "Cluster neighbor search passed" << std::endl; }
                 }
-                if (fail) { std::cout << "Cluster neighbor search failed" << std::endl; }
                 else { std::cout << "Cluster neighbor search passed" << std::endl; }
             }
-            else { std::cout << "Cluster neighbor search passed" << std::endl; }
 
             double r                  = 2 * h[0];
             double rho                = lastBody - firstBody;
