@@ -182,6 +182,13 @@ auto findNeighborsBT(size_t firstBody,
     return interactions;
 }
 
+template<unsigned iClusterSize>
+__host__ __device__ inline constexpr unsigned clusterNeighborIndex(unsigned cluster, unsigned neighbor, unsigned ncmax)
+{
+    constexpr unsigned blockSize = TravConfig::targetSize / iClusterSize;
+    return (cluster / blockSize) * blockSize * ncmax + (cluster % blockSize) + neighbor * blockSize;
+}
+
 template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th, class KeyType>
 __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(cstone::LocalIndex firstBody,
                                                                                cstone::LocalIndex lastBody,
@@ -272,8 +279,9 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
                 unsigned* nidxc         = &nidx[localIdx * ncmax];
                 for (unsigned nb = 0; nb < imin(nbs, ncmax); ++nb)
                 {
-                    nidxClustered[(bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx) / iClusterSize * ncmax +
-                                  nb] = nidxc[nb];
+                    nidxClustered[clusterNeighborIndex<iClusterSize>(
+                        (bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx) / iClusterSize, nb, ncmax)] =
+                        nidxc[nb];
                 }
             }
         }
@@ -328,12 +336,11 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
 
             auto i                                = bodyIdxLane + k * GpuConfig::warpSize;
             auto iCluster                         = i / iClusterSize;
-            const unsigned* iClusterNeighbors     = nidxClustered + iCluster * ncmax;
             const unsigned iClusterNeighborsCount = ncClustered[iCluster];
 
             for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, ncmax); ++jc)
             {
-                auto jCluster = iClusterNeighbors[jc];
+                auto jCluster = nidxClustered[clusterNeighborIndex<iClusterSize>(iCluster, jc, ncmax)];
                 for (unsigned j = jCluster * jClusterSize; j < imin((jCluster + 1) * jClusterSize, lastBody); ++j)
                 {
                     if (i != j)
@@ -411,7 +418,6 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
             __syncthreads();
 
             const auto iCluster                   = imin(i, lastBody - 1) / iClusterSize;
-            const unsigned* iClusterNeighbors     = nidxClustered + iCluster * ncmax;
             const unsigned iClusterNeighborsCount = ncClustered[iCluster];
 
             const unsigned iPosSrcLane = laneIdx % iClusterSize + c * iClusterSize;
@@ -442,7 +448,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
 
             for (unsigned jc = 0; jc < imin(ncmax, iClusterNeighborsCount); ++jc)
             {
-                const unsigned jCluster = iClusterNeighbors[jc];
+                const unsigned jCluster = nidxClustered[clusterNeighborIndex<iClusterSize>(iCluster, jc, ncmax)];
 
                 const auto j = jCluster * jClusterSize + laneIdx / iClusterSize;
                 if (j < lastBody && j / iClusterSize != iCluster)
@@ -740,13 +746,16 @@ int main()
                     unsigned nc = clusterNeighborsCountCPU[iCluster];
                     std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
                               clusterNeighborsCPU.begin() + iCluster * ncmax + nc);
-                    std::sort(clusterNeighbors.begin() + iCluster * ncmax,
-                              clusterNeighbors.begin() + iCluster * ncmax + nc);
-                    for (std::size_t i = iCluster * ncmax; i < iCluster * ncmax + nc; ++i)
-                        if (clusterNeighborsCPU[i] != clusterNeighbors[i])
+                    std::vector<unsigned> sortedClusterNeighborsGPU(nc);
+                    for (unsigned nb = 0; nb < nc; ++nb)
+                        sortedClusterNeighborsGPU[nb] =
+                            clusterNeighbors[clusterNeighborIndex<iClusterSize>(iCluster, nb, ncmax)];
+                    std::sort(sortedClusterNeighborsGPU.begin(), sortedClusterNeighborsGPU.end());
+                    for (unsigned nb = 0; nb < nc; ++nb)
+                        if (clusterNeighborsCPU[iCluster * ncmax + nb] != sortedClusterNeighborsGPU[nb])
                         {
-                            std::cout << iCluster << ":" << (i - iCluster * ncmax) << " " << clusterNeighborsCPU[i]
-                                      << " " << clusterNeighbors[i] << "\n";
+                            std::cout << iCluster << ":" << nb << " " << clusterNeighborsCPU[iCluster * ncmax + nb]
+                                      << " " << sortedClusterNeighborsGPU[nb] << "\n";
                             fail = true;
                         }
                 }
