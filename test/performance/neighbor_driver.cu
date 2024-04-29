@@ -118,7 +118,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void traverseBT(cstone::Loc
 
         unsigned nc_i[TravConfig::nwt] = {0};
 
-        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex i, cstone::LocalIndex j)
+        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
         {
             if (nc_i[warpTarget] < ngmax)
                 warpNidx[nc_i[warpTarget] * TravConfig::targetSize + laneIdx + warpTarget * GpuConfig::warpSize] = j;
@@ -230,6 +230,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
         const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
         const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
         const unsigned iClusterWarp        = laneIdx / iClusterSize;
+        const unsigned i                   = imin(bodyBegin + laneIdx, bodyEnd - 1);
 
         if (laneIdx < iClustersPerWarp)
         {
@@ -239,9 +240,8 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
 
         __syncwarp();
 
-        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex i, cstone::LocalIndex j)
+        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
         {
-            assert(i == imin(bodyBegin + laneIdx, bodyEnd - 1));
             unsigned jCluster     = j / jClusterSize;
             unsigned iClusterMask = ((1 << iClusterSize) - 1) << (laneIdx / iClusterSize * iClusterSize);
             unsigned mask         = __match_any_sync(__activemask() & iClusterMask, jCluster);

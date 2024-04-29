@@ -94,10 +94,9 @@ __device__ __forceinline__ int ringAddr(const int i) { return i & (TravConfig::m
  *
  * Number of computed particle-particle pairs per call is GpuConfig::warpSize^2 * TravConfig::nwt
  */
-template<bool UsePbc, class Tc, class Index, class InteractionsHandler>
+template<bool UsePbc, class Tc, class InteractionsHandler>
 __device__ void applyInteraction(Vec3<Tc> sourceBody,
                                  int numLanesValid,
-                                 const util::array<Index, TravConfig::nwt>& bodyIdx_i,
                                  const util::array<Vec4<Tc>, TravConfig::nwt>& pos_i,
                                  const Box<Tc>& box,
                                  cstone::LocalIndex sourceBodyIdx,
@@ -112,7 +111,7 @@ __device__ void applyInteraction(Vec3<Tc> sourceBody,
         for (int k = 0; k < TravConfig::nwt; k++)
         {
             Tc d2 = distanceSq<UsePbc>(pos_j[0], pos_j[1], pos_j[2], pos_i[k][0], pos_i[k][1], pos_i[k][2], box);
-            if (d2 < pos_i[k][3] && d2 > Tc(0.0)) { handleInteraction(k, bodyIdx_i[k], idx_j); }
+            if (d2 < pos_i[k][3] && d2 > Tc(0.0)) { handleInteraction(k, idx_j); }
         }
     }
 }
@@ -189,9 +188,8 @@ __device__ __forceinline__ bool tightOverlap(int laneIdx,
  * Constant input pointers are additionally marked __restrict__ to indicate to the compiler that loads
  * can be routed through the read-only/texture cache.
  */
-template<bool UsePbc, class InteractionHandler, class Index, class Tc, class Th, class KeyType>
+template<bool UsePbc, class InteractionHandler, class Tc, class Th, class KeyType>
 __device__ uint2 traverseWarp(const InteractionHandler& handleInteraction,
-                              const util::array<Index, TravConfig::nwt>& bodyIdx_i,
                               const util::array<Vec4<Tc>, TravConfig::nwt>& pos_i,
                               const Vec3<Tc> targetCenter,
                               const Vec3<Tc> targetSize,
@@ -285,8 +283,7 @@ __device__ uint2 traverseWarp(const InteractionHandler& handleInteraction,
             {
                 // Load source body coordinates
                 const Vec3<Tc> sourceBody = {x[bodyIdx], y[bodyIdx], z[bodyIdx]};
-                applyInteraction<UsePbc>(sourceBody, GpuConfig::warpSize, bodyIdx_i, pos_i, box, bodyIdx,
-                                         handleInteraction);
+                applyInteraction<UsePbc>(sourceBody, GpuConfig::warpSize, pos_i, box, bodyIdx, handleInteraction);
                 numBodiesWarp -= GpuConfig::warpSize;
                 numBodiesLane -= GpuConfig::warpSize;
                 p2pCounter += GpuConfig::warpSize;
@@ -302,8 +299,7 @@ __device__ uint2 traverseWarp(const InteractionHandler& handleInteraction,
                 {
                     // Load source body coordinates
                     const Vec3<Tc> sourceBody = {x[bodyQueue], y[bodyQueue], z[bodyQueue]};
-                    applyInteraction<UsePbc>(sourceBody, GpuConfig::warpSize, bodyIdx_i, pos_i, box, bodyQueue,
-                                             handleInteraction);
+                    applyInteraction<UsePbc>(sourceBody, GpuConfig::warpSize, pos_i, box, bodyQueue, handleInteraction);
                     bdyFillLevel -= GpuConfig::warpSize;
                     // bodyQueue is now empty; put body indices that spilled into the queue
                     bodyQueue = shflDownSync(bodyIdx, numBodiesWarp - bdyFillLevel);
@@ -328,7 +324,7 @@ __device__ uint2 traverseWarp(const InteractionHandler& handleInteraction,
         // Load position of source bodies, with padding for invalid lanes
         const Vec3<Tc> sourceBody =
             laneHasBody ? Vec3<Tc>{x[bodyQueue], y[bodyQueue], z[bodyQueue]} : Vec3<Tc>{Tc(0), Tc(0), Tc(0)};
-        applyInteraction<UsePbc>(sourceBody, bdyFillLevel, bodyIdx_i, pos_i, box, bodyQueue, handleInteraction);
+        applyInteraction<UsePbc>(sourceBody, bdyFillLevel, pos_i, box, bodyQueue, handleInteraction);
         p2pCounter += bdyFillLevel;
     }
 
@@ -362,24 +358,22 @@ static __global__ void resetTraversalCounters()
 }
 
 template<class Tc, class Th, class Index>
-__device__ __forceinline__ thrust::tuple<util::array<Index, TravConfig::nwt>, util::array<Vec4<Tc>, TravConfig::nwt>>
-loadTarget(Index bodyBegin,
-           Index bodyEnd,
-           unsigned lane,
-           const Tc* __restrict__ x,
-           const Tc* __restrict__ y,
-           const Tc* __restrict__ z,
-           const Th* __restrict__ h)
+__device__ __forceinline__ util::array<Vec4<Tc>, TravConfig::nwt> loadTarget(Index bodyBegin,
+                                                                             Index bodyEnd,
+                                                                             unsigned lane,
+                                                                             const Tc* __restrict__ x,
+                                                                             const Tc* __restrict__ y,
+                                                                             const Tc* __restrict__ z,
+                                                                             const Th* __restrict__ h)
 {
-    util::array<Index, TravConfig::nwt> bodyIdx_i;
     util::array<Vec4<Tc>, TravConfig::nwt> pos_i;
 #pragma unroll
     for (int i = 0; i < TravConfig::nwt; i++)
     {
-        bodyIdx_i[i] = imin(bodyBegin + i * GpuConfig::warpSize + lane, bodyEnd - 1);
-        pos_i[i]     = {x[bodyIdx_i[i]], y[bodyIdx_i[i]], z[bodyIdx_i[i]], Tc(2) * h[bodyIdx_i[i]]};
+        Index bodyIdx = imin(bodyBegin + i * GpuConfig::warpSize + lane, bodyEnd - 1);
+        pos_i[i]      = {x[bodyIdx], y[bodyIdx], z[bodyIdx], Tc(2) * h[bodyIdx]};
     }
-    return thrust::make_tuple(bodyIdx_i, pos_i);
+    return pos_i;
 }
 
 //! @brief determine the bounding box around all particles-2h spheres in the warp
@@ -448,8 +442,8 @@ __device__ void traverseNeighbors(cstone::LocalIndex bodyBegin,
     // warp-common global mem storage
     int* cellQueue = globalPool + TravConfig::memPerWarp * ((blockIdx.x * numWarpsPerBlock) + warpIdx);
 
-    auto [bodyIdx_i, pos_i]               = loadTarget(bodyBegin, bodyEnd, laneIdx, x, y, z, h);
-    const auto [targetCenter, targetSize] = warpBbox(pos_i);
+    util::array<Vec4<Tc>, TravConfig::nwt> pos_i = loadTarget(bodyBegin, bodyEnd, laneIdx, x, y, z, h);
+    const auto [targetCenter, targetSize]        = warpBbox(pos_i);
 
 #pragma unroll
     for (int k = 0; k < TravConfig::nwt; ++k)
@@ -469,13 +463,13 @@ __device__ void traverseNeighbors(cstone::LocalIndex bodyBegin,
     uint2 warpStats;
     if (usePbc)
     {
-        warpStats = traverseWarp<true>(handleInteraction, bodyIdx_i, pos_i, targetCenter, targetSize, x, y, z, h, tree,
-                                       initNode, box, tempQueue, cellQueue);
+        warpStats = traverseWarp<true>(handleInteraction, pos_i, targetCenter, targetSize, x, y, z, h, tree, initNode,
+                                       box, tempQueue, cellQueue);
     }
     else
     {
-        warpStats = traverseWarp<false>(handleInteraction, bodyIdx_i, pos_i, targetCenter, targetSize, x, y, z, h, tree,
-                                        initNode, box, tempQueue, cellQueue);
+        warpStats = traverseWarp<false>(handleInteraction, pos_i, targetCenter, targetSize, x, y, z, h, tree, initNode,
+                                        box, tempQueue, cellQueue);
     }
     unsigned numP2P   = warpStats.x;
     unsigned maxStack = warpStats.y;
