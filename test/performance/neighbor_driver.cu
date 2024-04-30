@@ -282,6 +282,97 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
     }
 }
 
+template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th, class KeyType>
+__global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors2(cstone::LocalIndex firstBody,
+                                                                                cstone::LocalIndex lastBody,
+                                                                                const Tc* __restrict__ x,
+                                                                                const Tc* __restrict__ y,
+                                                                                const Tc* __restrict__ z,
+                                                                                const Th* __restrict__ h,
+                                                                                OctreeNsView<Tc, KeyType> tree,
+                                                                                const Box<Tc> box,
+                                                                                unsigned* __restrict__ ncClustered,
+                                                                                unsigned* __restrict__ nidxClustered,
+                                                                                unsigned ncmax,
+                                                                                int* globalPool)
+{
+    const unsigned laneIdx    = threadIdx.x & (GpuConfig::warpSize - 1);
+    const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
+    int targetIdx             = 0;
+
+    constexpr unsigned iClustersPerWarp = GpuConfig::warpSize / iClusterSize;
+
+    while (true)
+    {
+        // first thread in warp grabs next target
+        if (laneIdx == 0) { targetIdx = atomicAdd(&targetCounterGlob, 1); }
+        targetIdx = shflSync(targetIdx, 0);
+
+        if (targetIdx >= numTargets) return;
+
+        const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
+        const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
+        const unsigned iClusterWarp        = laneIdx / iClusterSize;
+        const unsigned i                   = imin(bodyBegin + laneIdx, bodyEnd - 1);
+
+        auto nc = [&](unsigned iClusterWarp, unsigned warpTarget) -> unsigned&
+        { return ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + iClusterWarp]; };
+
+        auto nidx = [&](unsigned iClusterWarp, unsigned warpTarget, unsigned nb) -> unsigned&
+        {
+            unsigned iCluster = (bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + iClusterWarp;
+            return nidxClustered[clusterNeighborIndex<iClusterSize>(iCluster, nb, ncmax)];
+        };
+
+        if (laneIdx < iClustersPerWarp)
+        {
+            for (int warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
+                nc(laneIdx, warpTarget) = 0;
+        }
+
+        __syncwarp();
+
+        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
+        {
+            if (i / iClusterSize == j / iClusterSize || i / jClusterSize == j / jClusterSize) return;
+
+            unsigned jCluster = j / jClusterSize;
+            unsigned mask     = (((1 << iClusterSize) - 1) << (laneIdx / iClusterSize * iClusterSize)) & __activemask();
+            unsigned leader   = __ffs(mask) - 1;
+
+            if (laneIdx != leader) return;
+
+            const unsigned ncc = imin(nc(iClusterWarp, warpTarget), ncmax);
+            if (ncc > 0 && nidx(iClusterWarp, warpTarget, ncc - 1) == jCluster) return;
+
+            unsigned nb = 0, last = ncc;
+            unsigned count = last - nb;
+            while (count > 0)
+            {
+                unsigned step   = count / 2;
+                unsigned center = nb + step;
+
+                if (!(jCluster < nidx(iClusterWarp, warpTarget, center)))
+                {
+                    nb = center + 1;
+                    count -= step + 1;
+                }
+                else { count = step; }
+            }
+
+            if (nb > 0 && nidx(iClusterWarp, warpTarget, nb - 1) == jCluster) return;
+
+            for (unsigned nbi = imin(ncc, ncmax - 1); nbi > nb; --nbi)
+                nidx(iClusterWarp, warpTarget, nbi) = nidx(iClusterWarp, warpTarget, nbi - 1);
+
+            ++nc(iClusterWarp, warpTarget);
+            if (nb < ncmax) nidx(iClusterWarp, warpTarget, nb) = jCluster;
+        };
+
+        traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
+    }
+}
+
 template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th>
 __global__
 __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::LocalIndex firstBody,
@@ -707,7 +798,7 @@ int main()
             unsigned poolSize  = TravConfig::poolSize(numBodies);
             globalPool.resize(poolSize);
             resetTraversalCounters<<<1, 1>>>();
-            findClusterNeighbors<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
+            findClusterNeighbors2<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
                 firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors),
                 ncmax, rawPtr(globalPool));
         };
