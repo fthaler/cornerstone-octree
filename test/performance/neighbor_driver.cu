@@ -409,7 +409,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
         constexpr auto pbc = BoundaryType::periodic;
         const bool anyPbc  = box.boundaryX() == pbc || box.boundaryY() == pbc || box.boundaryZ() == pbc;
 
-        auto [_, pos_i] = loadTarget(bodyBegin, bodyEnd, laneIdx, x, y, z, h);
+        auto pos_i = loadTarget(bodyBegin, bodyEnd, laneIdx, x, y, z, h);
         unsigned nc_i[TravConfig::nwt];
         for (int k = 0; k < TravConfig::nwt; ++k)
         {
