@@ -786,7 +786,7 @@ int main()
         constexpr unsigned iClusterSize = 8;
         constexpr unsigned jClusterSize = 4;
 
-        auto ncmax = ngmax; // TODO: is there a safe ncmax < ngmax?
+        auto ncmax = ngmax;
 
         clusterNeighbors.resize((lastBody + iClusterSize - 1) / iClusterSize * ncmax);
         clusterNeighborsCount.resize((lastBody + iClusterSize - 1) / iClusterSize);
