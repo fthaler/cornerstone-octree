@@ -36,14 +36,19 @@
 namespace cstone
 {
 
-template<unsigned iClusterSize>
+struct ClusterConfig
+{
+    static constexpr unsigned iSize = 8;
+    static constexpr unsigned jSize = 4;
+};
+
 __host__ __device__ inline constexpr unsigned clusterNeighborIndex(unsigned cluster, unsigned neighbor, unsigned ncmax)
 {
-    constexpr unsigned blockSize = TravConfig::targetSize / iClusterSize;
+    constexpr unsigned blockSize = TravConfig::targetSize / ClusterConfig::iSize;
     return (cluster / blockSize) * blockSize * ncmax + (cluster % blockSize) + neighbor * blockSize;
 }
 
-template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th, class KeyType>
+template<class Tc, class Th, class KeyType>
 __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(cstone::LocalIndex firstBody,
                                                                                cstone::LocalIndex lastBody,
                                                                                const Tc* __restrict__ x,
@@ -61,7 +66,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
     int targetIdx             = 0;
 
-    constexpr unsigned iClustersPerWarp = GpuConfig::warpSize / iClusterSize;
+    constexpr unsigned iClustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize;
     constexpr unsigned targetsPerBlock  = TravConfig::numThreads / TravConfig::targetSize;
 
     __shared__ unsigned ncData[targetsPerBlock][TravConfig::nwt][iClustersPerWarp];
@@ -83,7 +88,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
 
         const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
         const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
-        const unsigned iClusterWarp        = laneIdx / iClusterSize;
+        const unsigned iClusterWarp        = laneIdx / ClusterConfig::iSize;
         const unsigned i                   = imin(bodyBegin + laneIdx, bodyEnd - 1);
 
         if (laneIdx < iClustersPerWarp)
@@ -97,10 +102,11 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
 
         auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
         {
-            const unsigned jCluster = j / jClusterSize;
-            if (i / jClusterSize == jCluster || j / iClusterSize == i / iClusterSize) return;
-            const unsigned iClusterMask = ((1 << iClusterSize) - 1) << (laneIdx / iClusterSize * iClusterSize);
-            const unsigned leader       = __ffs(__activemask() & iClusterMask) - 1;
+            const unsigned jCluster = j / ClusterConfig::jSize;
+            if (i / ClusterConfig::jSize == jCluster || j / ClusterConfig::iSize == i / ClusterConfig::iSize) return;
+            const unsigned iClusterMask = ((1 << ClusterConfig::iSize) - 1)
+                                          << (laneIdx / ClusterConfig::iSize * ClusterConfig::iSize);
+            const unsigned leader = __ffs(__activemask() & iClusterMask) - 1;
 
             if (leader != laneIdx) return;
 
@@ -121,22 +127,21 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
         for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
         {
             const unsigned nbs = nc(laneIdx % iClustersPerWarp, warpTarget);
-            if (laneIdx < TravConfig::targetSize / iClusterSize)
-                ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + laneIdx] = nbs;
+            if (laneIdx < TravConfig::targetSize / ClusterConfig::iSize)
+                ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize) / ClusterConfig::iSize + laneIdx] = nbs;
 
             const unsigned iCluster =
-                (bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + laneIdx % iClustersPerWarp;
+                (bodyBegin + warpTarget * GpuConfig::warpSize) / ClusterConfig::iSize + laneIdx % iClustersPerWarp;
             const unsigned iClusterWarp = laneIdx % iClustersPerWarp;
             for (unsigned nb = laneIdx / iClustersPerWarp; nb < imin(nbs, ncmax); nb += iClustersPerWarp)
             {
-                nidxClustered[clusterNeighborIndex<iClusterSize>(iCluster, nb, ncmax)] =
-                    nidx(iClusterWarp, warpTarget, nb);
+                nidxClustered[clusterNeighborIndex(iCluster, nb, ncmax)] = nidx(iClusterWarp, warpTarget, nb);
             }
         }
     }
 }
 
-template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th, class KeyType>
+template<class Tc, class Th, class KeyType>
 __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors2(cstone::LocalIndex firstBody,
                                                                                 cstone::LocalIndex lastBody,
                                                                                 const Tc* __restrict__ x,
@@ -154,7 +159,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors2(
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
     int targetIdx             = 0;
 
-    constexpr unsigned iClustersPerWarp = GpuConfig::warpSize / iClusterSize;
+    constexpr unsigned iClustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize;
 
     while (true)
     {
@@ -166,16 +171,16 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors2(
 
         const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
         const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
-        const unsigned iClusterWarp        = laneIdx / iClusterSize;
+        const unsigned iClusterWarp        = laneIdx / ClusterConfig::iSize;
         const unsigned i                   = imin(bodyBegin + laneIdx, bodyEnd - 1);
 
         auto nc = [&](unsigned iClusterWarp, unsigned warpTarget) -> unsigned&
-        { return ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + iClusterWarp]; };
+        { return ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize) / ClusterConfig::iSize + iClusterWarp]; };
 
         auto nidx = [&](unsigned iClusterWarp, unsigned warpTarget, unsigned nb) -> unsigned&
         {
-            unsigned iCluster = (bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + iClusterWarp;
-            return nidxClustered[clusterNeighborIndex<iClusterSize>(iCluster, nb, ncmax)];
+            unsigned iCluster = (bodyBegin + warpTarget * GpuConfig::warpSize) / ClusterConfig::iSize + iClusterWarp;
+            return nidxClustered[clusterNeighborIndex(iCluster, nb, ncmax)];
         };
 
         if (laneIdx < iClustersPerWarp)
@@ -188,11 +193,15 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors2(
 
         auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
         {
-            if (i / iClusterSize == j / iClusterSize || i / jClusterSize == j / jClusterSize) return;
+            if (i / ClusterConfig::iSize == j / ClusterConfig::iSize ||
+                i / ClusterConfig::jSize == j / ClusterConfig::jSize)
+                return;
 
-            unsigned jCluster = j / jClusterSize;
-            unsigned mask     = (((1 << iClusterSize) - 1) << (laneIdx / iClusterSize * iClusterSize)) & __activemask();
-            unsigned leader   = __ffs(mask) - 1;
+            unsigned jCluster = j / ClusterConfig::jSize;
+            unsigned mask =
+                (((1 << ClusterConfig::iSize) - 1) << (laneIdx / ClusterConfig::iSize * ClusterConfig::iSize)) &
+                __activemask();
+            unsigned leader = __ffs(mask) - 1;
 
             if (laneIdx != leader) return;
 
@@ -227,7 +236,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors2(
     }
 }
 
-template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th, class KeyType>
+template<class Tc, class Th, class KeyType>
 __global__ __launch_bounds__(TravConfig::numThreads,
                              16) void findClusterNeighbors3(cstone::LocalIndex firstBody,
                                                             cstone::LocalIndex lastBody,
@@ -247,7 +256,7 @@ __global__ __launch_bounds__(TravConfig::numThreads,
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
     int targetIdx             = 0;
 
-    constexpr unsigned iClustersPerWarp = GpuConfig::warpSize / iClusterSize;
+    constexpr unsigned iClustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize;
 
     __shared__ unsigned tmp[TravConfig::numThreads / GpuConfig::warpSize][512 /* TODO: ncmax */];
 
@@ -261,16 +270,16 @@ __global__ __launch_bounds__(TravConfig::numThreads,
 
         const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
         const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
-        const unsigned iClusterWarp        = laneIdx / iClusterSize;
+        const unsigned iClusterWarp        = laneIdx / ClusterConfig::iSize;
         const unsigned i                   = imin(bodyBegin + laneIdx, bodyEnd - 1);
 
         auto nc = [&](unsigned iClusterWarp, unsigned warpTarget) -> unsigned&
-        { return ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + iClusterWarp]; };
+        { return ncClustered[(bodyBegin + warpTarget * GpuConfig::warpSize) / ClusterConfig::iSize + iClusterWarp]; };
 
         auto nidx = [&](unsigned iClusterWarp, unsigned warpTarget, unsigned nb) -> unsigned&
         {
-            unsigned iCluster = (bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + iClusterWarp;
-            return nidxClustered[clusterNeighborIndex<iClusterSize>(iCluster, nb, ncmax)];
+            unsigned iCluster = (bodyBegin + warpTarget * GpuConfig::warpSize) / ClusterConfig::iSize + iClusterWarp;
+            return nidxClustered[clusterNeighborIndex(iCluster, nb, ncmax)];
         };
 
         if (laneIdx < iClustersPerWarp)
@@ -283,17 +292,19 @@ __global__ __launch_bounds__(TravConfig::numThreads,
 
         auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
         {
-            if (i / iClusterSize == j / iClusterSize || i / jClusterSize == j / jClusterSize ||
-                bodyBegin + laneIdx >= bodyEnd)
+            if (i / ClusterConfig::iSize == j / ClusterConfig::iSize ||
+                i / ClusterConfig::jSize == j / ClusterConfig::jSize || bodyBegin + laneIdx >= bodyEnd)
                 return;
 
-            unsigned mask   = (((1 << iClusterSize) - 1) << (laneIdx / iClusterSize * iClusterSize)) & __activemask();
+            unsigned mask =
+                (((1 << ClusterConfig::iSize) - 1) << (laneIdx / ClusterConfig::iSize * ClusterConfig::iSize)) &
+                __activemask();
             unsigned leader = __ffs(mask) - 1;
 
             if (laneIdx != leader) return;
 
             unsigned idx = nc(iClusterWarp, warpTarget)++;
-            if (idx < ncmax) nidx(iClusterWarp, warpTarget, idx) = j / jClusterSize;
+            if (idx < ncmax) nidx(iClusterWarp, warpTarget, idx) = j / ClusterConfig::jSize;
         };
 
         traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
@@ -304,8 +315,9 @@ __global__ __launch_bounds__(TravConfig::numThreads,
         {
             for (unsigned iClusterWarp = 0; iClusterWarp < iClustersPerWarp; ++iClusterWarp)
             {
-                unsigned iCluster = (bodyBegin + warpTarget * GpuConfig::warpSize) / iClusterSize + iClusterWarp;
-                if (iCluster > (lastBody - 1) / iClusterSize) continue;
+                unsigned iCluster =
+                    (bodyBegin + warpTarget * GpuConfig::warpSize) / ClusterConfig::iSize + iClusterWarp;
+                if (iCluster > (lastBody - 1) / ClusterConfig::iSize) continue;
 
                 unsigned nbs;
                 if (laneIdx == 0) nbs = imin(nc(iClusterWarp, warpTarget), ncmax);
@@ -357,7 +369,7 @@ __global__ __launch_bounds__(TravConfig::numThreads,
     }
 }
 
-template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th>
+template<class Tc, class Th>
 __global__
 __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::LocalIndex firstBody,
                                                                       cstone::LocalIndex lastBody,
@@ -404,13 +416,14 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
             auto radiusSq = pos_i[k][3] * pos_i[k][3];
 
             auto i                                = bodyIdxLane + k * GpuConfig::warpSize;
-            auto iCluster                         = i / iClusterSize;
+            auto iCluster                         = i / ClusterConfig::iSize;
             const unsigned iClusterNeighborsCount = ncClustered[iCluster];
 
             for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, ncmax); ++jc)
             {
-                auto jCluster = nidxClustered[clusterNeighborIndex<iClusterSize>(iCluster, jc, ncmax)];
-                for (unsigned j = jCluster * jClusterSize; j < imin((jCluster + 1) * jClusterSize, lastBody); ++j)
+                auto jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
+                for (unsigned j = jCluster * ClusterConfig::jSize;
+                     j < imin((jCluster + 1) * ClusterConfig::jSize, lastBody); ++j)
                 {
                     if (i != j)
                     {
@@ -437,7 +450,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
     }
 }
 
-template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th>
+template<class Tc, class Th>
 __global__
 __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::LocalIndex firstBody,
                                                                        cstone::LocalIndex lastBody,
@@ -466,9 +479,9 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
         if (targetIdx >= numTargets) return;
 
         static_assert(TravConfig::targetSize == GpuConfig::warpSize, "Requires targetSize == warpSize");
-        static_assert(iClusterSize * jClusterSize == GpuConfig::warpSize,
+        static_assert(ClusterConfig::iSize * ClusterConfig::jSize == GpuConfig::warpSize,
                       "Single warp required per cluster-cluster interaction");
-        constexpr unsigned clustersPerWarp = GpuConfig::warpSize / iClusterSize;
+        constexpr unsigned clustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize;
 
         const auto iSuperCluster        = firstBody + GpuConfig::warpSize * targetIdx + laneIdx;
         const auto iSuperClusterClamped = imin(iSuperCluster, lastBody - 1);
@@ -479,28 +492,30 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
 
         for (unsigned c = 0; c < clustersPerWarp; ++c)
         {
-            const auto i =
-                (iSuperCluster / GpuConfig::warpSize) * GpuConfig::warpSize + laneIdx % iClusterSize + c * iClusterSize;
+            const auto i = (iSuperCluster / GpuConfig::warpSize) * GpuConfig::warpSize +
+                           laneIdx % ClusterConfig::iSize + c * ClusterConfig::iSize;
 
             // TODO: remove once nidx is not used anymore
             if (i < lastBody) nc[i] = 0;
             __syncthreads();
 
-            const auto iCluster                   = imin(i, lastBody - 1) / iClusterSize;
+            const auto iCluster                   = imin(i, lastBody - 1) / ClusterConfig::iSize;
             const unsigned iClusterNeighborsCount = ncClustered[iCluster];
 
-            const unsigned iPosSrcLane = laneIdx % iClusterSize + c * iClusterSize;
+            const unsigned iPosSrcLane = laneIdx % ClusterConfig::iSize + c * ClusterConfig::iSize;
             const Vec4<Tc> iPos{shflSync(iPosSuperCluster[0], iPosSrcLane), shflSync(iPosSuperCluster[1], iPosSrcLane),
                                 shflSync(iPosSuperCluster[2], iPosSrcLane), shflSync(iPosSuperCluster[3], iPosSrcLane)};
             const auto radiusSq = iPos[3] * iPos[3];
 
             unsigned neighbors = 0;
-            for (unsigned jCluster = iCluster * iClusterSize / jClusterSize;
+            for (unsigned jCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
                  jCluster <
-                 (iCluster * iClusterSize + (iClusterSize > jClusterSize ? iClusterSize : jClusterSize)) / jClusterSize;
+                 (iCluster * ClusterConfig::iSize +
+                  (ClusterConfig::iSize > ClusterConfig::jSize ? ClusterConfig::iSize : ClusterConfig::jSize)) /
+                     ClusterConfig::jSize;
                  ++jCluster)
             {
-                const auto j = jCluster * jClusterSize + laneIdx / iClusterSize;
+                const auto j = jCluster * ClusterConfig::jSize + laneIdx / ClusterConfig::iSize;
                 if (i < lastBody && j < lastBody && i != j)
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
@@ -517,10 +532,10 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
 
             for (unsigned jc = 0; jc < imin(ncmax, iClusterNeighborsCount); ++jc)
             {
-                const unsigned jCluster = nidxClustered[clusterNeighborIndex<iClusterSize>(iCluster, jc, ncmax)];
+                const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
 
-                const auto j = jCluster * jClusterSize + laneIdx / iClusterSize;
-                if (i < lastBody && j < lastBody && j / iClusterSize != iCluster)
+                const auto j = jCluster * ClusterConfig::jSize + laneIdx / ClusterConfig::iSize;
+                if (i < lastBody && j < lastBody && j / ClusterConfig::iSize != iCluster)
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
@@ -534,11 +549,11 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 }
             }
 
-            for (unsigned offset = GpuConfig::warpSize / 2; offset >= iClusterSize; offset /= 2)
+            for (unsigned offset = GpuConfig::warpSize / 2; offset >= ClusterConfig::iSize; offset /= 2)
                 neighbors += shflDownSync(neighbors, offset);
 
-            neighbors = shflSync(neighbors, laneIdx % iClusterSize);
-            if (laneIdx / iClusterSize == c) neighborsSuperCluster = neighbors;
+            neighbors = shflSync(neighbors, laneIdx % ClusterConfig::iSize);
+            if (laneIdx / ClusterConfig::iSize == c) neighborsSuperCluster = neighbors;
         }
 
         // if (iSuperCluster < lastBody) nc[iSuperCluster] = neighborsSuperCluster;

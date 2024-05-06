@@ -183,7 +183,7 @@ auto findNeighborsBT(size_t firstBody,
     return interactions;
 }
 
-template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th, class KeyType>
+template<class Tc, class Th, class KeyType>
 std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBody,
                                                              std::size_t lastBody,
                                                              const Tc* x,
@@ -199,20 +199,20 @@ std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBo
     for (auto i = firstBody; i < lastBody; ++i)
         nc[i] = findNeighbors(i, x, y, z, h, tree, box, ngmax, nidx.data() + i * ngmax);
 
-    std::size_t iClusters = (lastBody + iClusterSize - 1) / iClusterSize;
+    std::size_t iClusters = (lastBody + ClusterConfig::iSize - 1) / ClusterConfig::iSize;
     std::vector<unsigned> clusterNeighborsCount(iClusters, 0);
     std::vector<unsigned> clusterNeighbors(iClusters * ncmax);
 
     for (auto i = firstBody; i < lastBody; ++i)
     {
-        auto iCluster               = i / iClusterSize;
+        auto iCluster               = i / ClusterConfig::iSize;
         unsigned* iClusterNeighbors = rawPtr(clusterNeighbors) + iCluster * ncmax;
         unsigned nci                = nc[i];
         for (unsigned j = 0; j < nci; ++j)
         {
             unsigned nj       = nidx[i * ngmax + j];
-            unsigned jCluster = nj / jClusterSize;
-            if (i / jClusterSize == jCluster || nj / iClusterSize == iCluster) continue;
+            unsigned jCluster = nj / ClusterConfig::jSize;
+            if (i / ClusterConfig::jSize == jCluster || nj / ClusterConfig::iSize == iCluster) continue;
             bool alreadyIn = false;
             for (unsigned k = 0; k < std::min(clusterNeighborsCount[iCluster], ncmax); ++k)
             {
@@ -405,13 +405,10 @@ int main()
     auto clustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
                          const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
     {
-        constexpr unsigned iClusterSize = 8;
-        constexpr unsigned jClusterSize = 4;
-
         auto ncmax = 512;
 
-        clusterNeighbors.resize((lastBody + iClusterSize - 1) / iClusterSize * ncmax);
-        clusterNeighborsCount.resize((lastBody + iClusterSize - 1) / iClusterSize);
+        clusterNeighbors.resize((lastBody + ClusterConfig::iSize - 1) / ClusterConfig::iSize * ncmax);
+        clusterNeighborsCount.resize((lastBody + ClusterConfig::iSize - 1) / ClusterConfig::iSize);
 
         auto findClusterClusterNeighbors = [&]
         {
@@ -420,7 +417,7 @@ int main()
             unsigned poolSize  = TravConfig::poolSize(numBodies);
             globalPool.resize(poolSize);
             resetTraversalCounters<<<1, 1>>>();
-            findClusterNeighbors3<iClusterSize, jClusterSize><<<numBlocks, TravConfig::numThreads>>>(
+            findClusterNeighbors3<<<numBlocks, TravConfig::numThreads>>>(
                 firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors),
                 ncmax, rawPtr(globalPool));
         };
@@ -431,8 +428,8 @@ int main()
         if (false) // for debugging cluster neighbors
         {
 
-            auto [clusterNeighborsCountCPU, clusterNeighborsCPU] = findClusterNeighborsCPU<iClusterSize, jClusterSize>(
-                firstBody, lastBody, x, y, z, h, tree, box, ngmax, ncmax);
+            auto [clusterNeighborsCountCPU, clusterNeighborsCPU] =
+                findClusterNeighborsCPU(firstBody, lastBody, x, y, z, h, tree, box, ngmax, ncmax);
 
             bool fail = false;
             for (std::size_t i = 0; i < clusterNeighborsCountCPU.size(); ++i)
@@ -455,8 +452,7 @@ int main()
                               clusterNeighborsCPU.begin() + iCluster * ncmax + nc);
                     std::vector<unsigned> sortedClusterNeighborsGPU(nc);
                     for (unsigned nb = 0; nb < nc; ++nb)
-                        sortedClusterNeighborsGPU[nb] =
-                            clusterNeighbors[clusterNeighborIndex<iClusterSize>(iCluster, nb, ncmax)];
+                        sortedClusterNeighborsGPU[nb] = clusterNeighbors[clusterNeighborIndex(iCluster, nb, ncmax)];
                     std::sort(sortedClusterNeighborsGPU.begin(), sortedClusterNeighborsGPU.end());
                     for (unsigned nb = 0; nb < nc; ++nb)
                         if (clusterNeighborsCPU[iCluster * ncmax + nb] != sortedClusterNeighborsGPU[nb])
@@ -475,7 +471,7 @@ int main()
             double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * rho;
             auto average_neighbors =
                 std::accumulate(clusterNeighborsCountCPU.begin(), clusterNeighborsCountCPU.end(), 0) /
-                double(clusterNeighborsCountCPU.size()) * jClusterSize;
+                double(clusterNeighborsCountCPU.size()) * ClusterConfig::jSize;
             std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
         }
 
@@ -484,9 +480,9 @@ int main()
             unsigned numBodies = lastBody - firstBody;
             unsigned numBlocks = TravConfig::numBlocks(numBodies);
             resetTraversalCounters<<<1, 1>>>();
-            findNeighborsClustered2<iClusterSize, jClusterSize>
-                <<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx, ngmax,
-                                                        rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
+            findNeighborsClustered2<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc,
+                                                                           nidx, ngmax, rawPtr(clusterNeighborsCount),
+                                                                           rawPtr(clusterNeighbors), ncmax);
         };
 
         gpuTime = timeGpu(clusteredNeighborSearch);
