@@ -315,15 +315,15 @@ void findNeighborsC(std::size_t firstBody,
         std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
     }
 
-    auto countNeighbors = [=] __device__(unsigned i, auto iPos, unsigned j, auto jPos)
+    auto countNeighbors = [=] __device__(unsigned i, auto iPos, unsigned j, auto jPos, auto distanceSq)
     {
-        if (i == j) return 0;
+        if (i == j) return 0u;
 
         unsigned nb = atomicAdd(&nc[i], 1);
         if (nb < ngmax)
             nidx[(i / TravConfig::targetSize) * TravConfig::targetSize * ngmax + TravConfig::targetSize * nb +
                  i % TravConfig::targetSize] = j;
-        return 1;
+        return 1u;
     };
 
     cudaMemset(nc + firstBody, 0, numBodies * sizeof(unsigned));

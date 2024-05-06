@@ -435,7 +435,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
                                      : distanceSq<false>(pos_j[0], pos_j[1], pos_j[2], pos_i[k][0], pos_i[k][1],
                                                          pos_i[k][2], box);
                     if (d2 < radiusSq)
-                        sum += contribution(i, Vec3<Tc>{pos_i[k][0], pos_i[k][1], pos_i[k][2]}, j, pos_j);
+                        sum += contribution(i, Vec3<Tc>{pos_i[k][0], pos_i[k][1], pos_i[k][2]}, j, pos_j, d2);
                 }
             }
 
@@ -451,7 +451,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
                                      : distanceSq<false>(pos_j[0], pos_j[1], pos_j[2], pos_i[k][0], pos_i[k][1],
                                                          pos_i[k][2], box);
                     if (d2 < radiusSq)
-                        sum += contribution(i, Vec3<Tc>{pos_i[k][0], pos_i[k][1], pos_i[k][2]}, j, pos_j);
+                        sum += contribution(i, Vec3<Tc>{pos_i[k][0], pos_i[k][1], pos_i[k][2]}, j, pos_j, d2);
                 }
             }
 
@@ -525,7 +525,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-                    if (d2 < radiusSq) sum += contribution(i, Vec3<Tc>{iPos[0], iPos[1], iPos[2]}, j, jPos);
+                    if (d2 < radiusSq) sum += contribution(i, Vec3<Tc>{iPos[0], iPos[1], iPos[2]}, j, jPos, d2);
                 }
             }
 
@@ -538,7 +538,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-                    if (d2 < radiusSq) sum += contribution(i, Vec3<Tc>{iPos[0], iPos[1], iPos[2]}, j, jPos);
+                    if (d2 < radiusSq) sum += contribution(i, Vec3<Tc>{iPos[0], iPos[1], iPos[2]}, j, jPos, d2);
                 }
             }
 
