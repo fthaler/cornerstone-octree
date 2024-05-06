@@ -183,7 +183,6 @@ auto findNeighborsBT(size_t firstBody,
     return interactions;
 }
 
-
 template<unsigned iClusterSize, unsigned jClusterSize, class Tc, class Th, class KeyType>
 std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBody,
                                                              std::size_t lastBody,
@@ -493,11 +492,5 @@ int main()
         gpuTime = timeGpu(clusteredNeighborSearch);
         std::cout << "Clustered NB search time " << gpuTime / 1000 << " " << std::endl;
     };
-    auto neighborIndexClustered = [](unsigned i, unsigned j, unsigned ngmax)
-    {
-        auto warpOffset = (i / TravConfig::targetSize) * TravConfig::targetSize * ngmax;
-        auto laneOffset = i % TravConfig::targetSize;
-        return warpOffset + TravConfig::targetSize * j + laneOffset;
-    };
-    benchmarkGpu<Tc, KeyType>(clustered, neighborIndexClustered);
+    benchmarkGpu<Tc, KeyType>(clustered, neighborIndexBatched);
 }
