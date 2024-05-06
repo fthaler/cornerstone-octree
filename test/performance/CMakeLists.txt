@@ -26,5 +26,6 @@ if(CMAKE_CUDA_COMPILER OR CMAKE_HIP_COMPILER)
 
     if (CMAKE_CUDA_COMPILER)
         set_source_files_properties(octree.cu PROPERTIES COMPILE_OPTIONS --expt-relaxed-constexpr)
+        set_source_files_properties(neighbor_driver.cu PROPERTIES COMPILE_OPTIONS --extended-lambda)
     endif()
 endif()

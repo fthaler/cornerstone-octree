@@ -315,11 +315,23 @@ void findNeighborsC(std::size_t firstBody,
         std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
     }
 
+    auto countNeighbors = [=] __device__(unsigned i, auto iPos, unsigned j, auto jPos)
+    {
+        if (i == j) return 0;
+
+        unsigned nb = atomicAdd(&nc[i], 1);
+        if (nb < ngmax)
+            nidx[(i / TravConfig::targetSize) * TravConfig::targetSize * ngmax + TravConfig::targetSize * nb +
+                 i % TravConfig::targetSize] = j;
+        return 1;
+    };
+
+    cudaMemset(nc + firstBody, 0, numBodies * sizeof(unsigned));
     resetTraversalCounters<<<1, 1>>>();
     t0 = std::chrono::high_resolution_clock::now();
-    findNeighborsClustered2<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx,
-                                                                   ngmax, rawPtr(clusterNeighborsCount),
-                                                                   rawPtr(clusterNeighbors), ncmax);
+    findNeighborsClustered2<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box,
+                                                                   rawPtr(clusterNeighborsCount),
+                                                                   rawPtr(clusterNeighbors), ncmax, countNeighbors, nc);
     kernelSuccess("findClusterNeighbors");
     t1 = std::chrono::high_resolution_clock::now();
     dt = std::chrono::duration<double>(t1 - t0).count();
