@@ -71,6 +71,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(c
 
     __shared__ unsigned ncData[targetsPerBlock][TravConfig::nwt][iClustersPerWarp];
     __shared__ unsigned nidxData[targetsPerBlock][iClustersPerWarp][512 /* TODO: ncmax */][TravConfig::nwt];
+    assert(ncmax == 512);
 
     const unsigned targetIdxLocal = threadIdx.x / TravConfig::targetSize;
     auto nc                       = [&](unsigned iClusterWarp, unsigned warpTarget) -> unsigned&
@@ -259,6 +260,7 @@ __global__ __launch_bounds__(TravConfig::numThreads,
     constexpr unsigned iClustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize;
 
     __shared__ unsigned tmp[TravConfig::numThreads / GpuConfig::warpSize][512 /* TODO: ncmax */];
+    assert(ncmax == 512);
 
     while (true)
     {
