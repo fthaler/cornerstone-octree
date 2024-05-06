@@ -233,6 +233,99 @@ std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBo
     return {clusterNeighborsCount, clusterNeighbors};
 }
 
+template<class Tc, class Th, class KeyType>
+void findNeighborsC(std::size_t firstBody,
+                    std::size_t lastBody,
+                    const Tc* x,
+                    const Tc* y,
+                    const Tc* z,
+                    const Th* h,
+                    OctreeNsView<Tc, KeyType> tree,
+                    const Box<Tc>& box,
+                    unsigned* nc,
+                    unsigned* nidx,
+                    unsigned ngmax,
+                    unsigned ncmax)
+{
+    unsigned numBodies = lastBody - firstBody;
+    unsigned numBlocks = TravConfig::numBlocks(numBodies);
+    unsigned poolSize  = TravConfig::poolSize(numBodies);
+    static thrust::universal_vector<unsigned> clusterNeighbors, clusterNeighborsCount;
+    static thrust::universal_vector<int> globalPool;
+    clusterNeighbors.resize(iceil(lastBody - 1, ClusterConfig::iSize) * ncmax);
+    clusterNeighborsCount.resize(iceil(lastBody - 1, ClusterConfig::iSize));
+    globalPool.resize(poolSize);
+
+    resetTraversalCounters<<<1, 1>>>();
+    auto t0 = std::chrono::high_resolution_clock::now();
+    findClusterNeighbors3<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
+                                                                 rawPtr(clusterNeighborsCount),
+                                                                 rawPtr(clusterNeighbors), ncmax, rawPtr(globalPool));
+    kernelSuccess("findClusterNeighbors");
+    auto t1   = std::chrono::high_resolution_clock::now();
+    double dt = std::chrono::duration<double>(t1 - t0).count();
+    std::cout << "Clustered NB build time " << dt << " s" << std::endl;
+
+    if (false) // enable for debugging cluster neighbors
+    {
+
+        auto [clusterNeighborsCountCPU, clusterNeighborsCPU] =
+            findClusterNeighborsCPU(firstBody, lastBody, x, y, z, h, tree, box, ngmax, ncmax);
+
+        bool fail = false;
+        for (std::size_t i = 0; i < clusterNeighborsCountCPU.size(); ++i)
+        {
+            if (clusterNeighborsCountCPU[i] != clusterNeighborsCount[i])
+            {
+                std::cout << i << " " << clusterNeighborsCountCPU[i] << " " << clusterNeighborsCount[i] << "\n";
+                fail = true;
+            }
+        }
+        if (fail) { std::cout << "Cluster neighbor count failed ^" << std::endl; }
+        else
+        {
+            std::cout << "Cluster neighbor count passed" << std::endl;
+            bool fail = false;
+            for (std::size_t iCluster = 0; iCluster < clusterNeighborsCountCPU.size(); ++iCluster)
+            {
+                unsigned nc = clusterNeighborsCountCPU[iCluster];
+                std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
+                          clusterNeighborsCPU.begin() + iCluster * ncmax + nc);
+                std::vector<unsigned> sortedClusterNeighborsGPU(nc);
+                for (unsigned nb = 0; nb < nc; ++nb)
+                    sortedClusterNeighborsGPU[nb] = clusterNeighbors[clusterNeighborIndex(iCluster, nb, ncmax)];
+                std::sort(sortedClusterNeighborsGPU.begin(), sortedClusterNeighborsGPU.end());
+                for (unsigned nb = 0; nb < nc; ++nb)
+                    if (clusterNeighborsCPU[iCluster * ncmax + nb] != sortedClusterNeighborsGPU[nb])
+                    {
+                        std::cout << iCluster << ":" << nb << " " << clusterNeighborsCPU[iCluster * ncmax + nb] << " "
+                                  << sortedClusterNeighborsGPU[nb] << "\n";
+                        fail = true;
+                    }
+            }
+            if (fail) { std::cout << "Cluster neighbor search failed" << std::endl; }
+            else { std::cout << "Cluster neighbor search passed" << std::endl; }
+        }
+
+        double r                  = 2 * h[0];
+        double rho                = lastBody - firstBody;
+        double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * rho;
+        auto average_neighbors = std::accumulate(clusterNeighborsCountCPU.begin(), clusterNeighborsCountCPU.end(), 0) /
+                                 double(clusterNeighborsCountCPU.size()) * ClusterConfig::jSize;
+        std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
+    }
+
+    resetTraversalCounters<<<1, 1>>>();
+    t0 = std::chrono::high_resolution_clock::now();
+    findNeighborsClustered2<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc, nidx,
+                                                                   ngmax, rawPtr(clusterNeighborsCount),
+                                                                   rawPtr(clusterNeighbors), ncmax);
+    kernelSuccess("findClusterNeighbors");
+    t1 = std::chrono::high_resolution_clock::now();
+    dt = std::chrono::duration<double>(t1 - t0).count();
+    std::cout << "Clustered NB search time " << dt << " s" << std::endl;
+}
+
 template<class T, class StrongKeyType, class FindNeighborsGpuF, class NeighborIndexF>
 void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborIndex)
 {
@@ -400,93 +493,8 @@ int main()
     benchmarkGpu<Tc, KeyType>(batched, neighborIndexBatched);
 
     std::cout << "--- CLUSTERED ---" << std::endl;
-    thrust::universal_vector<unsigned> clusterNeighbors, clusterNeighborsCount;
-    thrust::universal_vector<int> globalPool;
     auto clustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
                          const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
-    {
-        auto ncmax = 512;
-
-        clusterNeighbors.resize((lastBody + ClusterConfig::iSize - 1) / ClusterConfig::iSize * ncmax);
-        clusterNeighborsCount.resize((lastBody + ClusterConfig::iSize - 1) / ClusterConfig::iSize);
-
-        auto findClusterClusterNeighbors = [&]
-        {
-            unsigned numBodies = lastBody - firstBody;
-            unsigned numBlocks = TravConfig::numBlocks(numBodies);
-            unsigned poolSize  = TravConfig::poolSize(numBodies);
-            globalPool.resize(poolSize);
-            resetTraversalCounters<<<1, 1>>>();
-            findClusterNeighbors3<<<numBlocks, TravConfig::numThreads>>>(
-                firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors),
-                ncmax, rawPtr(globalPool));
-        };
-
-        float gpuTime = timeGpu(findClusterClusterNeighbors);
-        std::cout << "Clustered NB build time " << gpuTime / 1000 << " " << std::endl;
-
-        if (false) // for debugging cluster neighbors
-        {
-
-            auto [clusterNeighborsCountCPU, clusterNeighborsCPU] =
-                findClusterNeighborsCPU(firstBody, lastBody, x, y, z, h, tree, box, ngmax, ncmax);
-
-            bool fail = false;
-            for (std::size_t i = 0; i < clusterNeighborsCountCPU.size(); ++i)
-            {
-                if (clusterNeighborsCountCPU[i] != clusterNeighborsCount[i])
-                {
-                    std::cout << i << " " << clusterNeighborsCountCPU[i] << " " << clusterNeighborsCount[i] << "\n";
-                    fail = true;
-                }
-            }
-            if (fail) { std::cout << "Cluster neighbor count failed ^" << std::endl; }
-            else
-            {
-                std::cout << "Cluster neighbor count passed" << std::endl;
-                bool fail = false;
-                for (std::size_t iCluster = 0; iCluster < clusterNeighborsCountCPU.size(); ++iCluster)
-                {
-                    unsigned nc = clusterNeighborsCountCPU[iCluster];
-                    std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
-                              clusterNeighborsCPU.begin() + iCluster * ncmax + nc);
-                    std::vector<unsigned> sortedClusterNeighborsGPU(nc);
-                    for (unsigned nb = 0; nb < nc; ++nb)
-                        sortedClusterNeighborsGPU[nb] = clusterNeighbors[clusterNeighborIndex(iCluster, nb, ncmax)];
-                    std::sort(sortedClusterNeighborsGPU.begin(), sortedClusterNeighborsGPU.end());
-                    for (unsigned nb = 0; nb < nc; ++nb)
-                        if (clusterNeighborsCPU[iCluster * ncmax + nb] != sortedClusterNeighborsGPU[nb])
-                        {
-                            std::cout << iCluster << ":" << nb << " " << clusterNeighborsCPU[iCluster * ncmax + nb]
-                                      << " " << sortedClusterNeighborsGPU[nb] << "\n";
-                            fail = true;
-                        }
-                }
-                if (fail) { std::cout << "Cluster neighbor search failed" << std::endl; }
-                else { std::cout << "Cluster neighbor search passed" << std::endl; }
-            }
-
-            double r                  = 2 * h[0];
-            double rho                = lastBody - firstBody;
-            double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * rho;
-            auto average_neighbors =
-                std::accumulate(clusterNeighborsCountCPU.begin(), clusterNeighborsCountCPU.end(), 0) /
-                double(clusterNeighborsCountCPU.size()) * ClusterConfig::jSize;
-            std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
-        }
-
-        auto clusteredNeighborSearch = [&]
-        {
-            unsigned numBodies = lastBody - firstBody;
-            unsigned numBlocks = TravConfig::numBlocks(numBodies);
-            resetTraversalCounters<<<1, 1>>>();
-            findNeighborsClustered2<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box, nc,
-                                                                           nidx, ngmax, rawPtr(clusterNeighborsCount),
-                                                                           rawPtr(clusterNeighbors), ncmax);
-        };
-
-        gpuTime = timeGpu(clusteredNeighborSearch);
-        std::cout << "Clustered NB search time " << gpuTime / 1000 << " " << std::endl;
-    };
+    { findNeighborsC(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax, 512); };
     benchmarkGpu<Tc, KeyType>(clustered, neighborIndexBatched);
 }
