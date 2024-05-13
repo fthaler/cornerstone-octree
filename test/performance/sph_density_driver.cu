@@ -31,7 +31,7 @@
 
 #include <iostream>
 
-#include <thrust/universal_vector.h>
+#include <thrust/device_vector.h>
 
 #include "cstone/cuda/cuda_utils.cuh"
 #include "cstone/primitives/math.hpp"
@@ -646,21 +646,20 @@ void computeDensityClustered(
     auto& [clusterNeighbors, clusterNeighborsCount] = neighborhood;
     unsigned numBodies                              = lastBody - firstBody;
     unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
+
     resetTraversalCounters<<<1, 1>>>();
-    auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T distanceSq)
+    auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T dist)
     {
         if (i == j) return m[i];
-        T dist = std::sqrt(distanceSq);
-        // T dist = distanceSq;
-        T vloc = dist * (1.0 / hi);
-        T w    = table_lookup(wh, vloc);
+        const T vloc = dist * (1 / hi);
+        const T w    = table_lookup(wh, vloc);
         return w * m[j];
     };
 
     unsigned ncmax = 200;
-    findNeighborsClustered2<<<numBlocks, TravConfig::numThreads>>>(
-        firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax,
-        computeDensity, rho);
+    findNeighborsClustered<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box,
+                                                                  rawPtr(clusterNeighborsCount),
+                                                                  rawPtr(clusterNeighbors), ncmax, computeDensity, rho);
 }
 
 template<class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeDensityF>
@@ -711,27 +710,27 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     auto neighborhoodCPU = buildNeighborhoodCPU(0, n, x, y, z, h.data(), nsView, box, ngmax);
     computeDensityCPU(0, n, x, y, z, h.data(), m.data(), box, ngmax, wh.data(), rho.data(), neighborhoodCPU);
 
-    thrust::universal_vector<T> d_x(coords.x().begin(), coords.x().end());
-    thrust::universal_vector<T> d_y(coords.y().begin(), coords.y().end());
-    thrust::universal_vector<T> d_z(coords.z().begin(), coords.z().end());
-    thrust::universal_vector<T> d_h  = h;
-    thrust::universal_vector<T> d_m  = m;
-    thrust::universal_vector<T> d_wh = wh;
-    thrust::universal_vector<T> d_rho(n);
+    thrust::device_vector<T> d_x(coords.x().begin(), coords.x().end());
+    thrust::device_vector<T> d_y(coords.y().begin(), coords.y().end());
+    thrust::device_vector<T> d_z(coords.z().begin(), coords.z().end());
+    thrust::device_vector<T> d_h  = h;
+    thrust::device_vector<T> d_m  = m;
+    thrust::device_vector<T> d_wh = wh;
+    thrust::device_vector<T> d_rho(n);
 
-    thrust::universal_vector<KeyType> d_prefixes             = octree.prefixes;
-    thrust::universal_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
-    thrust::universal_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
-    thrust::universal_vector<TreeNodeIndex> d_levelRange     = octree.levelRange;
-    thrust::universal_vector<LocalIndex> d_layout            = layout;
-    thrust::universal_vector<Vec3<T>> d_centers              = centers;
-    thrust::universal_vector<Vec3<T>> d_sizes                = sizes;
+    thrust::device_vector<KeyType> d_prefixes             = octree.prefixes;
+    thrust::device_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
+    thrust::device_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
+    thrust::device_vector<TreeNodeIndex> d_levelRange     = octree.levelRange;
+    thrust::device_vector<LocalIndex> d_layout            = layout;
+    thrust::device_vector<Vec3<T>> d_centers              = centers;
+    thrust::device_vector<Vec3<T>> d_sizes                = sizes;
 
     OctreeNsView<T, KeyType> nsViewGpu{rawPtr(d_prefixes),   rawPtr(d_childOffsets), rawPtr(d_internalToLeaf),
                                        rawPtr(d_levelRange), rawPtr(d_layout),       rawPtr(d_centers),
                                        rawPtr(d_sizes)};
 
-    thrust::universal_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
+    thrust::device_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
     const auto* deviceKeys = (const KeyType*)(rawPtr(d_codes));
 
     auto neighborhoodGPU =

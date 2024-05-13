@@ -390,9 +390,6 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
     int targetIdx             = 0;
 
-    constexpr auto pbc = BoundaryType::periodic;
-    const bool anyPbc  = box.boundaryX() == pbc || box.boundaryY() == pbc || box.boundaryZ() == pbc;
-
     while (true)
     {
         // first thread in warp grabs next target
@@ -402,7 +399,6 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
         if (targetIdx >= numTargets) return;
 
         const cstone::LocalIndex bodyBegin   = firstBody + targetIdx * TravConfig::targetSize;
-        const cstone::LocalIndex bodyEnd     = imin(bodyBegin + TravConfig::targetSize, lastBody);
         const cstone::LocalIndex bodyIdxLane = bodyBegin + laneIdx;
 
 #pragma unroll
@@ -411,58 +407,53 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
             Tr sum = 0;
 
             const unsigned i = bodyIdxLane + k * GpuConfig::warpSize;
-            Vec3<Tc> iPos{x[i], y[i], z[i]};
-            const Th hi         = h[i];
-            const bool usePbc   = anyPbc && !insideBox(iPos, {2 * hi, 2 * hi, 2 * hi}, box);
-            const auto radiusSq = 4 * hi * hi;
+            if (i >= lastBody) continue;
 
-            if (i < bodyEnd)
+            const Vec3<Tc> iPos{x[i], y[i], z[i]};
+            const Th hi = h[i];
+
+            const unsigned iCluster = i / ClusterConfig::iSize;
+
+#pragma unroll
+            for (unsigned jCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
+                 jCluster <
+                 (iCluster * ClusterConfig::iSize +
+                  (ClusterConfig::iSize > ClusterConfig::jSize ? ClusterConfig::iSize : ClusterConfig::jSize)) /
+                     ClusterConfig::jSize;
+                 ++jCluster)
             {
-                const unsigned iCluster               = i / ClusterConfig::iSize;
-                const unsigned iClusterNeighborsCount = ncClustered[iCluster];
-
 #pragma unroll
-                for (unsigned jCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
-                     jCluster <
-                     (iCluster * ClusterConfig::iSize +
-                      (ClusterConfig::iSize > ClusterConfig::jSize ? ClusterConfig::iSize : ClusterConfig::jSize)) /
-                         ClusterConfig::jSize;
-                     ++jCluster)
+                for (unsigned j = jCluster * ClusterConfig::jSize; j < (jCluster + 1) * ClusterConfig::jSize; ++j)
                 {
-#pragma unroll
-                    for (unsigned j = jCluster * ClusterConfig::jSize; j < (jCluster + 1) * ClusterConfig::jSize; ++j)
+                    if (ClusterConfig::jSize == 1 || j < lastBody)
                     {
-                        if (ClusterConfig::jSize == 1 || j < lastBody)
-                        {
 
-                            const Vec3<Tc> jPos = {x[j], y[j], z[j]};
-                            const auto d2 =
-                                usePbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
-                                       : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-                            if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
-                        }
+                        const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                        const auto dist = distancePBC(box, hi, iPos[0], iPos[1], iPos[2], jPos[0], jPos[1], jPos[2]);
+                        if (ClusterConfig::iSize == 1 && ClusterConfig::jSize == 1 || dist < 2 * hi)
+                            sum += contribution(i, iPos, hi, j, jPos, dist);
                     }
                 }
-
-                for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, ncmax); ++jc)
-                {
-                    unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
-#pragma unroll
-                    for (unsigned j = jCluster * ClusterConfig::jSize; j < (jCluster + 1) * ClusterConfig::jSize; ++j)
-                    {
-                        if (ClusterConfig::jSize == 1 || j < lastBody)
-                        {
-                            const Vec3<Tc> jPos = {x[j], y[j], z[j]};
-                            const auto d2 =
-                                usePbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
-                                       : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-                            if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
-                        }
-                    }
-                }
-
-                result[i] = sum;
             }
+
+            const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], ncmax);
+            for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
+            {
+                const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
+#pragma unroll
+                for (unsigned j = jCluster * ClusterConfig::jSize; j < (jCluster + 1) * ClusterConfig::jSize; ++j)
+                {
+                    if (ClusterConfig::jSize == 1 || j < lastBody)
+                    {
+                        const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                        const auto dist = distancePBC(box, hi, iPos[0], iPos[1], iPos[2], jPos[0], jPos[1], jPos[2]);
+                        if (ClusterConfig::iSize == 1 && ClusterConfig::jSize == 1 || dist < 2 * hi)
+                            sum += contribution(i, iPos, hi, j, jPos, dist);
+                    }
+                }
+            }
+
+            result[i] = sum;
         }
     }
 }
@@ -560,7 +551,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const auto d2 = distSq(jPos);
-                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
+                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
                 }
             }
 
@@ -573,7 +564,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const auto d2 = distSq(jPos);
-                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
+                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
                 }
             }
 
