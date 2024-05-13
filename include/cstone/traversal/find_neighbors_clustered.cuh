@@ -390,6 +390,9 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
     int targetIdx             = 0;
 
+    constexpr auto pbc = BoundaryType::periodic;
+    const bool anyPbc  = box.boundaryX() == pbc || box.boundaryY() == pbc || box.boundaryZ() == pbc;
+
     while (true)
     {
         // first thread in warp grabs next target
@@ -402,60 +405,64 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::Lo
         const cstone::LocalIndex bodyEnd     = imin(bodyBegin + TravConfig::targetSize, lastBody);
         const cstone::LocalIndex bodyIdxLane = bodyBegin + laneIdx;
 
-        constexpr auto pbc = BoundaryType::periodic;
-        const bool anyPbc  = box.boundaryX() == pbc || box.boundaryY() == pbc || box.boundaryZ() == pbc;
-
-        auto pos_i = loadTarget(bodyBegin, bodyEnd, laneIdx, x, y, z, h);
+#pragma unroll
         for (int k = 0; k < TravConfig::nwt; ++k)
         {
             Tr sum = 0;
 
-            bool usePbc   = anyPbc && !insideBox(Vec3<Tc>{pos_i[k][0], pos_i[k][1], pos_i[k][2]},
-                                                 {pos_i[k][3], pos_i[k][3], pos_i[k][3]}, box);
-            auto radiusSq = pos_i[k][3] * pos_i[k][3];
+            const unsigned i = bodyIdxLane + k * GpuConfig::warpSize;
+            Vec3<Tc> iPos{x[i], y[i], z[i]};
+            const Th hi         = h[i];
+            const bool usePbc   = anyPbc && !insideBox(iPos, {2 * hi, 2 * hi, 2 * hi}, box);
+            const auto radiusSq = 4 * hi * hi;
 
-            unsigned i = bodyIdxLane + k * GpuConfig::warpSize;
-            if (i >= lastBody) continue;
-            unsigned iCluster                     = i / ClusterConfig::iSize;
-            const unsigned iClusterNeighborsCount = ncClustered[iCluster];
-
-            for (unsigned jCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
-                 jCluster <
-                 (iCluster * ClusterConfig::iSize +
-                  (ClusterConfig::iSize > ClusterConfig::jSize ? ClusterConfig::iSize : ClusterConfig::jSize)) /
-                     ClusterConfig::jSize;
-                 ++jCluster)
+            if (i < bodyEnd)
             {
-                for (unsigned j = jCluster * ClusterConfig::jSize;
-                     j < imin((jCluster + 1) * ClusterConfig::jSize, lastBody); ++j)
-                {
-                    const Vec3<Tc> pos_j = {x[j], y[j], z[j]};
-                    auto d2 = usePbc ? distanceSq<true>(pos_j[0], pos_j[1], pos_j[2], pos_i[k][0], pos_i[k][1],
-                                                        pos_i[k][2], box)
-                                     : distanceSq<false>(pos_j[0], pos_j[1], pos_j[2], pos_i[k][0], pos_i[k][1],
-                                                         pos_i[k][2], box);
-                    if (d2 < radiusSq)
-                        sum += contribution(i, Vec3<Tc>{pos_i[k][0], pos_i[k][1], pos_i[k][2]}, j, pos_j, d2);
-                }
-            }
+                const unsigned iCluster               = i / ClusterConfig::iSize;
+                const unsigned iClusterNeighborsCount = ncClustered[iCluster];
 
-            for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, ncmax); ++jc)
-            {
-                unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
-                for (unsigned j = jCluster * ClusterConfig::jSize;
-                     j < imin((jCluster + 1) * ClusterConfig::jSize, lastBody); ++j)
+#pragma unroll
+                for (unsigned jCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
+                     jCluster <
+                     (iCluster * ClusterConfig::iSize +
+                      (ClusterConfig::iSize > ClusterConfig::jSize ? ClusterConfig::iSize : ClusterConfig::jSize)) /
+                         ClusterConfig::jSize;
+                     ++jCluster)
                 {
-                    const Vec3<Tc> pos_j = {x[j], y[j], z[j]};
-                    auto d2 = usePbc ? distanceSq<true>(pos_j[0], pos_j[1], pos_j[2], pos_i[k][0], pos_i[k][1],
-                                                        pos_i[k][2], box)
-                                     : distanceSq<false>(pos_j[0], pos_j[1], pos_j[2], pos_i[k][0], pos_i[k][1],
-                                                         pos_i[k][2], box);
-                    if (d2 < radiusSq)
-                        sum += contribution(i, Vec3<Tc>{pos_i[k][0], pos_i[k][1], pos_i[k][2]}, j, pos_j, d2);
-                }
-            }
+#pragma unroll
+                    for (unsigned j = jCluster * ClusterConfig::jSize; j < (jCluster + 1) * ClusterConfig::jSize; ++j)
+                    {
+                        if (ClusterConfig::jSize == 1 || j < lastBody)
+                        {
 
-            result[i] = sum;
+                            const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                            const auto d2 =
+                                usePbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
+                                       : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
+                            if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
+                        }
+                    }
+                }
+
+                for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, ncmax); ++jc)
+                {
+                    unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
+#pragma unroll
+                    for (unsigned j = jCluster * ClusterConfig::jSize; j < (jCluster + 1) * ClusterConfig::jSize; ++j)
+                    {
+                        if (ClusterConfig::jSize == 1 || j < lastBody)
+                        {
+                            const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                            const auto d2 =
+                                usePbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
+                                       : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
+                            if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
+                        }
+                    }
+                }
+
+                result[i] = sum;
+            }
         }
     }
 }
