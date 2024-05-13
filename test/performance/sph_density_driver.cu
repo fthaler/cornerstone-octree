@@ -209,6 +209,134 @@ void computeDensityNaiveDirect(
 }
 
 template<class T, class KeyType>
+std::tuple<thrust::device_vector<LocalIndex>,
+           thrust::device_vector<unsigned>,
+           thrust::device_vector<int>,
+           OctreeNsView<T, KeyType>>
+buildNeighborhoodBatchedDirect(std::size_t firstBody,
+                               std::size_t lastBody,
+                               const T* x,
+                               const T* y,
+                               const T* z,
+                               const T* h,
+                               OctreeNsView<T, KeyType> tree,
+                               const Box<T>& box,
+                               unsigned ngmax)
+{
+    unsigned numBodies = lastBody - firstBody;
+    unsigned numBlocks = TravConfig::numBlocks(numBodies);
+    unsigned poolSize  = TravConfig::poolSize(numBodies);
+    thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
+    thrust::device_vector<unsigned> neighborsCount(lastBody);
+    thrust::device_vector<int> globalPool(poolSize);
+
+    return {neighbors, neighborsCount, globalPool, tree};
+}
+
+template<class T, class KeyType>
+__global__
+__launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel(cstone::LocalIndex firstBody,
+                                                                                 cstone::LocalIndex lastBody,
+                                                                                 const T* __restrict__ x,
+                                                                                 const T* __restrict__ y,
+                                                                                 const T* __restrict__ z,
+                                                                                 const T* __restrict__ h,
+                                                                                 const T* __restrict__ m,
+                                                                                 const Box<T> box,
+                                                                                 const OctreeNsView<T, KeyType> tree,
+                                                                                 const T* __restrict__ wh,
+                                                                                 T* __restrict__ rho,
+                                                                                 unsigned* neighborsCount,
+                                                                                 unsigned* neighbors,
+                                                                                 const unsigned ngmax,
+                                                                                 int* globalPool)
+{
+    const unsigned laneIdx    = threadIdx.x & (GpuConfig::warpSize - 1);
+    const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
+    int targetIdx             = 0;
+
+    while (true)
+    {
+        // first thread in warp grabs next target
+        if (laneIdx == 0) { targetIdx = atomicAdd(&targetCounterGlob, 1); }
+        targetIdx = shflSync(targetIdx, 0);
+
+        if (targetIdx >= numTargets) return;
+
+        const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
+        const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
+        unsigned* warpNidx                 = neighbors + targetIdx * TravConfig::targetSize * ngmax;
+
+        unsigned nc_i[TravConfig::nwt] = {0};
+
+        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
+        {
+            if (nc_i[warpTarget] < ngmax)
+                warpNidx[nc_i[warpTarget] * TravConfig::targetSize + laneIdx + warpTarget * GpuConfig::warpSize] = j;
+            ++nc_i[warpTarget];
+        };
+
+        traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
+
+        for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
+        {
+            const cstone::LocalIndex i = bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx;
+            const unsigned* nidx =
+                neighbors + targetIdx * TravConfig::targetSize * ngmax + warpTarget * GpuConfig::warpSize + laneIdx;
+            if (i < bodyEnd)
+            {
+                const T xi   = x[i];
+                const T yi   = y[i];
+                const T zi   = z[i];
+                const T hi   = h[i];
+                const T mi   = m[i];
+                const T hInv = 1.0 / hi;
+
+                unsigned nbs = imin(nc_i[warpTarget], ngmax);
+                T rhoi       = mi;
+                for (unsigned nb = 0; nb < nbs; ++nb)
+                {
+                    unsigned j = nidx[nb * TravConfig::targetSize];
+                    T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
+                    T vloc     = dist * hInv;
+                    T w        = table_lookup(wh, vloc);
+
+                    rhoi += w * m[j];
+                }
+
+                rho[i] = rhoi;
+            }
+        }
+    }
+}
+
+template<class T, class KeyType>
+void computeDensityBatchedDirect(const std::size_t firstBody,
+                                 const std::size_t lastBody,
+                                 const T* x,
+                                 const T* y,
+                                 const T* z,
+                                 const T* h,
+                                 const T* m,
+                                 const Box<T>& box,
+                                 const unsigned ngmax,
+                                 const T* wh,
+                                 T* rho,
+                                 std::tuple<thrust::device_vector<LocalIndex>,
+                                            thrust::device_vector<unsigned>,
+                                            thrust::device_vector<int>,
+                                            OctreeNsView<T, KeyType>>& neighborhood)
+{
+    auto& [neighbors, neighborsCount, globalPool, tree] = neighborhood;
+    unsigned numBodies                                  = lastBody - firstBody;
+    unsigned numBlocks                                  = TravConfig::numBlocks(numBodies);
+    resetTraversalCounters<<<1, 1>>>();
+    computeDensityBatchedDirectKernel<<<numBlocks, TravConfig::numThreads>>>(
+        firstBody, lastBody, x, y, z, h, m, box, tree, wh, rho, rawPtr(neighborsCount), rawPtr(neighbors), ngmax,
+        rawPtr(globalPool));
+}
+
+template<class T, class KeyType>
 __global__ void buildNeighborhoodNaiveKernel(const T* x,
                                              const T* y,
                                              const T* z,
@@ -648,6 +776,9 @@ int main()
 
     std::cout << "--- NAIVE DIRECT ---" << std::endl;
     benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodNaiveDirect<Tc, KeyType>, computeDensityNaiveDirect<Tc, KeyType>);
+    std::cout << "--- BATCHED DIRECT ---" << std::endl;
+    benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodBatchedDirect<Tc, KeyType>,
+                                    computeDensityBatchedDirect<Tc, KeyType>);
 
     std::cout << "--- NAIVE TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodNaive<Tc, KeyType>, computeDensityNaive<Tc>);
