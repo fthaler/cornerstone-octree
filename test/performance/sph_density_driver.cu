@@ -736,20 +736,16 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
 
     auto neighborhoodGPU =
         buildNeighborhood(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), nsViewGpu, box, ngmax);
-    auto mainLoop = [&]
-    {
-        computeDensity(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), rawPtr(d_m), box, ngmax, rawPtr(d_wh),
-                       rawPtr(d_rho), neighborhoodGPU);
-    };
 
-    std::array<float, 11> times;
+    std::array<float, 5> times;
     std::array<cudaEvent_t, times.size() + 1> events;
     for (auto& event : events)
         cudaEventCreate(&event);
     cudaEventRecord(events[0]);
     for (std::size_t i = 1; i < events.size(); ++i)
     {
-        mainLoop();
+        computeDensity(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), rawPtr(d_m), box, ngmax, rawPtr(d_wh),
+                       rawPtr(d_rho), neighborhoodGPU);
         cudaEventRecord(events[i]);
     }
     cudaEventSynchronize(events.back());
