@@ -127,6 +127,88 @@ void computeDensityCPU(const std::size_t firstBody,
 }
 
 template<class T, class KeyType>
+std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>, OctreeNsView<T, KeyType>>
+buildNeighborhoodNaiveDirect(std::size_t firstBody,
+                             std::size_t lastBody,
+                             const T* x,
+                             const T* y,
+                             const T* z,
+                             const T* h,
+                             OctreeNsView<T, KeyType> tree,
+                             const Box<T>& box,
+                             unsigned ngmax)
+{
+    thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
+    thrust::device_vector<unsigned> neighborsCount(lastBody);
+    return {neighbors, neighborsCount, tree};
+}
+
+template<class T, class KeyType>
+__global__ void computeDensityNaiveDirectKernel(const T* x,
+                                                const T* y,
+                                                const T* z,
+                                                const T* h,
+                                                const T* m,
+                                                const T* wh,
+                                                const LocalIndex firstId,
+                                                const LocalIndex lastId,
+                                                const Box<T> box,
+                                                const OctreeNsView<T, KeyType> tree,
+                                                unsigned* neighbors,
+                                                unsigned* neighborsCount,
+                                                const unsigned ngmax,
+                                                T* rho)
+{
+    cstone::LocalIndex tid = blockDim.x * blockIdx.x + threadIdx.x;
+    cstone::LocalIndex i   = firstId + tid;
+    if (i >= lastId) { return; }
+
+    neighborsCount[i] = findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors + tid * ngmax);
+
+    const T xi   = x[i];
+    const T yi   = y[i];
+    const T zi   = z[i];
+    const T hi   = h[i];
+    const T mi   = m[i];
+    const T hInv = 1.0 / hi;
+
+    unsigned nbs = imin(neighborsCount[i], ngmax);
+    T rhoi       = mi;
+    for (unsigned nb = 0; nb < nbs; ++nb)
+    {
+        unsigned j = neighbors[i * ngmax + nb];
+        T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
+        T vloc     = dist * hInv;
+        T w        = table_lookup(wh, vloc);
+
+        rhoi += w * m[j];
+    }
+
+    rho[i] = rhoi;
+}
+
+template<class T, class KeyType>
+void computeDensityNaiveDirect(
+    const std::size_t firstBody,
+    const std::size_t lastBody,
+    const T* x,
+    const T* y,
+    const T* z,
+    const T* h,
+    const T* m,
+    const Box<T>& box,
+    const unsigned ngmax,
+    const T* wh,
+    T* rho,
+    std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>, OctreeNsView<T, KeyType>>&
+        neighborhood)
+{
+    auto& [neighbors, neighborsCount, tree] = neighborhood;
+    computeDensityNaiveDirectKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
+        x, y, z, h, m, wh, firstBody, lastBody, box, tree, rawPtr(neighbors), rawPtr(neighborsCount), ngmax, rho);
+}
+
+template<class T, class KeyType>
 __global__ void buildNeighborhoodNaiveKernel(const T* x,
                                              const T* y,
                                              const T* z,
@@ -564,11 +646,14 @@ int main()
     using StrongKeyType = HilbertKey<uint64_t>;
     using KeyType       = typename StrongKeyType::ValueType;
 
-    std::cout << "--- NAIVE ---" << std::endl;
+    std::cout << "--- NAIVE DIRECT ---" << std::endl;
+    benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodNaiveDirect<Tc, KeyType>, computeDensityNaiveDirect<Tc, KeyType>);
+
+    std::cout << "--- NAIVE TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodNaive<Tc, KeyType>, computeDensityNaive<Tc>);
-    std::cout << "--- BATCHED ---" << std::endl;
+    std::cout << "--- BATCHED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodBatched<Tc, KeyType>, computeDensityBatched<Tc>);
-    std::cout << "--- CLUSTERED ---" << std::endl;
+    std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodClustered<Tc, KeyType>, computeDensityClustered<Tc>);
 
     return 0;
