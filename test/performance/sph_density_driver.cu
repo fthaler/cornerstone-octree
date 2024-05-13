@@ -29,6 +29,7 @@
  * @author Felix Thaler <thaler@cscs.ch>
  */
 
+#include <iomanip>
 #include <iostream>
 
 #include <thrust/device_vector.h>
@@ -556,16 +557,16 @@ __global__ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedK
                 const T zi   = z[i];
                 const T hi   = h[i];
                 const T mi   = m[i];
-                const T hInv = 1.0 / hi;
+                const T hInv = 1 / hi;
 
                 unsigned nbs = imin(neighborsCount[i], ngmax);
                 T rhoi       = mi;
                 for (unsigned nb = 0; nb < nbs; ++nb)
                 {
-                    unsigned j = nidx[nb * TravConfig::targetSize];
-                    T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
-                    T vloc     = dist * hInv;
-                    T w        = table_lookup(wh, vloc);
+                    const unsigned j = nidx[nb * TravConfig::targetSize];
+                    const T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
+                    const T vloc     = dist * hInv;
+                    const T w        = table_lookup(wh, vloc);
 
                     rhoi += w * m[j];
                 }
@@ -741,10 +742,27 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
                        rawPtr(d_rho), neighborhoodGPU);
     };
 
-    float gpuTime = timeGpu(mainLoop);
-    std::cout << "GPU time " << gpuTime / 1000 << " s" << std::endl;
-    gpuTime = timeGpu(mainLoop);
-    std::cout << "GPU time " << gpuTime / 1000 << " s" << std::endl;
+    std::array<float, 11> times;
+    std::array<cudaEvent_t, times.size() + 1> events;
+    for (auto& event : events)
+        cudaEventCreate(&event);
+    cudaEventRecord(events[0]);
+    for (std::size_t i = 1; i < events.size(); ++i)
+    {
+        mainLoop();
+        cudaEventRecord(events[i]);
+    }
+    cudaEventSynchronize(events.back());
+    for (std::size_t i = 0; i < times.size(); ++i)
+    {
+        cudaEventElapsedTime(&times[i], events[i], events[i + 1]);
+        cudaEventDestroy(events[i]);
+    }
+
+    std::cout << "GPU times: ";
+    for (auto t : times)
+        std::cout << std::setw(5) << std::setprecision(3) << (t / 1000) << "s ";
+    std::cout << std::endl;
 
     std::vector<T> rhoGPU(n);
     thrust::copy(d_rho.begin(), d_rho.end(), rhoGPU.begin());
