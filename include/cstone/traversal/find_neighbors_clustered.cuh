@@ -483,8 +483,19 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                                                                        Tr* __restrict__ result)
 {
     const unsigned laneIdx    = threadIdx.x & (GpuConfig::warpSize - 1);
+    const unsigned warpIdx    = threadIdx.x >> GpuConfig::warpSizeLog2;
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
     int targetIdx             = 0;
+
+    constexpr auto pbc = BoundaryType::periodic;
+    const bool anyPbc  = box.boundaryX() == pbc || box.boundaryY() == pbc || box.boundaryZ() == pbc;
+
+    constexpr unsigned warpsPerBlock = TravConfig::numThreads / GpuConfig::warpSize;
+    __shared__ Tc xSuperCluster[warpsPerBlock][GpuConfig::warpSize];
+    __shared__ Tc ySuperCluster[warpsPerBlock][GpuConfig::warpSize];
+    __shared__ Tc zSuperCluster[warpsPerBlock][GpuConfig::warpSize];
+    __shared__ Th hSuperCluster[warpsPerBlock][GpuConfig::warpSize];
+    __shared__ Tr resultSuperCluster[warpsPerBlock][GpuConfig::warpSize];
 
     while (true)
     {
@@ -499,27 +510,44 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                       "Single warp required per cluster-cluster interaction");
         constexpr unsigned clustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize;
 
-        const auto iSuperCluster        = firstBody + GpuConfig::warpSize * targetIdx + laneIdx;
-        const auto iSuperClusterClamped = imin(iSuperCluster, lastBody - 1);
+        const unsigned iSuperCluster        = firstBody + GpuConfig::warpSize * targetIdx + laneIdx;
+        const unsigned iSuperClusterClamped = imin(iSuperCluster, lastBody - 1);
+        xSuperCluster[warpIdx][laneIdx]     = x[iSuperClusterClamped];
+        ySuperCluster[warpIdx][laneIdx]     = y[iSuperClusterClamped];
+        zSuperCluster[warpIdx][laneIdx]     = z[iSuperClusterClamped];
+        hSuperCluster[warpIdx][laneIdx]     = h[iSuperClusterClamped];
+        __syncwarp();
 
-        Vec4<Tc> iPosSuperCluster = {x[iSuperClusterClamped], y[iSuperClusterClamped], z[iSuperClusterClamped],
-                                     h[iSuperClusterClamped] * 2};
-        Tr sumSuperCluster        = 0;
-
+#pragma unroll
         for (unsigned c = 0; c < clustersPerWarp; ++c)
         {
-            const auto i = (iSuperCluster / GpuConfig::warpSize) * GpuConfig::warpSize +
-                           laneIdx % ClusterConfig::iSize + c * ClusterConfig::iSize;
+            const unsigned i = (iSuperCluster / GpuConfig::warpSize) * GpuConfig::warpSize +
+                               laneIdx % ClusterConfig::iSize + c * ClusterConfig::iSize;
 
-            const auto iCluster                   = imin(i, lastBody - 1) / ClusterConfig::iSize;
-            const unsigned iClusterNeighborsCount = ncClustered[iCluster];
+            Vec3<Tc> iPos;
+            Th hi;
+            if (laneIdx < ClusterConfig::iSize)
+            {
+                const unsigned iSuperClusterLocal = laneIdx + c * ClusterConfig::iSize;
+                iPos = {xSuperCluster[warpIdx][iSuperClusterLocal], ySuperCluster[warpIdx][iSuperClusterLocal],
+                        zSuperCluster[warpIdx][iSuperClusterLocal]};
+                hi   = hSuperCluster[warpIdx][iSuperClusterLocal];
+            }
+            const unsigned srcLane = laneIdx % ClusterConfig::iSize;
+            iPos = {shflSync(iPos[0], srcLane), shflSync(iPos[1], srcLane), shflSync(iPos[2], srcLane)};
+            hi   = shflSync(hi, srcLane);
 
-            const unsigned iPosSrcLane = laneIdx % ClusterConfig::iSize + c * ClusterConfig::iSize;
-            const Vec4<Tc> iPos{shflSync(iPosSuperCluster[0], iPosSrcLane), shflSync(iPosSuperCluster[1], iPosSrcLane),
-                                shflSync(iPosSuperCluster[2], iPosSrcLane), shflSync(iPosSuperCluster[3], iPosSrcLane)};
-            const auto radiusSq = iPos[3] * iPos[3];
+            Tr sum              = 0;
+            const auto iCluster = imin(i, lastBody - 1) / ClusterConfig::iSize;
 
-            Tr sum = 0;
+            auto distSq = [&](const Vec3<Tc>& jPos)
+            {
+                const bool usePbc = anyPbc && !insideBox(iPos, {2 * hi, 2 * hi, 2 * hi}, box);
+                return true ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
+                            : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
+            };
+            const auto radiusSq = 4 * hi * hi;
+
             for (unsigned jCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
                  jCluster <
                  (iCluster * ClusterConfig::iSize +
@@ -527,36 +555,37 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                      ClusterConfig::jSize;
                  ++jCluster)
             {
-                const auto j = jCluster * ClusterConfig::jSize + laneIdx / ClusterConfig::iSize;
-                if (i < lastBody && j < lastBody)
+                const unsigned j = jCluster * ClusterConfig::jSize + laneIdx / ClusterConfig::iSize;
+                if (i < lastBody & j < lastBody)
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                    const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-                    if (d2 < radiusSq) sum += contribution(i, Vec3<Tc>{iPos[0], iPos[1], iPos[2]}, j, jPos, d2);
+                    const auto d2 = distSq(jPos);
+                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
                 }
             }
 
-            for (unsigned jc = 0; jc < imin(ncmax, iClusterNeighborsCount); ++jc)
+            const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], ncmax);
+            for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
             {
                 const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
-
-                const auto j = jCluster * ClusterConfig::jSize + laneIdx / ClusterConfig::iSize;
-                if (i < lastBody && j < lastBody && j / ClusterConfig::iSize != iCluster)
+                const unsigned j        = jCluster * ClusterConfig::jSize + laneIdx / ClusterConfig::iSize;
+                if (i < lastBody & j < lastBody & j / ClusterConfig::iSize != iCluster)
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                    const auto d2 = distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
-                    if (d2 < radiusSq) sum += contribution(i, Vec3<Tc>{iPos[0], iPos[1], iPos[2]}, j, jPos, d2);
+                    const auto d2 = distSq(jPos);
+                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
                 }
             }
 
+#pragma unroll
             for (unsigned offset = GpuConfig::warpSize / 2; offset >= ClusterConfig::iSize; offset /= 2)
                 sum += shflDownSync(sum, offset);
 
             sum = shflSync(sum, laneIdx % ClusterConfig::iSize);
-            if (laneIdx / ClusterConfig::iSize == c) sumSuperCluster = sum;
+            if (laneIdx / ClusterConfig::iSize == c) resultSuperCluster[warpIdx][laneIdx] = sum;
         }
 
-        if (iSuperCluster < lastBody) result[iSuperCluster] = sumSuperCluster;
+        if (iSuperCluster < lastBody) result[iSuperCluster] = resultSuperCluster[warpIdx][laneIdx];
     }
 }
 
