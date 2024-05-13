@@ -29,9 +29,7 @@
  * @author Felix Thaler <thaler@cscs.ch>
  */
 
-#include <iomanip>
 #include <iostream>
-#include <iterator>
 
 #include <thrust/universal_vector.h>
 
@@ -52,6 +50,7 @@ constexpr int kTableSize = 20000;
 template<class T>
 __host__ __device__ inline T table_lookup(const T* table, T v)
 {
+    // return v / kTableSize;
     constexpr int numIntervals = kTableSize - 1;
     constexpr T support        = 2.0;
     constexpr T dx             = support / numIntervals;
@@ -194,7 +193,7 @@ __global__ void computeDensityNaiveKernel(const T* x,
     const T mi   = m[i];
     const T hInv = 1.0 / hi;
 
-    unsigned nbs = neighborsCount[i];
+    unsigned nbs = imin(neighborsCount[i], ngmax);
     T rhoi       = mi;
     for (unsigned nb = 0; nb < nbs; ++nb)
     {
@@ -349,7 +348,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedK
                 const T mi   = m[i];
                 const T hInv = 1.0 / hi;
 
-                unsigned nbs = neighborsCount[i];
+                unsigned nbs = imin(neighborsCount[i], ngmax);
                 T rhoi       = mi;
                 for (unsigned nb = 0; nb < nbs; ++nb)
                 {
@@ -388,6 +387,70 @@ void computeDensityBatched(
     resetTraversalCounters<<<1, 1>>>();
     computeDensityBatchedKernel<<<numBlocks, TravConfig::numThreads>>>(
         firstBody, lastBody, x, y, z, h, m, box, wh, rho, rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
+}
+
+template<class T, class KeyType>
+std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
+buildNeighborhoodClustered(std::size_t firstBody,
+                           std::size_t lastBody,
+                           const T* x,
+                           const T* y,
+                           const T* z,
+                           const T* h,
+                           OctreeNsView<T, KeyType> tree,
+                           const Box<T>& box,
+                           unsigned ngmax)
+{
+    unsigned ncmax        = 200;
+    unsigned numBodies    = lastBody - firstBody;
+    unsigned numBlocks    = TravConfig::numBlocks(numBodies);
+    unsigned poolSize     = TravConfig::poolSize(numBodies);
+    std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
+    thrust::device_vector<LocalIndex> clusterNeighbors(ncmax * iClusters);
+    thrust::device_vector<unsigned> clusterNeighborsCount(iClusters);
+    thrust::device_vector<int> globalPool(poolSize);
+
+    resetTraversalCounters<<<1, 1>>>();
+    findClusterNeighbors2<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
+                                                                 rawPtr(clusterNeighborsCount),
+                                                                 rawPtr(clusterNeighbors), ncmax, rawPtr(globalPool));
+
+    return {clusterNeighbors, clusterNeighborsCount};
+}
+
+template<class T>
+void computeDensityClustered(
+    const std::size_t firstBody,
+    const std::size_t lastBody,
+    const T* x,
+    const T* y,
+    const T* z,
+    const T* h,
+    const T* m,
+    const Box<T>& box,
+    const unsigned ngmax,
+    const T* wh,
+    T* rho,
+    const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
+{
+    auto& [clusterNeighbors, clusterNeighborsCount] = neighborhood;
+    unsigned numBodies                              = lastBody - firstBody;
+    unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
+    resetTraversalCounters<<<1, 1>>>();
+    auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T distanceSq)
+    {
+        if (i == j) return m[i];
+        T dist = std::sqrt(distanceSq);
+        // T dist = distanceSq;
+        T vloc = dist * (1.0 / hi);
+        T w    = table_lookup(wh, vloc);
+        return w * m[j];
+    };
+
+    unsigned ncmax = 200;
+    findNeighborsClustered2<<<numBlocks, TravConfig::numThreads>>>(
+        firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax,
+        computeDensity, rho);
 }
 
 template<class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeDensityF>
@@ -478,9 +541,15 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     thrust::copy(d_rho.begin(), d_rho.end(), rhoGPU.begin());
 
     int numFails = 0;
+    auto isclose = [](double a, double b)
+    {
+        double atol = 0.0;
+        double rtol = 1e-7;
+        return std::abs(a - b) <= atol + rtol * std::abs(b);
+    };
     for (int i = 0; i < n; ++i)
     {
-        if (rho[i] != rhoGPU[i])
+        if (!isclose(rhoGPU[i], rho[i]))
         {
             std::cout << i << " " << rhoGPU[i] << " " << rho[i] << "\n";
             ++numFails;
@@ -500,6 +569,7 @@ int main()
     std::cout << "--- BATCHED ---" << std::endl;
     benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodBatched<Tc, KeyType>, computeDensityBatched<Tc>);
     std::cout << "--- CLUSTERED ---" << std::endl;
+    benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodClustered<Tc, KeyType>, computeDensityClustered<Tc>);
 
     return 0;
 }

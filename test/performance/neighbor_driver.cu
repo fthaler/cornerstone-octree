@@ -199,7 +199,7 @@ std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBo
     for (auto i = firstBody; i < lastBody; ++i)
         nc[i] = findNeighbors(i, x, y, z, h, tree, box, ngmax, nidx.data() + i * ngmax);
 
-    std::size_t iClusters = (lastBody + ClusterConfig::iSize - 1) / ClusterConfig::iSize;
+    std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
     std::vector<unsigned> clusterNeighborsCount(iClusters, 0);
     std::vector<unsigned> clusterNeighbors(iClusters * ncmax);
 
@@ -329,9 +329,9 @@ void findNeighborsC(std::size_t firstBody,
     cudaMemset(nc + firstBody, 0, numBodies * sizeof(unsigned));
     resetTraversalCounters<<<1, 1>>>();
     t0 = std::chrono::high_resolution_clock::now();
-    findNeighborsClustered2<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box,
-                                                                   rawPtr(clusterNeighborsCount),
-                                                                   rawPtr(clusterNeighbors), ncmax, countNeighbors, nc);
+    findNeighborsClustered<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box,
+                                                                  rawPtr(clusterNeighborsCount),
+                                                                  rawPtr(clusterNeighbors), ncmax, countNeighbors, nc);
     kernelSuccess("findClusterNeighbors");
     t1 = std::chrono::high_resolution_clock::now();
     dt = std::chrono::duration<double>(t1 - t0).count();
