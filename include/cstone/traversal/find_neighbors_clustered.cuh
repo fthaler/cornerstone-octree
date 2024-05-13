@@ -207,27 +207,38 @@ __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors2(
             if (laneIdx != leader) return;
 
             const unsigned ncc = imin(nc(iClusterWarp, warpTarget), ncmax);
-            if (ncc > 0 && nidx(iClusterWarp, warpTarget, ncc - 1) == jCluster) return;
 
-            unsigned nb = 0, last = ncc;
-            unsigned count = last - nb;
-            while (count > 0)
+            unsigned nb = 0;
+            if constexpr (ClusterConfig::jSize == 1)
             {
-                unsigned step   = count / 2;
-                unsigned center = nb + step;
-
-                if (!(jCluster < nidx(iClusterWarp, warpTarget, center)))
-                {
-                    nb = center + 1;
-                    count -= step + 1;
-                }
-                else { count = step; }
+                // no deduplication required for ClusterConfig::jSize == 1
+                nb = ncc;
             }
+            else
+            {
+                // with ClusterConfig::jSize != we have to deduplicate
+                if (ncc > 0 && nidx(iClusterWarp, warpTarget, ncc - 1) == jCluster) return;
 
-            if (nb > 0 && nidx(iClusterWarp, warpTarget, nb - 1) == jCluster) return;
+                unsigned last  = ncc;
+                unsigned count = last - nb;
+                while (count > 0)
+                {
+                    unsigned step   = count / 2;
+                    unsigned center = nb + step;
 
-            for (unsigned nbi = imin(ncc, ncmax - 1); nbi > nb; --nbi)
-                nidx(iClusterWarp, warpTarget, nbi) = nidx(iClusterWarp, warpTarget, nbi - 1);
+                    if (!(jCluster < nidx(iClusterWarp, warpTarget, center)))
+                    {
+                        nb = center + 1;
+                        count -= step + 1;
+                    }
+                    else { count = step; }
+                }
+
+                if (nb > 0 && nidx(iClusterWarp, warpTarget, nb - 1) == jCluster) return;
+
+                for (unsigned nbi = imin(ncc, ncmax - 1); nbi > nb; --nbi)
+                    nidx(iClusterWarp, warpTarget, nbi) = nidx(iClusterWarp, warpTarget, nbi - 1);
+            }
 
             ++nc(iClusterWarp, warpTarget);
             if (nb < ncmax) nidx(iClusterWarp, warpTarget, nb) = jCluster;
@@ -373,8 +384,8 @@ __global__ __launch_bounds__(TravConfig::numThreads,
 
 template<class Tc, class Th, class Contribution, class Tr>
 __global__
-__launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(cstone::LocalIndex firstBody,
-                                                                      cstone::LocalIndex lastBody,
+__launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(const LocalIndex firstBody,
+                                                                      const LocalIndex lastBody,
                                                                       const Tc* __restrict__ x,
                                                                       const Tc* __restrict__ y,
                                                                       const Tc* __restrict__ z,
