@@ -774,7 +774,8 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     {
         if (!isclose(rhoGPU[i], rho[i]))
         {
-            std::cout << i << " " << rhoGPU[i] << " " << rho[i] << "\n";
+            std::cout << i << " " << std::setprecision(10) << rhoGPU[i] << " " << std::setprecision(10) << rho[i]
+                      << "\n";
             ++numFails;
         }
     }
