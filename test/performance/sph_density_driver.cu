@@ -612,7 +612,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
                            const Box<T>& box,
                            unsigned ngmax)
 {
-    unsigned ncmax        = 200;
+    unsigned ncmax        = ngmax;
     unsigned numBodies    = lastBody - firstBody;
     unsigned numBlocks    = TravConfig::numBlocks(numBodies);
     unsigned poolSize     = TravConfig::poolSize(numBodies);
@@ -657,7 +657,7 @@ void computeDensityClustered(
         return w * m[j];
     };
 
-    unsigned ncmax = 200;
+    unsigned ncmax = ngmax;
     findNeighborsClustered<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box,
                                                                   rawPtr(clusterNeighborsCount),
                                                                   rawPtr(clusterNeighbors), ncmax, computeDensity, rho);
