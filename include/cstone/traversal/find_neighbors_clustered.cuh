@@ -31,6 +31,7 @@
 
 #pragma once
 
+#include <cuda/barrier>
 #include <cooperative_groups.h>
 
 #include "cstone/traversal/find_neighbors.cuh"
@@ -741,6 +742,152 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
 
         const Vec3<Tc> iPos = {x[i], y[i], z[i]};
         const Th hi         = h[i];
+        // const bool usePbc   = warp.any(anyPbc & !insideBox(iPos, {2 * hi, 2 * hi, 2 * hi}, box));
+
+        const unsigned iCluster = imin(i, lastBody - 1) / ClusterConfig::iSize;
+
+        auto distSq = [&](const Vec3<Tc>& jPos)
+        {
+            const bool anyPbc = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
+            return anyPbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
+                          : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
+        };
+
+        Tr sum = 0;
+#pragma unroll
+        for (unsigned jCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
+             jCluster < (iCluster * ClusterConfig::iSize +
+                         (ClusterConfig::iSize > ClusterConfig::jSize ? ClusterConfig::iSize : ClusterConfig::jSize)) /
+                            ClusterConfig::jSize;
+             ++jCluster)
+        {
+            const unsigned j = jCluster * ClusterConfig::jSize + block.thread_index().y;
+            if (i < lastBody & j < lastBody)
+            {
+                const Vec3<Tc> jPos{x[j], y[j], z[j]};
+                const auto d2 = distSq(jPos);
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+            }
+        }
+
+        const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], ncmax);
+#pragma unroll ClusterConfig::jSize
+        for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
+        {
+            const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
+            const unsigned j        = jCluster * ClusterConfig::jSize + block.thread_index().y;
+            if (i < lastBody & j < lastBody & j / ClusterConfig::iSize != iCluster)
+            {
+                const Vec3<Tc> jPos{x[j], y[j], z[j]};
+                const auto d2 = distSq(jPos);
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+            }
+        }
+
+#pragma unroll
+        for (unsigned offset = GpuConfig::warpSize / 2; offset >= ClusterConfig::iSize; offset /= 2)
+            sum += warp.shfl_down(sum, offset);
+
+        if (block.thread_index().y == 0) result[i] = sum;
+    }
+}
+
+template<class Tc, class Th, class Contribution, class Tr>
+__global__
+__launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSize /
+                  ClusterConfig::iSize) void findNeighborsClustered5(cstone::LocalIndex firstBody,
+                                                                     cstone::LocalIndex lastBody,
+                                                                     const Tc* __restrict__ x,
+                                                                     const Tc* __restrict__ y,
+                                                                     const Tc* __restrict__ z,
+                                                                     const Th* __restrict__ h,
+                                                                     const Box<Tc> box,
+                                                                     const unsigned* __restrict__ ncClustered,
+                                                                     const unsigned* __restrict__ nidxClustered,
+                                                                     unsigned ncmax,
+                                                                     Contribution contribution,
+                                                                     Tr* __restrict__ result)
+{
+    namespace cg = cooperative_groups;
+
+    const auto block = cg::this_thread_block();
+    assert(block.dim_threads().x == ClusterConfig::iSize);
+    assert(block.dim_threads().y == ClusterConfig::jSize);
+    assert(block.dim_threads().z == GpuConfig::warpSize / ClusterConfig::iSize);
+    const auto warp   = cg::tiled_partition<GpuConfig::warpSize>(block);
+    const auto thread = cg::this_thread();
+
+    const unsigned numTargets = iceil(lastBody - firstBody, GpuConfig::warpSize);
+    alignas(16) __shared__ Tc xShared[GpuConfig::warpSize];
+    alignas(16) __shared__ Tc yShared[GpuConfig::warpSize];
+    alignas(16) __shared__ Tc zShared[GpuConfig::warpSize];
+    alignas(16) __shared__ Th hShared[GpuConfig::warpSize];
+    __shared__ int sharedTargetIdx;
+    __shared__ cuda::barrier<cuda::thread_scope_block> barrier;
+    if (block.thread_rank() == 0) init(&barrier, block.num_threads());
+    block.sync();
+
+    constexpr auto pbc = BoundaryType::periodic;
+
+    const unsigned iShared = block.thread_index().x + block.thread_index().z * ClusterConfig::iSize;
+
+    cuda::barrier<cuda::thread_scope_block>::arrival_token token;
+
+    if (block.thread_rank() == 0)
+    {
+        sharedTargetIdx              = atomicAdd(&targetCounterGlob, 1);
+        const unsigned nextTargetIdx = sharedTargetIdx;
+        cuda::device::memcpy_async_tx(xShared, x + nextTargetIdx * GpuConfig::warpSize,
+                                      cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), barrier);
+        cuda::device::memcpy_async_tx(yShared, y + nextTargetIdx * GpuConfig::warpSize,
+                                      cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), barrier);
+        cuda::device::memcpy_async_tx(zShared, z + nextTargetIdx * GpuConfig::warpSize,
+                                      cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), barrier);
+        cuda::device::memcpy_async_tx(hShared, h + nextTargetIdx * GpuConfig::warpSize,
+                                      cuda::aligned_size_t<16>(sizeof(Th) * GpuConfig::warpSize), barrier);
+        token = cuda::device::barrier_arrive_tx(barrier, 1, (3 * sizeof(Tc) + sizeof(Th)) * GpuConfig::warpSize);
+    }
+    else { token = barrier.arrive(1); }
+
+    while (true)
+    {
+        barrier.wait(std::move(token));
+
+        const unsigned targetIdx = sharedTargetIdx;
+
+        if (targetIdx >= numTargets) return;
+
+        const unsigned i =
+            targetIdx * GpuConfig::warpSize + block.thread_index().x + block.thread_index().z * ClusterConfig::iSize;
+
+        const Vec3<Tc> iPos = {xShared[iShared], yShared[iShared], zShared[iShared]};
+        const Th hi         = hShared[iShared];
+
+        block.sync();
+
+        if (block.thread_rank() == 0)
+        {
+            sharedTargetIdx              = atomicAdd(&targetCounterGlob, 1);
+            const unsigned nextTargetIdx = sharedTargetIdx;
+            if (nextTargetIdx < numTargets)
+            {
+                cuda::device::memcpy_async_tx(xShared, x + nextTargetIdx * GpuConfig::warpSize,
+                                              cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), barrier);
+                cuda::device::memcpy_async_tx(yShared, y + nextTargetIdx * GpuConfig::warpSize,
+                                              cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), barrier);
+                cuda::device::memcpy_async_tx(zShared, z + nextTargetIdx * GpuConfig::warpSize,
+                                              cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), barrier);
+                cuda::device::memcpy_async_tx(hShared, h + nextTargetIdx * GpuConfig::warpSize,
+                                              cuda::aligned_size_t<16>(sizeof(Th) * GpuConfig::warpSize), barrier);
+                token =
+                    cuda::device::barrier_arrive_tx(barrier, 1, (3 * sizeof(Tc) + sizeof(Th)) * GpuConfig::warpSize);
+            }
+            else { token = barrier.arrive(1); }
+        }
+        else { token = barrier.arrive(1); }
+
+        static_assert(ClusterConfig::iSize * ClusterConfig::jSize == GpuConfig::warpSize,
+                      "Single warp required per cluster-cluster interaction");
         // const bool usePbc   = warp.any(anyPbc & !insideBox(iPos, {2 * hi, 2 * hi, 2 * hi}, box));
 
         const unsigned iCluster = imin(i, lastBody - 1) / ClusterConfig::iSize;
