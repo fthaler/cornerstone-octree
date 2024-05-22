@@ -84,7 +84,10 @@ std::array<T, kTableSize> kernelTable()
 template<class T>
 __host__ __device__ inline T table_lookup(const T* table, T v)
 {
-    // return v / kTableSize;
+    // return std::pow(wharmonic_std(v), 6.0);
+    T w = wharmonic_std(v);
+    T w2 = w * w;
+    return w2 * w2 * w2;
     constexpr int numIntervals = kTableSize - 1;
     constexpr T support        = 2.0;
     constexpr T dx             = support / numIntervals;
