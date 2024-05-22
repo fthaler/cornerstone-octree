@@ -678,6 +678,10 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     RandomCoordinates<T, StrongKeyType> coords(n, box);
     std::vector<T> h(n, 0.012);
 
+    const double r                  = 2 * h[0];
+    const double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * n;
+    std::cout << "Expected average number of neighbors: " << expected_neighbors << std::endl;
+
     // RandomGaussianCoordinates<T, StrongKeyType> coords(n, box);
     // adjustSmoothingLength<KeyType>(n, 100, 200, coords.x(), coords.y(), coords.z(), h, box);
 
