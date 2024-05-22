@@ -763,10 +763,10 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
         cudaEventDestroy(events[i]);
     }
 
-    std::cout << "GPU times: ";
+    printf("GPU times: ");
     for (auto t : times)
-        std::cout << std::setw(5) << std::setprecision(3) << (t / 1000) << "s ";
-    std::cout << std::endl;
+        printf("%7.6fs ", t / 1000);
+    printf("\n");
 
     std::vector<T> rhoGPU(n);
     thrust::copy(d_rho.begin(), d_rho.end(), rhoGPU.begin());
@@ -782,8 +782,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     {
         if (!isclose(rhoGPU[i], rho[i]))
         {
-            std::cout << i << " " << std::setprecision(10) << rhoGPU[i] << " " << std::setprecision(10) << rho[i]
-                      << "\n";
+            printf("%i %.10f %.10f\n", i, rhoGPU[i], rho[i]);
             ++numFails;
         }
     }
