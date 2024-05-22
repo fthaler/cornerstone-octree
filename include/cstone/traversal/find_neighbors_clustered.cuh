@@ -444,7 +444,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(const Loca
                     {
 
                         const Vec3<Tc> jPos = {x[j], y[j], z[j]};
-                        const auto dist = distancePBC(box, hi, iPos[0], iPos[1], iPos[2], jPos[0], jPos[1], jPos[2]);
+                        const Th dist = distancePBC(box, hi, iPos[0], iPos[1], iPos[2], jPos[0], jPos[1], jPos[2]);
                         if (ClusterConfig::iSize == 1 && ClusterConfig::jSize == 1 || dist < 2 * hi)
                             sum += contribution(i, iPos, hi, j, jPos, dist);
                     }
@@ -461,7 +461,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered(const Loca
                     if (ClusterConfig::jSize == 1 || j < lastBody)
                     {
                         const Vec3<Tc> jPos = {x[j], y[j], z[j]};
-                        const auto dist = distancePBC(box, hi, iPos[0], iPos[1], iPos[2], jPos[0], jPos[1], jPos[2]);
+                        const Th dist = distancePBC(box, hi, iPos[0], iPos[1], iPos[2], jPos[0], jPos[1], jPos[2]);
                         if (ClusterConfig::iSize == 1 && ClusterConfig::jSize == 1 || dist < 2 * hi)
                             sum += contribution(i, iPos, hi, j, jPos, dist);
                     }
@@ -565,7 +565,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 if (i < lastBody & j < lastBody)
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                    const auto d2 = distSq(jPos);
+                    const Th d2 = distSq(jPos);
                     if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
                 }
             }
@@ -578,7 +578,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 if (i < lastBody & j < lastBody & j / ClusterConfig::iSize != iCluster)
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                    const auto d2 = distSq(jPos);
+                    const Th d2 = distSq(jPos);
                     if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
                 }
             }
@@ -666,7 +666,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered3(cstone::L
                 if (i < lastBody & j < lastBody)
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                    const auto d2 = distSq(jPos);
+                    const Th d2 = distSq(jPos);
                     if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
                 }
             }
@@ -679,7 +679,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered3(cstone::L
                 if (i < lastBody & j < lastBody & j / ClusterConfig::iSize != iCluster)
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                    const auto d2 = distSq(jPos);
+                    const Th d2 = distSq(jPos);
                     if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
                 }
             }
@@ -765,7 +765,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             if (i < lastBody & j < lastBody)
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                const auto d2 = distSq(jPos);
+                const Th d2 = distSq(jPos);
                 if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
             }
         }
@@ -779,7 +779,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             if (i < lastBody & j < lastBody & j / ClusterConfig::iSize != iCluster)
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                const auto d2 = distSq(jPos);
+                const Th d2 = distSq(jPos);
                 if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
             }
         }
@@ -912,7 +912,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             if (i < lastBody & j < lastBody)
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                const auto d2 = distSq(jPos);
+                const Th d2 = distSq(jPos);
                 if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
             }
         }
@@ -926,7 +926,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             if (i < lastBody & j < lastBody & j / ClusterConfig::iSize != iCluster)
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                const auto d2 = distSq(jPos);
+                const Th d2 = distSq(jPos);
                 if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
             }
         }
