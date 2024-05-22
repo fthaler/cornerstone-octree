@@ -823,6 +823,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
     alignas(16) __shared__ Tc zShared[GpuConfig::warpSize];
     alignas(16) __shared__ Th hShared[GpuConfig::warpSize];
     __shared__ int sharedTargetIdx;
+#pragma nv_diag_suppress static_var_with_dynamic_init
     __shared__ cuda::barrier<cuda::thread_scope_block> barrier;
     if (block.thread_rank() == 0) init(&barrier, block.num_threads());
     block.sync();
