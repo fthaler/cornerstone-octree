@@ -46,7 +46,40 @@
 
 using namespace cstone;
 
+/* smoothing kernel evaluation functionality borrowed from SPH-EXA */
+
 constexpr int kTableSize = 20000;
+
+template<typename T>
+__host__ __device__ inline T wharmonic_std(T v)
+{
+    if (v == 0.0) { return 1.0; }
+
+    const T Pv = T(M_PI_2) * v;
+    return std::sin(Pv) / Pv;
+}
+
+template<class T, std::size_t N, class F>
+std::array<T, N> tabulateFunction(F&& func, double lowerSupport, double upperSupport)
+{
+    constexpr int numIntervals = N - 1;
+    std::array<T, N> table;
+
+    const T dx = (upperSupport - lowerSupport) / numIntervals;
+    for (size_t i = 0; i < N; ++i)
+    {
+        T normalizedVal = lowerSupport + i * dx;
+        table[i]        = func(normalizedVal);
+    }
+
+    return table;
+}
+
+template<class T>
+std::array<T, kTableSize> kernelTable()
+{
+    return tabulateFunction<T, kTableSize>([](T x) { return std::pow(wharmonic_std(x), 6.0); }, 0.0, 2.0);
+}
 
 template<class T>
 __host__ __device__ inline T table_lookup(const T* table, T v)
@@ -104,9 +137,9 @@ void computeDensityCPU(const std::size_t firstBody,
 #pragma omp parallel for
     for (std::size_t i = firstBody; i < lastBody; ++i)
     {
-        const T xi   = x[i];
-        const T yi   = y[i];
-        const T zi   = z[i];
+        const Tc xi  = x[i];
+        const Tc yi  = y[i];
+        const Tc zi  = z[i];
         const T hi   = h[i];
         const T mi   = m[i];
         const T hInv = 1.0 / hi;
@@ -127,16 +160,16 @@ void computeDensityCPU(const std::size_t firstBody,
     }
 }
 
-template<class T, class KeyType>
-std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>, OctreeNsView<T, KeyType>>
+template<class Tc, class T, class KeyType>
+std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>, OctreeNsView<Tc, KeyType>>
 buildNeighborhoodNaiveDirect(std::size_t firstBody,
                              std::size_t lastBody,
-                             const T* x,
-                             const T* y,
-                             const T* z,
+                             const Tc* x,
+                             const Tc* y,
+                             const Tc* z,
                              const T* h,
-                             OctreeNsView<T, KeyType> tree,
-                             const Box<T>& box,
+                             OctreeNsView<Tc, KeyType> tree,
+                             const Box<Tc>& box,
                              unsigned ngmax)
 {
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
@@ -144,17 +177,17 @@ buildNeighborhoodNaiveDirect(std::size_t firstBody,
     return {neighbors, neighborsCount, tree};
 }
 
-template<class T, class KeyType>
-__global__ void computeDensityNaiveDirectKernel(const T* x,
-                                                const T* y,
-                                                const T* z,
+template<class Tc, class T, class KeyType>
+__global__ void computeDensityNaiveDirectKernel(const Tc* x,
+                                                const Tc* y,
+                                                const Tc* z,
                                                 const T* h,
                                                 const T* m,
                                                 const T* wh,
                                                 const LocalIndex firstId,
                                                 const LocalIndex lastId,
-                                                const Box<T> box,
-                                                const OctreeNsView<T, KeyType> tree,
+                                                const Box<Tc> box,
+                                                const OctreeNsView<Tc, KeyType> tree,
                                                 unsigned* neighbors,
                                                 unsigned* neighborsCount,
                                                 const unsigned ngmax,
@@ -166,9 +199,9 @@ __global__ void computeDensityNaiveDirectKernel(const T* x,
 
     neighborsCount[i] = findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors + tid * ngmax);
 
-    const T xi   = x[i];
-    const T yi   = y[i];
-    const T zi   = z[i];
+    const Tc xi  = x[i];
+    const Tc yi  = y[i];
+    const Tc zi  = z[i];
     const T hi   = h[i];
     const T mi   = m[i];
     const T hInv = 1.0 / hi;
@@ -188,20 +221,20 @@ __global__ void computeDensityNaiveDirectKernel(const T* x,
     rho[i] = rhoi;
 }
 
-template<class T, class KeyType>
+template<class Tc, class T, class KeyType>
 void computeDensityNaiveDirect(
     const std::size_t firstBody,
     const std::size_t lastBody,
-    const T* x,
-    const T* y,
-    const T* z,
+    const Tc* x,
+    const Tc* y,
+    const Tc* z,
     const T* h,
     const T* m,
-    const Box<T>& box,
+    const Box<Tc>& box,
     const unsigned ngmax,
     const T* wh,
     T* rho,
-    std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>, OctreeNsView<T, KeyType>>&
+    std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>, OctreeNsView<Tc, KeyType>>&
         neighborhood)
 {
     auto& [neighbors, neighborsCount, tree] = neighborhood;
@@ -209,19 +242,19 @@ void computeDensityNaiveDirect(
         x, y, z, h, m, wh, firstBody, lastBody, box, tree, rawPtr(neighbors), rawPtr(neighborsCount), ngmax, rho);
 }
 
-template<class T, class KeyType>
+template<class Tc, class T, class KeyType>
 std::tuple<thrust::device_vector<LocalIndex>,
            thrust::device_vector<unsigned>,
            thrust::device_vector<int>,
-           OctreeNsView<T, KeyType>>
+           OctreeNsView<Tc, KeyType>>
 buildNeighborhoodBatchedDirect(std::size_t firstBody,
                                std::size_t lastBody,
-                               const T* x,
-                               const T* y,
-                               const T* z,
+                               const Tc* x,
+                               const Tc* y,
+                               const Tc* z,
                                const T* h,
-                               OctreeNsView<T, KeyType> tree,
-                               const Box<T>& box,
+                               OctreeNsView<Tc, KeyType> tree,
+                               const Box<Tc>& box,
                                unsigned ngmax)
 {
     unsigned numBodies = lastBody - firstBody;
@@ -234,17 +267,17 @@ buildNeighborhoodBatchedDirect(std::size_t firstBody,
     return {neighbors, neighborsCount, globalPool, tree};
 }
 
-template<class T, class KeyType>
+template<class Tc, class T, class KeyType>
 __global__
 __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel(cstone::LocalIndex firstBody,
                                                                                  cstone::LocalIndex lastBody,
-                                                                                 const T* __restrict__ x,
-                                                                                 const T* __restrict__ y,
-                                                                                 const T* __restrict__ z,
+                                                                                 const Tc* __restrict__ x,
+                                                                                 const Tc* __restrict__ y,
+                                                                                 const Tc* __restrict__ z,
                                                                                  const T* __restrict__ h,
                                                                                  const T* __restrict__ m,
-                                                                                 const Box<T> box,
-                                                                                 const OctreeNsView<T, KeyType> tree,
+                                                                                 const Box<Tc> box,
+                                                                                 const OctreeNsView<Tc, KeyType> tree,
                                                                                  const T* __restrict__ wh,
                                                                                  T* __restrict__ rho,
                                                                                  unsigned* neighborsCount,
@@ -286,9 +319,9 @@ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel
                 neighbors + targetIdx * TravConfig::targetSize * ngmax + warpTarget * GpuConfig::warpSize + laneIdx;
             if (i < bodyEnd)
             {
-                const T xi   = x[i];
-                const T yi   = y[i];
-                const T zi   = z[i];
+                const Tc xi  = x[i];
+                const Tc yi  = y[i];
+                const Tc zi  = z[i];
                 const T hi   = h[i];
                 const T mi   = m[i];
                 const T hInv = 1.0 / hi;
@@ -311,22 +344,22 @@ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel
     }
 }
 
-template<class T, class KeyType>
+template<class Tc, class T, class KeyType>
 void computeDensityBatchedDirect(const std::size_t firstBody,
                                  const std::size_t lastBody,
-                                 const T* x,
-                                 const T* y,
-                                 const T* z,
+                                 const Tc* x,
+                                 const Tc* y,
+                                 const Tc* z,
                                  const T* h,
                                  const T* m,
-                                 const Box<T>& box,
+                                 const Box<Tc>& box,
                                  const unsigned ngmax,
                                  const T* wh,
                                  T* rho,
                                  std::tuple<thrust::device_vector<LocalIndex>,
                                             thrust::device_vector<unsigned>,
                                             thrust::device_vector<int>,
-                                            OctreeNsView<T, KeyType>>& neighborhood)
+                                            OctreeNsView<Tc, KeyType>>& neighborhood)
 {
     auto& [neighbors, neighborsCount, globalPool, tree] = neighborhood;
     unsigned numBodies                                  = lastBody - firstBody;
@@ -337,15 +370,15 @@ void computeDensityBatchedDirect(const std::size_t firstBody,
         rawPtr(globalPool));
 }
 
-template<class T, class KeyType>
-__global__ void buildNeighborhoodNaiveKernel(const T* x,
-                                             const T* y,
-                                             const T* z,
+template<class Tc, class T, class KeyType>
+__global__ void buildNeighborhoodNaiveKernel(const Tc* x,
+                                             const Tc* y,
+                                             const Tc* z,
                                              const T* h,
                                              LocalIndex firstId,
                                              LocalIndex lastId,
-                                             const Box<T> box,
-                                             const OctreeNsView<T, KeyType> treeView,
+                                             const Box<Tc> box,
+                                             const OctreeNsView<Tc, KeyType> treeView,
                                              unsigned ngmax,
                                              LocalIndex* neighbors,
                                              unsigned* neighborsCount)
@@ -357,16 +390,16 @@ __global__ void buildNeighborhoodNaiveKernel(const T* x,
     neighborsCount[id] = findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors + tid * ngmax);
 }
 
-template<class T, class KeyType>
+template<class Tc, class T, class KeyType>
 std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
 buildNeighborhoodNaive(std::size_t firstBody,
                        std::size_t lastBody,
-                       const T* x,
-                       const T* y,
-                       const T* z,
+                       const Tc* x,
+                       const Tc* y,
+                       const Tc* z,
                        const T* h,
-                       OctreeNsView<T, KeyType> tree,
-                       const Box<T>& box,
+                       OctreeNsView<Tc, KeyType> tree,
+                       const Box<Tc>& box,
                        unsigned ngmax)
 {
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
@@ -378,16 +411,16 @@ buildNeighborhoodNaive(std::size_t firstBody,
     return {neighbors, neighborsCount};
 }
 
-template<class T>
-__global__ void computeDensityNaiveKernel(const T* x,
-                                          const T* y,
-                                          const T* z,
+template<class Tc, class T>
+__global__ void computeDensityNaiveKernel(const Tc* x,
+                                          const Tc* y,
+                                          const Tc* z,
                                           const T* h,
                                           const T* m,
                                           const T* wh,
                                           const LocalIndex firstId,
                                           const LocalIndex lastId,
-                                          const Box<T> box,
+                                          const Box<Tc> box,
                                           const unsigned* neighbors,
                                           const unsigned* neighborsCount,
                                           const unsigned ngmax,
@@ -397,9 +430,9 @@ __global__ void computeDensityNaiveKernel(const T* x,
     cstone::LocalIndex i   = firstId + tid;
     if (i >= lastId) { return; }
 
-    const T xi   = x[i];
-    const T yi   = y[i];
-    const T zi   = z[i];
+    const Tc xi  = x[i];
+    const Tc yi  = y[i];
+    const Tc zi  = z[i];
     const T hi   = h[i];
     const T mi   = m[i];
     const T hInv = 1.0 / hi;
@@ -419,16 +452,16 @@ __global__ void computeDensityNaiveKernel(const T* x,
     rho[i] = rhoi;
 }
 
-template<class T>
+template<class Tc, class T>
 void computeDensityNaive(
     const std::size_t firstBody,
     const std::size_t lastBody,
-    const T* x,
-    const T* y,
-    const T* z,
+    const Tc* x,
+    const Tc* y,
+    const Tc* z,
     const T* h,
     const T* m,
-    const Box<T>& box,
+    const Box<Tc>& box,
     const unsigned ngmax,
     const T* wh,
     T* rho,
@@ -489,16 +522,16 @@ __global__ __launch_bounds__(TravConfig::numThreads) void buildNeighborhoodBatch
     }
 }
 
-template<class T, class KeyType>
+template<class Tc, class T, class KeyType>
 std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
 buildNeighborhoodBatched(std::size_t firstBody,
                          std::size_t lastBody,
-                         const T* x,
-                         const T* y,
-                         const T* z,
+                         const Tc* x,
+                         const Tc* y,
+                         const Tc* z,
                          const T* h,
-                         OctreeNsView<T, KeyType> tree,
-                         const Box<T>& box,
+                         OctreeNsView<Tc, KeyType> tree,
+                         const Box<Tc>& box,
                          unsigned ngmax)
 {
     unsigned numBodies = lastBody - firstBody;
@@ -516,15 +549,15 @@ buildNeighborhoodBatched(std::size_t firstBody,
     return {neighbors, neighborsCount};
 }
 
-template<class T>
+template<class Tc, class T>
 __global__ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedKernel(cstone::LocalIndex firstBody,
                                                                                       cstone::LocalIndex lastBody,
-                                                                                      const T* __restrict__ x,
-                                                                                      const T* __restrict__ y,
-                                                                                      const T* __restrict__ z,
+                                                                                      const Tc* __restrict__ x,
+                                                                                      const Tc* __restrict__ y,
+                                                                                      const Tc* __restrict__ z,
                                                                                       const T* __restrict__ h,
                                                                                       const T* __restrict__ m,
-                                                                                      const Box<T> box,
+                                                                                      const Box<Tc> box,
                                                                                       const T* __restrict__ wh,
                                                                                       T* __restrict__ rho,
                                                                                       const unsigned* neighborsCount,
@@ -552,9 +585,9 @@ __global__ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedK
                 neighbors + targetIdx * TravConfig::targetSize * ngmax + warpTarget * GpuConfig::warpSize + laneIdx;
             if (i < bodyEnd)
             {
-                const T xi   = x[i];
-                const T yi   = y[i];
-                const T zi   = z[i];
+                const Tc xi  = x[i];
+                const Tc yi  = y[i];
+                const Tc zi  = z[i];
                 const T hi   = h[i];
                 const T mi   = m[i];
                 const T hInv = 1 / hi;
@@ -577,16 +610,16 @@ __global__ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedK
     }
 }
 
-template<class T>
+template<class Tc, class T>
 void computeDensityBatched(
     const std::size_t firstBody,
     const std::size_t lastBody,
-    const T* x,
-    const T* y,
-    const T* z,
+    const Tc* x,
+    const Tc* y,
+    const Tc* z,
     const T* h,
     const T* m,
-    const Box<T>& box,
+    const Box<Tc>& box,
     const unsigned ngmax,
     const T* wh,
     T* rho,
@@ -600,16 +633,16 @@ void computeDensityBatched(
         firstBody, lastBody, x, y, z, h, m, box, wh, rho, rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
 }
 
-template<class T, class KeyType>
+template<class Tc, class T, class KeyType>
 std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
 buildNeighborhoodClustered(std::size_t firstBody,
                            std::size_t lastBody,
-                           const T* x,
-                           const T* y,
-                           const T* z,
+                           const Tc* x,
+                           const Tc* y,
+                           const Tc* z,
                            const T* h,
-                           OctreeNsView<T, KeyType> tree,
-                           const Box<T>& box,
+                           OctreeNsView<Tc, KeyType> tree,
+                           const Box<Tc>& box,
                            unsigned ngmax)
 {
     unsigned ncmax        = ngmax;
@@ -629,16 +662,16 @@ buildNeighborhoodClustered(std::size_t firstBody,
     return {clusterNeighbors, clusterNeighborsCount};
 }
 
-template<class T>
+template<class Tc, class T>
 void computeDensityClustered(
     const std::size_t firstBody,
     const std::size_t lastBody,
-    const T* x,
-    const T* y,
-    const T* z,
+    const Tc* x,
+    const Tc* y,
+    const Tc* z,
     const T* h,
     const T* m,
-    const Box<T>& box,
+    const Box<Tc>& box,
     const unsigned ngmax,
     const T* wh,
     T* rho,
@@ -667,15 +700,15 @@ void computeDensityClustered(
                                                       computeDensity, rho);
 }
 
-template<class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeDensityF>
+template<class Tc, class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeDensityF>
 void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeDensity)
 {
     using KeyType = typename StrongKeyType::ValueType;
 
-    Box<T> box{0, 1, BoundaryType::periodic};
+    Box<Tc> box{0, 1, BoundaryType::periodic};
     int n = 2000000;
 
-    RandomCoordinates<T, StrongKeyType> coords(n, box);
+    RandomCoordinates<Tc, StrongKeyType> coords(n, box);
     std::vector<T> h(n, 0.012);
 
     const double r                  = 2 * h[0];
@@ -687,9 +720,9 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
 
     int ngmax = 200;
 
-    const T* x        = coords.x().data();
-    const T* y        = coords.y().data();
-    const T* z        = coords.z().data();
+    const Tc* x       = coords.x().data();
+    const Tc* y       = coords.y().data();
+    const Tc* z       = coords.z().data();
     const auto* codes = (KeyType*)(coords.particleKeys().data());
 
     unsigned bucketSize   = 64;
@@ -703,41 +736,43 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     std::vector<LocalIndex> layout(nNodes(csTree) + 1);
     std::exclusive_scan(counts.begin(), counts.end() + 1, layout.begin(), 0);
 
-    std::vector<Vec3<T>> centers(octree.numNodes), sizes(octree.numNodes);
+    std::vector<Vec3<Tc>> centers(octree.numNodes), sizes(octree.numNodes);
     gsl::span<const KeyType> nodeKeys(octree.prefixes.data(), octree.numNodes);
     nodeFpCenters<KeyType>(nodeKeys, centers.data(), sizes.data(), box);
 
-    OctreeNsView<T, KeyType> nsView{octree.prefixes.data(),
-                                    octree.childOffsets.data(),
-                                    octree.internalToLeaf.data(),
-                                    octree.levelRange.data(),
-                                    layout.data(),
-                                    centers.data(),
-                                    sizes.data()};
+    OctreeNsView<Tc, KeyType> nsView{octree.prefixes.data(),
+                                     octree.childOffsets.data(),
+                                     octree.internalToLeaf.data(),
+                                     octree.levelRange.data(),
+                                     layout.data(),
+                                     centers.data(),
+                                     sizes.data()};
 
-    std::vector<T> rho(n), m(n, 1.0), wh(kTableSize, 1.0);
+    std::vector<T> rho(n), m(n, 1.0);
+    auto wh              = kernelTable<T>();
     auto neighborhoodCPU = buildNeighborhoodCPU(0, n, x, y, z, h.data(), nsView, box, ngmax);
     computeDensityCPU(0, n, x, y, z, h.data(), m.data(), box, ngmax, wh.data(), rho.data(), neighborhoodCPU);
 
-    thrust::device_vector<T> d_x(coords.x().begin(), coords.x().end());
-    thrust::device_vector<T> d_y(coords.y().begin(), coords.y().end());
-    thrust::device_vector<T> d_z(coords.z().begin(), coords.z().end());
+    thrust::device_vector<Tc> d_x(coords.x().begin(), coords.x().end());
+    thrust::device_vector<Tc> d_y(coords.y().begin(), coords.y().end());
+    thrust::device_vector<Tc> d_z(coords.z().begin(), coords.z().end());
     thrust::device_vector<T> d_h  = h;
     thrust::device_vector<T> d_m  = m;
-    thrust::device_vector<T> d_wh = wh;
     thrust::device_vector<T> d_rho(n);
+    thrust::device_vector<T> d_wh(wh.size());
+    thrust::copy(wh.begin(), wh.end(), d_wh.begin());
 
     thrust::device_vector<KeyType> d_prefixes             = octree.prefixes;
     thrust::device_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
     thrust::device_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
     thrust::device_vector<TreeNodeIndex> d_levelRange     = octree.levelRange;
     thrust::device_vector<LocalIndex> d_layout            = layout;
-    thrust::device_vector<Vec3<T>> d_centers              = centers;
-    thrust::device_vector<Vec3<T>> d_sizes                = sizes;
+    thrust::device_vector<Vec3<Tc>> d_centers             = centers;
+    thrust::device_vector<Vec3<Tc>> d_sizes               = sizes;
 
-    OctreeNsView<T, KeyType> nsViewGpu{rawPtr(d_prefixes),   rawPtr(d_childOffsets), rawPtr(d_internalToLeaf),
-                                       rawPtr(d_levelRange), rawPtr(d_layout),       rawPtr(d_centers),
-                                       rawPtr(d_sizes)};
+    OctreeNsView<Tc, KeyType> nsViewGpu{rawPtr(d_prefixes),   rawPtr(d_childOffsets), rawPtr(d_internalToLeaf),
+                                        rawPtr(d_levelRange), rawPtr(d_layout),       rawPtr(d_centers),
+                                        rawPtr(d_sizes)};
 
     thrust::device_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
     const auto* deviceKeys = (const KeyType*)(rawPtr(d_codes));
@@ -775,7 +810,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     auto isclose = [](double a, double b)
     {
         double atol = 0.0;
-        double rtol = 1e-7;
+        double rtol = 1e-5;
         return std::abs(a - b) <= atol + rtol * std::abs(b);
     };
     for (int i = 0; i < n; ++i)
@@ -792,21 +827,23 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
 int main()
 {
     using Tc            = double;
+    using T             = float;
     using StrongKeyType = HilbertKey<uint64_t>;
     using KeyType       = typename StrongKeyType::ValueType;
 
     std::cout << "--- NAIVE DIRECT ---" << std::endl;
-    benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodNaiveDirect<Tc, KeyType>, computeDensityNaiveDirect<Tc, KeyType>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodNaiveDirect<Tc, T, KeyType>,
+                                       computeDensityNaiveDirect<Tc, T, KeyType>);
     std::cout << "--- BATCHED DIRECT ---" << std::endl;
-    benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodBatchedDirect<Tc, KeyType>,
-                                    computeDensityBatchedDirect<Tc, KeyType>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodBatchedDirect<Tc, T, KeyType>,
+                                       computeDensityBatchedDirect<Tc, T, KeyType>);
 
     std::cout << "--- NAIVE TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodNaive<Tc, KeyType>, computeDensityNaive<Tc>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodNaive<Tc, T, KeyType>, computeDensityNaive<Tc, T>);
     std::cout << "--- BATCHED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodBatched<Tc, KeyType>, computeDensityBatched<Tc>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodBatched<Tc, T, KeyType>, computeDensityBatched<Tc, T>);
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, StrongKeyType>(buildNeighborhoodClustered<Tc, KeyType>, computeDensityClustered<Tc>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<Tc, T, KeyType>, computeDensityClustered<Tc, T>);
 
     return 0;
 }
