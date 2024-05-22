@@ -659,10 +659,10 @@ void computeDensityClustered(
 
     unsigned ncmax = ngmax;
     dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, GpuConfig::warpSize / ClusterConfig::iSize};
-    cudaFuncSetAttribute(findNeighborsClustered4<T, T, decltype(computeDensity), T>,
-                         cudaFuncAttributePreferredSharedMemoryCarveout, 1);
-    cudaFuncSetCacheConfig(findNeighborsClustered4<T, T, decltype(computeDensity), T>, cudaFuncCachePreferL1);
-    findNeighborsClustered4<<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box,
+    // cudaFuncSetAttribute(findNeighborsClustered4<T, T, decltype(computeDensity), T>,
+    // cudaFuncAttributePreferredSharedMemoryCarveout, 1);
+    // cudaFuncSetCacheConfig(findNeighborsClustered4<T, T, decltype(computeDensity), T>, cudaFuncCachePreferL1);
+    findNeighborsClustered5<<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box,
                                                       rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax,
                                                       computeDensity, rho);
 }
