@@ -29,8 +29,9 @@
  * @author Felix Thaler <thaler@cscs.ch>
  */
 
-#include <iomanip>
 #include <iostream>
+
+#include <cuda/annotated_ptr>
 
 #include <thrust/device_vector.h>
 
@@ -42,7 +43,6 @@
 #include "cstone/traversal/find_neighbors_clustered.cuh"
 
 #include "../coord_samples/random.hpp"
-#include "timing.cuh"
 
 using namespace cstone;
 
@@ -269,7 +269,8 @@ buildNeighborhoodBatchedDirect(std::size_t firstBody,
     unsigned numBodies = lastBody - firstBody;
     unsigned numBlocks = TravConfig::numBlocks(numBodies);
     unsigned poolSize  = TravConfig::poolSize(numBodies);
-    thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
+    thrust::device_vector<LocalIndex> neighbors(ngmax * numBlocks * (TravConfig::numThreads / GpuConfig::warpSize) *
+                                                TravConfig::targetSize);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
     thrust::device_vector<int> globalPool(poolSize);
 
@@ -294,9 +295,12 @@ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel
                                                                                  const unsigned ngmax,
                                                                                  int* globalPool)
 {
-    const unsigned laneIdx    = threadIdx.x & (GpuConfig::warpSize - 1);
-    const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
-    int targetIdx             = 0;
+    const unsigned laneIdx     = threadIdx.x & (GpuConfig::warpSize - 1);
+    const unsigned numTargets  = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
+    const unsigned warpIdxGrid = (blockDim.x * blockIdx.x + threadIdx.x) >> GpuConfig::warpSizeLog2;
+    int targetIdx              = 0;
+
+    unsigned* warpNidx = neighbors + warpIdxGrid * TravConfig::targetSize * ngmax;
 
     while (true)
     {
@@ -304,18 +308,17 @@ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel
         if (laneIdx == 0) { targetIdx = atomicAdd(&targetCounterGlob, 1); }
         targetIdx = shflSync(targetIdx, 0);
 
-        if (targetIdx >= numTargets) return;
+        if (targetIdx >= numTargets) break;
 
         const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
         const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
-        unsigned* warpNidx                 = neighbors + targetIdx * TravConfig::targetSize * ngmax;
 
         unsigned nc_i[TravConfig::nwt] = {0};
 
         auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
         {
             if (nc_i[warpTarget] < ngmax)
-                warpNidx[nc_i[warpTarget] * TravConfig::targetSize + laneIdx + warpTarget * GpuConfig::warpSize] = j;
+                warpNidx[nc_i[warpTarget] * TravConfig::targetSize + warpTarget * GpuConfig::warpSize + laneIdx] = j;
             ++nc_i[warpTarget];
         };
 
@@ -324,8 +327,7 @@ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel
         for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
         {
             const cstone::LocalIndex i = bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx;
-            const unsigned* nidx =
-                neighbors + targetIdx * TravConfig::targetSize * ngmax + warpTarget * GpuConfig::warpSize + laneIdx;
+            const unsigned* nidx       = warpNidx + warpTarget * GpuConfig::warpSize + laneIdx;
             if (i < bodyEnd)
             {
                 const Tc xi  = x[i];
@@ -351,6 +353,7 @@ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel
             }
         }
     }
+    cuda::discard_memory(warpNidx, TravConfig::targetSize * ngmax * sizeof(unsigned));
 }
 
 template<class Tc, class T, class KeyType>
