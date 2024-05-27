@@ -81,22 +81,27 @@ std::array<T, kTableSize> kernelTable()
     return tabulateFunction<T, kTableSize>([](T x) { return std::pow(wharmonic_std(x), 6.0); }, 0.0, 2.0);
 }
 
-template<class T>
+template<bool useKernelTable = false, class T>
 __host__ __device__ inline T table_lookup(const T* table, T v)
 {
-    // return std::pow(wharmonic_std(v), 6.0);
-    T w = wharmonic_std(v);
-    T w2 = w * w;
-    return w2 * w2 * w2;
-    constexpr int numIntervals = kTableSize - 1;
-    constexpr T support        = 2.0;
-    constexpr T dx             = support / numIntervals;
-    constexpr T invDx          = T(1) / dx;
+    if constexpr (useKernelTable)
+    {
+        constexpr int numIntervals = kTableSize - 1;
+        constexpr T support        = 2.0;
+        constexpr T dx             = support / numIntervals;
+        constexpr T invDx          = T(1) / dx;
 
-    int idx = v * invDx;
+        int idx = v * invDx;
 
-    T derivative = (idx >= numIntervals) ? 0.0 : (table[idx + 1] - table[idx]) * invDx;
-    return (idx >= numIntervals) ? 0.0 : table[idx] + derivative * (v - T(idx) * dx);
+        T derivative = (idx >= numIntervals) ? 0.0 : (table[idx + 1] - table[idx]) * invDx;
+        return (idx >= numIntervals) ? 0.0 : table[idx] + derivative * (v - T(idx) * dx);
+    }
+    else
+    {
+        T w  = wharmonic_std(v);
+        T w2 = w * w;
+        return w2 * w2 * w2;
+    }
 }
 
 template<class Tc, class Th, class KeyType>
@@ -154,7 +159,7 @@ void computeDensityCPU(const std::size_t firstBody,
             unsigned j = neighbors[i * ngmax + nb];
             T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
             T vloc     = dist * hInv;
-            T w        = table_lookup(wh, vloc);
+            T w        = table_lookup<true>(wh, vloc);
 
             rhoi += w * m[j];
         }
@@ -759,8 +764,8 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     thrust::device_vector<Tc> d_x(coords.x().begin(), coords.x().end());
     thrust::device_vector<Tc> d_y(coords.y().begin(), coords.y().end());
     thrust::device_vector<Tc> d_z(coords.z().begin(), coords.z().end());
-    thrust::device_vector<T> d_h  = h;
-    thrust::device_vector<T> d_m  = m;
+    thrust::device_vector<T> d_h = h;
+    thrust::device_vector<T> d_m = m;
     thrust::device_vector<T> d_rho(n);
     thrust::device_vector<T> d_wh(wh.size());
     thrust::copy(wh.begin(), wh.end(), d_wh.begin());
