@@ -290,10 +290,10 @@ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel
                                                                                  const OctreeNsView<Tc, KeyType> tree,
                                                                                  const T* __restrict__ wh,
                                                                                  T* __restrict__ rho,
-                                                                                 unsigned* neighborsCount,
-                                                                                 unsigned* neighbors,
+                                                                                 unsigned* __restrict__ neighborsCount,
+                                                                                 unsigned* __restrict__ neighbors,
                                                                                  const unsigned ngmax,
-                                                                                 int* globalPool)
+                                                                                 int* __restrict__ globalPool)
 {
     const unsigned laneIdx     = threadIdx.x & (GpuConfig::warpSize - 1);
     const unsigned numTargets  = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
@@ -493,10 +493,10 @@ __global__ __launch_bounds__(TravConfig::numThreads) void buildNeighborhoodBatch
                                                                                          const Th* __restrict__ h,
                                                                                          OctreeNsView<Tc, KeyType> tree,
                                                                                          const Box<Tc> box,
-                                                                                         unsigned* nc,
-                                                                                         unsigned* nidx,
+                                                                                         unsigned* __restrict__ nc,
+                                                                                         unsigned* __restrict__ nidx,
                                                                                          unsigned ngmax,
-                                                                                         int* globalPool)
+                                                                                         int* __restrict__ globalPool)
 {
     const unsigned laneIdx    = threadIdx.x & (GpuConfig::warpSize - 1);
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
@@ -562,19 +562,20 @@ buildNeighborhoodBatched(std::size_t firstBody,
 }
 
 template<class Tc, class T>
-__global__ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedKernel(cstone::LocalIndex firstBody,
-                                                                                      cstone::LocalIndex lastBody,
-                                                                                      const Tc* __restrict__ x,
-                                                                                      const Tc* __restrict__ y,
-                                                                                      const Tc* __restrict__ z,
-                                                                                      const T* __restrict__ h,
-                                                                                      const T* __restrict__ m,
-                                                                                      const Box<Tc> box,
-                                                                                      const T* __restrict__ wh,
-                                                                                      T* __restrict__ rho,
-                                                                                      const unsigned* neighborsCount,
-                                                                                      const unsigned* neighbors,
-                                                                                      const unsigned ngmax)
+__global__
+__launch_bounds__(TravConfig::numThreads) void computeDensityBatchedKernel(cstone::LocalIndex firstBody,
+                                                                           cstone::LocalIndex lastBody,
+                                                                           const Tc* __restrict__ x,
+                                                                           const Tc* __restrict__ y,
+                                                                           const Tc* __restrict__ z,
+                                                                           const T* __restrict__ h,
+                                                                           const T* __restrict__ m,
+                                                                           const Box<Tc> box,
+                                                                           const T* __restrict__ wh,
+                                                                           T* __restrict__ rho,
+                                                                           const unsigned* __restrict__ neighborsCount,
+                                                                           const unsigned* __restrict__ neighbors,
+                                                                           const unsigned ngmax)
 {
     const unsigned laneIdx    = threadIdx.x & (GpuConfig::warpSize - 1);
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
@@ -678,15 +679,15 @@ template<class Tc, class T>
 void computeDensityClustered(
     const std::size_t firstBody,
     const std::size_t lastBody,
-    const Tc* x,
-    const Tc* y,
-    const Tc* z,
-    const T* h,
-    const T* m,
+    const Tc* __restrict__ x,
+    const Tc* __restrict__ y,
+    const Tc* __restrict__ z,
+    const T* __restrict__ h,
+    const T* __restrict__ m,
     const Box<Tc>& box,
     const unsigned ngmax,
-    const T* wh,
-    T* rho,
+    const T* __restrict__ wh,
+    T* __restrict__ rho,
     const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
 {
     auto& [clusterNeighbors, clusterNeighborsCount] = neighborhood;
