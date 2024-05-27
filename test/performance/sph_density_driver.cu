@@ -49,6 +49,7 @@ using namespace cstone;
 /* smoothing kernel evaluation functionality borrowed from SPH-EXA */
 
 constexpr int kTableSize = 20000;
+constexpr bool kUseTable = true;
 
 template<typename T>
 __host__ __device__ inline T wharmonic_std(T v)
@@ -81,7 +82,7 @@ std::array<T, kTableSize> kernelTable()
     return tabulateFunction<T, kTableSize>([](T x) { return std::pow(wharmonic_std(x), 6.0); }, 0.0, 2.0);
 }
 
-template<bool useKernelTable = false, class T>
+template<bool useKernelTable = kUseTable, class T>
 __host__ __device__ inline T table_lookup(const T* table, T v)
 {
     if constexpr (useKernelTable)
@@ -788,6 +789,25 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     auto neighborhoodGPU =
         buildNeighborhood(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), nsViewGpu, box, ngmax);
 
+    cudaStreamAttrValue streamAttr;
+    if constexpr (kUseTable)
+    {
+        int device;
+        cudaGetDevice(&device);
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, device);
+        int maxPersistentSize = std::min(int(prop.l2CacheSize * 0.5), prop.persistingL2CacheMaxSize);
+        cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, maxPersistentSize);
+
+        streamAttr.accessPolicyWindow.num_bytes =
+            std::min(prop.accessPolicyMaxWindowSize, int(sizeof(T) * d_wh.size()));
+        streamAttr.accessPolicyWindow.hitRatio = 1.0;
+        streamAttr.accessPolicyWindow.hitProp  = cudaAccessPropertyPersisting;
+        streamAttr.accessPolicyWindow.missProp = cudaAccessPropertyStreaming;
+
+        cudaStreamSetAttribute(0, cudaStreamAttributeAccessPolicyWindow, &streamAttr);
+    }
+
     std::array<float, 5> times;
     std::array<cudaEvent_t, times.size() + 1> events;
     for (auto& event : events)
@@ -800,6 +820,14 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
         cudaEventRecord(events[i]);
     }
     cudaEventSynchronize(events.back());
+
+    if constexpr (kUseTable)
+    {
+        streamAttr.accessPolicyWindow.num_bytes = 0;
+        cudaStreamSetAttribute(0, cudaStreamAttributeAccessPolicyWindow, &streamAttr);
+        cudaCtxResetPersistingL2Cache();
+    }
+
     for (std::size_t i = 0; i < times.size(); ++i)
     {
         cudaEventElapsedTime(&times[i], events[i], events[i + 1]);
