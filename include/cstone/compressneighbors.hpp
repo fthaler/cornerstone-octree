@@ -24,7 +24,7 @@
  */
 
 /*! @file
- * @brief Neighbor list compression tests
+ * @brief Neighbor list compression
  *
  * @author Felix Thaler <thaler@cscs.ch>
  */
@@ -35,19 +35,26 @@
 #include <cstdint>
 #include <cstdlib>
 
+#include "cstone/cuda/annotation.hpp"
+
 namespace cstone
 {
 
 class NeighborListCompressor
 {
 public:
-    NeighborListCompressor(void* buffer, std::size_t maxSize)
+    HOST_DEVICE_INLINE NeighborListCompressor(void* buffer, std::size_t maxSize)
         : buffer_(reinterpret_cast<std::uint8_t*>(buffer))
         , maxNibbles_(2 * maxSize)
     {
     }
 
-    bool add(std::uint32_t nbIndex)
+    NeighborListCompressor(const NeighborListCompressor&)            = delete;
+    NeighborListCompressor& operator=(const NeighborListCompressor&) = delete;
+    NeighborListCompressor(NeighborListCompressor&&)                 = default;
+    NeighborListCompressor& operator=(NeighborListCompressor&&)      = default;
+
+    HOST_DEVICE_INLINE bool add(std::uint32_t nbIndex)
     {
         const std::uint32_t value = nbIndex - prevNbIndex_;
         prevNbIndex_              = nbIndex;
@@ -74,7 +81,7 @@ public:
         return true;
     }
 
-    void decompress(std::uint32_t* buffer, std::size_t maxNeighbors) const
+    HOST_DEVICE_INLINE void decompress(std::uint32_t* buffer, std::size_t maxNeighbors) const
     {
         std::size_t i          = 0;
         std::uint32_t previous = 0;
@@ -105,11 +112,11 @@ public:
         }
     }
 
-    std::size_t size() const { return nNeighbors_; }
-    std::size_t nbytes() const { return (nNibbles_ + 1) / 2; }
+    HOST_DEVICE_INLINE std::size_t size() const { return nNeighbors_; }
+    HOST_DEVICE_INLINE std::size_t nbytes() const { return (nNibbles_ + 1) / 2; }
 
 private:
-    void writeNibble(std::size_t index, std::uint8_t value)
+    HOST_DEVICE_INLINE void writeNibble(std::size_t index, std::uint8_t value)
     {
         assert(index < nNibbles_);
         assert(nNibbles_ <= maxNibbles_);
@@ -119,7 +126,7 @@ private:
         buffer_[byte]             = (buffer_[byte] & mask) | (value << (4 * offset));
     }
 
-    std::uint8_t readNibble(std::size_t index) const
+    HOST_DEVICE_INLINE std::uint8_t readNibble(std::size_t index) const
     {
         assert(index < nNibbles_);
         assert(nNibbles_ <= maxNibbles_);
@@ -127,7 +134,7 @@ private:
         return (buffer_[byte] >> (4 * offset)) & 0xf;
     }
 
-    bool pushBackNibble(std::uint8_t value)
+    HOST_DEVICE_INLINE bool pushBackNibble(std::uint8_t value)
     {
         if (nNibbles_ >= maxNibbles_) return false;
         writeNibble(nNibbles_++, value);
