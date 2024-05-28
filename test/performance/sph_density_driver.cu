@@ -48,8 +48,9 @@ using namespace cstone;
 
 /* smoothing kernel evaluation functionality borrowed from SPH-EXA */
 
-constexpr int kTableSize = 20000;
-constexpr bool kUseTable = true;
+constexpr int kTableSize                 = 20000;
+constexpr bool kUseTable                 = false;
+constexpr bool kUseCacheResidencyControl = false;
 
 template<typename T>
 __host__ __device__ inline T wharmonic_std(T v)
@@ -794,7 +795,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
         buildNeighborhood(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), nsViewGpu, box, ngmax);
 
     cudaStreamAttrValue streamAttr;
-    if constexpr (kUseTable)
+    if constexpr (kUseTable && kUseCacheResidencyControl)
     {
         int device;
         cudaGetDevice(&device);
@@ -825,7 +826,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     }
     cudaEventSynchronize(events.back());
 
-    if constexpr (kUseTable)
+    if constexpr (kUseTable && kUseCacheResidencyControl)
     {
         streamAttr.accessPolicyWindow.num_bytes = 0;
         cudaStreamSetAttribute(0, cudaStreamAttributeAccessPolicyWindow, &streamAttr);
