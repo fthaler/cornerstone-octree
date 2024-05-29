@@ -45,7 +45,7 @@ class NeighborListCompressorIterator;
 class NeighborListCompressor
 {
 public:
-    HOST_DEVICE_INLINE NeighborListCompressor(void* buffer, std::size_t maxSize)
+    HOST_DEVICE_INLINE NeighborListCompressor(void* buffer, unsigned maxSize)
         : buffer_(reinterpret_cast<std::uint8_t*>(buffer))
         , maxNibbles_(2 * maxSize)
     {
@@ -85,14 +85,14 @@ public:
         return true;
     }
 
-    HOST_DEVICE_INLINE std::size_t size() const { return nNeighbors_; }
-    HOST_DEVICE_INLINE std::size_t nbytes() const { return (nNibbles_ + 1) / 2; }
+    HOST_DEVICE_INLINE unsigned size() const { return nNeighbors_; }
+    HOST_DEVICE_INLINE unsigned nbytes() const { return (nNibbles_ + 1) / 2; }
 
     NeighborListCompressorIterator begin() const;
     NeighborListCompressorIterator end() const;
 
 private:
-    HOST_DEVICE_INLINE void writeNibble(std::size_t index, std::uint8_t value)
+    HOST_DEVICE_INLINE void writeNibble(unsigned index, std::uint8_t value)
     {
         assert(index < nNibbles_);
         assert(nNibbles_ <= maxNibbles_);
@@ -102,7 +102,7 @@ private:
         buffer_[byte]             = (buffer_[byte] & mask) | (value << (4 * offset));
     }
 
-    HOST_DEVICE_INLINE std::uint8_t readNibble(std::size_t index) const
+    HOST_DEVICE_INLINE std::uint8_t readNibble(unsigned index) const
     {
         assert(index < nNibbles_);
         assert(nNibbles_ <= maxNibbles_);
@@ -113,14 +113,14 @@ private:
     friend class NeighborListCompressorIterator;
 
     std::uint8_t* buffer_;
-    std::size_t maxNibbles_, nNibbles_ = 0, nNeighbors_ = 0, ones_ = 0;
+    unsigned maxNibbles_, nNibbles_ = 0, nNeighbors_ = 0, ones_ = 0;
     std::uint32_t prevNbIndex_ = 0;
 };
 
 class NeighborListCompressorIterator
 {
 public:
-    using difference_type   = std::ptrdiff_t;
+    using difference_type   = int;
     using value_type        = std::uint32_t;
     using pointer           = void;
     using reference         = void;
@@ -172,7 +172,7 @@ public:
     }
 
 private:
-    HOST_DEVICE_INLINE NeighborListCompressorIterator(const NeighborListCompressor* compressor, std::size_t i)
+    HOST_DEVICE_INLINE NeighborListCompressorIterator(const NeighborListCompressor* compressor, unsigned i)
         : compressor_(compressor)
         , i_(i)
     {
@@ -204,7 +204,7 @@ private:
     }
 
     const NeighborListCompressor* compressor_ = nullptr;
-    std::size_t i_ = 0, iNext_, onesLeft_ = 0;
+    unsigned i_ = 0, iNext_, onesLeft_ = 0;
     std::uint32_t value_ = 0;
 };
 
