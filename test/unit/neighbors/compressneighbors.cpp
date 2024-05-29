@@ -34,13 +34,13 @@
 
 using namespace cstone;
 
-static_assert(std::input_iterator<NeighborListCompressorIterator>);
+static_assert(std::input_iterator<NeighborListDecompIterator>);
 
 TEST(CompressNeighbors, nibbleBuffer)
 {
     char buffer[100];
 
-    NibbleBuffer nibbles(buffer, sizeof(buffer));
+    NibbleBuffer nibbles(buffer, sizeof(buffer), true);
 
     EXPECT_EQ(nibbles.max_size(), 2 * (sizeof(buffer) - sizeof(unsigned)));
 
@@ -72,10 +72,13 @@ TEST(CompressNeighbors, roundtrip)
     EXPECT_EQ(comp.size(), nbs.size());
     EXPECT_LT(comp.nbytes(), 4 * nbs.size());
 
-    EXPECT_EQ(comp.size(), std::distance(comp.begin(), comp.end()));
+    NeighborListDecompressor decomp(buffer, sizeof(buffer));
+    EXPECT_EQ(comp.nbytes(), decomp.nbytes());
+
+    EXPECT_EQ(comp.size(), std::distance(decomp.begin(), decomp.end()));
 
     std::size_t i = 0;
-    for (auto nb : comp)
+    for (auto nb : decomp)
         EXPECT_EQ(nbs[i++], nb);
     EXPECT_EQ(i, nbs.size());
 }
@@ -93,10 +96,27 @@ TEST(CompressNeighbors, smallBuffer)
     EXPECT_FALSE(comp.push_back(nbs[3]));
 
     EXPECT_EQ(comp.size(), 3);
-    EXPECT_LE(comp.nbytes(), 5);
+    EXPECT_LE(comp.nbytes(), sizeof(buffer));
+
+    NeighborListDecompressor decomp(buffer, sizeof(buffer));
+    EXPECT_EQ(comp.nbytes(), decomp.nbytes());
 
     std::size_t i = 0;
-    for (auto nb : comp)
+    for (auto nb : decomp)
         EXPECT_EQ(nbs[i++], nb);
     EXPECT_EQ(i, comp.size());
+}
+
+TEST(CompressNeighbors, empty)
+{
+    char buffer[100];
+    NeighborListCompressor comp(buffer, sizeof(buffer));
+
+    EXPECT_EQ(comp.size(), 0);
+    EXPECT_LE(comp.nbytes(), sizeof(unsigned));
+
+    NeighborListDecompressor decomp(buffer, sizeof(buffer));
+    EXPECT_EQ(decomp.nbytes(), sizeof(unsigned));
+    EXPECT_EQ(decomp.begin(), decomp.end());
+    EXPECT_EQ(std::distance(decomp.begin(), decomp.end()), 0);
 }

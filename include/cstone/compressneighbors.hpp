@@ -29,13 +29,12 @@
  * @author Felix Thaler <thaler@cscs.ch>
  */
 
-#include <algorithm>
-#include <bit>
 #include <cassert>
 #include <cstdint>
-#include <cstdlib>
+#include <iterator>
 
 #include "cstone/cuda/annotation.hpp"
+#include "cstone/primitives/clz.hpp"
 
 namespace cstone
 {
@@ -43,51 +42,56 @@ namespace cstone
 class NibbleBuffer
 {
 public:
-    NibbleBuffer(void* buffer, unsigned bufferSize, bool clear = true)
+    HOST_DEVICE_FUN NibbleBuffer(void* buffer, unsigned bufferSize, bool clear)
         : buffer_(reinterpret_cast<std::uint8_t*>(buffer) + sizeof(unsigned))
         , maxSize_(2 * (bufferSize - sizeof(unsigned)))
     {
         if (clear) sizeRef() = 0;
     }
 
-    HOST_DEVICE_INLINE void push_back(std::uint8_t value)
+    HOST_DEVICE_FUN void push_back(std::uint8_t value)
     {
         assert(value < 16);
-        const auto [byte, offset] = std::div(sizeRef()++, 2);
-        const std::uint8_t mask   = offset ? 0x0f : 0xf0;
-        buffer_[byte]             = (buffer_[byte] & mask) | (value << (4 * offset));
+        assert(size() < maxSize_);
+        const unsigned byte   = size() / 2;
+        const unsigned offset = size() % 2;
+        ++sizeRef();
+        buffer_[byte] = offset ? (buffer_[byte] & 0x0f) | (value << 4) : value;
     }
 
-    HOST_DEVICE_INLINE std::uint8_t pop_back()
+    HOST_DEVICE_FUN std::uint8_t pop_back()
     {
         std::uint8_t value = (*this)[size() - 1];
         --sizeRef();
         return value;
     }
 
-    HOST_DEVICE_INLINE std::uint8_t operator[](unsigned index) const
+    HOST_DEVICE_FUN std::uint8_t operator[](unsigned index) const
     {
         assert(index < size());
-        const auto [byte, offset] = std::div(index, 2);
+        const unsigned byte   = index / 2;
+        const unsigned offset = index % 2;
         return (buffer_[byte] >> (4 * offset)) & 0xf;
     }
 
-    HOST_DEVICE_INLINE unsigned size() const { return *(reinterpret_cast<const unsigned*>(buffer_) - 1); }
-    HOST_DEVICE_INLINE unsigned max_size() const { return maxSize_; }
+    HOST_DEVICE_FUN unsigned size() const { return *(reinterpret_cast<const unsigned*>(buffer_) - 1); }
+    HOST_DEVICE_FUN unsigned max_size() const { return maxSize_; }
+
+    HOST_DEVICE_FUN unsigned nbytes() const { return sizeof(unsigned) + size() / 2; }
 
 private:
-    HOST_DEVICE_INLINE unsigned& sizeRef() { return *(reinterpret_cast<unsigned*>(buffer_) - 1); }
+    HOST_DEVICE_FUN unsigned& sizeRef() { return *(reinterpret_cast<unsigned*>(buffer_) - 1); }
 
     std::uint8_t* buffer_;
     unsigned maxSize_;
 };
 
-class NeighborListCompressorIterator;
+class NeighborListDecompIterator;
 
 class NeighborListCompressor
 {
 public:
-    HOST_DEVICE_INLINE NeighborListCompressor(void* buffer, unsigned bufferSize)
+    HOST_DEVICE_FUN NeighborListCompressor(void* buffer, unsigned bufferSize)
         : nibbles_(buffer, bufferSize, true)
     {
     }
@@ -97,7 +101,7 @@ public:
     NeighborListCompressor(NeighborListCompressor&&)                 = default;
     NeighborListCompressor& operator=(NeighborListCompressor&&)      = default;
 
-    HOST_DEVICE_INLINE bool push_back(std::uint32_t nbIndex)
+    HOST_DEVICE_FUN bool push_back(std::uint32_t nbIndex)
     {
         const std::uint32_t value = nbIndex - prevNbIndex_;
         prevNbIndex_              = nbIndex;
@@ -115,7 +119,9 @@ public:
         }
         else
         {
-            const int n = std::max((std::bit_width(value) + 3) / 4, 1);
+            const int bits    = 32 - ::countLeadingZeros(value);
+            const int nibbles = (bits + 3) / 4;
+            const int n       = nibbles < 1 ? 1 : nibbles;
             if (nibbles_.size() + 1 + n >= nibbles_.max_size()) return false;
             nibbles_.push_back(n);
             for (int i = 0; i < n; ++i)
@@ -126,21 +132,35 @@ public:
         return true;
     }
 
-    HOST_DEVICE_INLINE unsigned size() const { return nNeighbors_; }
-    HOST_DEVICE_INLINE unsigned nbytes() const { return (nibbles_.size() + 1) / 2; }
-
-    NeighborListCompressorIterator begin() const;
-    NeighborListCompressorIterator end() const;
+    HOST_DEVICE_FUN unsigned size() const { return nNeighbors_; }
+    HOST_DEVICE_FUN unsigned nbytes() const { return nibbles_.nbytes(); }
 
 private:
-    friend class NeighborListCompressorIterator;
-
     NibbleBuffer nibbles_;
     unsigned nNeighbors_ = 0, ones_ = 0;
     std::uint32_t prevNbIndex_ = 0;
 };
 
-class NeighborListCompressorIterator
+class NeighborListDecompressor
+{
+public:
+    HOST_DEVICE_FUN explicit NeighborListDecompressor(const void* buffer, unsigned bufferSize)
+        : nibbles_(const_cast<void*>(buffer), bufferSize, false)
+    {
+    }
+
+    HOST_DEVICE_FUN unsigned nbytes() const { return nibbles_.nbytes(); }
+
+    HOST_DEVICE_FUN NeighborListDecompIterator begin() const;
+    HOST_DEVICE_FUN NeighborListDecompIterator end() const;
+
+private:
+    friend class NeighborListDecompIterator;
+
+    NibbleBuffer nibbles_;
+};
+
+class NeighborListDecompIterator
 {
 public:
     using difference_type   = int;
@@ -149,30 +169,30 @@ public:
     using reference         = void;
     using iterator_category = std::input_iterator_tag;
 
-    NeighborListCompressorIterator(const NeighborListCompressorIterator& other)            = default;
-    NeighborListCompressorIterator(NeighborListCompressorIterator&& other)                 = default;
-    NeighborListCompressorIterator& operator=(const NeighborListCompressorIterator& other) = default;
-    NeighborListCompressorIterator& operator=(NeighborListCompressorIterator&& other)      = default;
+    NeighborListDecompIterator(const NeighborListDecompIterator& other)            = default;
+    NeighborListDecompIterator(NeighborListDecompIterator&& other)                 = default;
+    NeighborListDecompIterator& operator=(const NeighborListDecompIterator& other) = default;
+    NeighborListDecompIterator& operator=(NeighborListDecompIterator&& other)      = default;
 
-    HOST_DEVICE_INLINE static NeighborListCompressorIterator begin(const NeighborListCompressor& compressor)
+    HOST_DEVICE_FUN static NeighborListDecompIterator begin(const NeighborListDecompressor& compressor)
     {
         return {&compressor, 0};
     }
-    HOST_DEVICE_INLINE static NeighborListCompressorIterator end(const NeighborListCompressor& compressor)
+    HOST_DEVICE_FUN static NeighborListDecompIterator end(const NeighborListDecompressor& compressor)
     {
         return {&compressor, compressor.nibbles_.size()};
     }
 
-    HOST_DEVICE_INLINE bool operator==(const NeighborListCompressorIterator& other) const
+    HOST_DEVICE_FUN bool operator==(const NeighborListDecompIterator& other) const
     {
         return i_ == other.i_ && onesLeft_ == other.onesLeft_;
     }
 
-    HOST_DEVICE_INLINE bool operator!=(const NeighborListCompressorIterator& other) const { return !(*this == other); }
+    HOST_DEVICE_FUN bool operator!=(const NeighborListDecompIterator& other) const { return !(*this == other); }
 
-    HOST_DEVICE_INLINE std::uint32_t operator*() const { return value_; }
+    HOST_DEVICE_FUN std::uint32_t operator*() const { return value_; }
 
-    HOST_DEVICE_INLINE NeighborListCompressorIterator& operator++()
+    HOST_DEVICE_FUN NeighborListDecompIterator& operator++()
     {
         if (onesLeft_ > 0)
         {
@@ -182,12 +202,12 @@ public:
         else
         {
             i_ = iNext_;
-            if (i_ < compressor_->nibbles_.size()) readValue();
+            if (i_ < decomp_->nibbles_.size()) readValue();
         }
         return *this;
     }
 
-    HOST_DEVICE_INLINE std::uint32_t operator++(int)
+    HOST_DEVICE_FUN std::uint32_t operator++(int)
     {
         std::uint32_t value = **this;
         ++*this;
@@ -195,17 +215,18 @@ public:
     }
 
 private:
-    HOST_DEVICE_INLINE NeighborListCompressorIterator(const NeighborListCompressor* compressor, unsigned i)
-        : compressor_(compressor)
+    HOST_DEVICE_FUN NeighborListDecompIterator(const NeighborListDecompressor* compressor, unsigned i)
+        : decomp_(compressor)
         , i_(i)
     {
-        if (i == 0) readValue();
+        assert(decomp_);
+        if (i == 0 && decomp_->nibbles_.size()) readValue();
     }
 
-    HOST_DEVICE_INLINE void readValue()
+    HOST_DEVICE_FUN void readValue()
     {
         iNext_                 = i_;
-        const int n            = compressor_->nibbles_[iNext_++];
+        const int n            = decomp_->nibbles_[iNext_++];
         std::uint32_t previous = value_;
         if (n > 8)
         {
@@ -217,8 +238,8 @@ private:
             value_ = 0;
             for (int j = 0; j < n; ++j)
             {
-                assert(iNext_ < compressor_->nibbles_.size());
-                const std::uint32_t d = compressor_->nibbles_[iNext_++];
+                assert(iNext_ < decomp_->nibbles_.size());
+                const std::uint32_t d = decomp_->nibbles_[iNext_++];
                 value_ |= d << (4 * j);
             }
             value_ += previous;
@@ -226,19 +247,19 @@ private:
         }
     }
 
-    const NeighborListCompressor* compressor_ = nullptr;
+    const NeighborListDecompressor* decomp_ = nullptr;
     unsigned i_ = 0, iNext_, onesLeft_ = 0;
     std::uint32_t value_ = 0;
 };
 
-HOST_DEVICE_INLINE NeighborListCompressorIterator NeighborListCompressor::begin() const
+HOST_DEVICE_FUN NeighborListDecompIterator NeighborListDecompressor::begin() const
 {
-    return NeighborListCompressorIterator::begin(*this);
+    return NeighborListDecompIterator::begin(*this);
 }
 
-HOST_DEVICE_INLINE NeighborListCompressorIterator NeighborListCompressor::end() const
+HOST_DEVICE_FUN NeighborListDecompIterator NeighborListDecompressor::end() const
 {
-    return NeighborListCompressorIterator::end(*this);
+    return NeighborListDecompIterator::end(*this);
 }
 
 } // namespace cstone
