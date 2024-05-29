@@ -40,6 +40,8 @@
 namespace cstone
 {
 
+class NeighborListCompressorIterator;
+
 class NeighborListCompressor
 {
 public:
@@ -64,7 +66,8 @@ public:
             if (ones_) { writeNibble(nNibbles_ - 1, readNibble(nNibbles_ - 1) + 1); }
             else
             {
-                if (!pushBackNibble(9)) return false;
+                if (nNibbles_ >= maxNibbles_) return false;
+                writeNibble(nNibbles_++, 9);
             }
             assert(readNibble(nNibbles_ - 1) == ones_ + 9);
             if (++ones_ >= 7) ones_ = 0;
@@ -72,48 +75,21 @@ public:
         else
         {
             const int n = std::max((std::bit_width(value) + 3) / 4, 1);
-            if (!pushBackNibble(n)) return false;
+            if (nNibbles_ + 1 + n >= maxNibbles_) return false;
+            writeNibble(nNibbles_++, n);
             for (int i = 0; i < n; ++i)
-                if (!pushBackNibble((value >> (4 * i)) & 0xf)) return false;
+                writeNibble(nNibbles_++, (value >> (4 * i)) & 0xf);
             ones_ = 0;
         }
         ++nNeighbors_;
         return true;
     }
 
-    HOST_DEVICE_INLINE void decompress(std::uint32_t* buffer, std::size_t maxNeighbors) const
-    {
-        std::size_t i          = 0;
-        std::uint32_t previous = 0;
-        while (i < nNibbles_)
-        {
-            const int n = readNibble(i++);
-            if (n > 8)
-            {
-                for (int j = 0; j < n - 8; ++j)
-                {
-                    if (!maxNeighbors--) return;
-                    *(buffer++) = ++previous;
-                }
-            }
-            else
-            {
-                std::uint32_t value = 0;
-                for (int j = 0; j < n; ++j)
-                {
-                    if (i >= nNibbles_) return;
-                    const std::uint32_t d = readNibble(i++);
-                    value |= d << (4 * j);
-                }
-                previous += value;
-                if (!maxNeighbors--) return;
-                *(buffer++) = previous;
-            }
-        }
-    }
-
     HOST_DEVICE_INLINE std::size_t size() const { return nNeighbors_; }
     HOST_DEVICE_INLINE std::size_t nbytes() const { return (nNibbles_ + 1) / 2; }
+
+    NeighborListCompressorIterator begin() const;
+    NeighborListCompressorIterator end() const;
 
 private:
     HOST_DEVICE_INLINE void writeNibble(std::size_t index, std::uint8_t value)
@@ -134,16 +110,112 @@ private:
         return (buffer_[byte] >> (4 * offset)) & 0xf;
     }
 
-    HOST_DEVICE_INLINE bool pushBackNibble(std::uint8_t value)
-    {
-        if (nNibbles_ >= maxNibbles_) return false;
-        writeNibble(nNibbles_++, value);
-        return true;
-    }
+    friend class NeighborListCompressorIterator;
 
     std::uint8_t* buffer_;
     std::size_t maxNibbles_, nNibbles_ = 0, nNeighbors_ = 0, ones_ = 0;
     std::uint32_t prevNbIndex_ = 0;
 };
+
+class NeighborListCompressorIterator
+{
+public:
+    using difference_type   = std::ptrdiff_t;
+    using value_type        = std::uint32_t;
+    using pointer           = void;
+    using reference         = void;
+    using iterator_category = std::input_iterator_tag;
+
+    NeighborListCompressorIterator(const NeighborListCompressorIterator& other)            = default;
+    NeighborListCompressorIterator(NeighborListCompressorIterator&& other)                 = default;
+    NeighborListCompressorIterator& operator=(const NeighborListCompressorIterator& other) = default;
+    NeighborListCompressorIterator& operator=(NeighborListCompressorIterator&& other)      = default;
+
+    HOST_DEVICE_INLINE static NeighborListCompressorIterator begin(const NeighborListCompressor& compressor)
+    {
+        return {&compressor, 0};
+    }
+    HOST_DEVICE_INLINE static NeighborListCompressorIterator end(const NeighborListCompressor& compressor)
+    {
+        return {&compressor, compressor.nNibbles_};
+    }
+
+    HOST_DEVICE_INLINE bool operator==(const NeighborListCompressorIterator& other) const
+    {
+        return i_ == other.i_ && onesLeft_ == other.onesLeft_;
+    }
+
+    HOST_DEVICE_INLINE bool operator!=(const NeighborListCompressorIterator& other) const { return !(*this == other); }
+
+    HOST_DEVICE_INLINE std::uint32_t operator*() const { return value_; }
+
+    HOST_DEVICE_INLINE NeighborListCompressorIterator& operator++()
+    {
+        if (onesLeft_ > 0)
+        {
+            --onesLeft_;
+            ++value_;
+        }
+        else
+        {
+            i_ = iNext_;
+            if (i_ < compressor_->nNibbles_) readValue();
+        }
+        return *this;
+    }
+
+    HOST_DEVICE_INLINE std::uint32_t operator++(int)
+    {
+        std::uint32_t value = **this;
+        ++*this;
+        return value;
+    }
+
+private:
+    HOST_DEVICE_INLINE NeighborListCompressorIterator(const NeighborListCompressor* compressor, std::size_t i)
+        : compressor_(compressor)
+        , i_(i)
+    {
+        if (i == 0) readValue();
+    }
+
+    HOST_DEVICE_INLINE void readValue()
+    {
+        iNext_                 = i_;
+        const int n            = compressor_->readNibble(iNext_++);
+        std::uint32_t previous = value_;
+        if (n > 8)
+        {
+            value_    = ++previous;
+            onesLeft_ = n - 9;
+        }
+        else
+        {
+            value_ = 0;
+            for (int j = 0; j < n; ++j)
+            {
+                assert(iNext_ < compressor_->nNibbles_);
+                const std::uint32_t d = compressor_->readNibble(iNext_++);
+                value_ |= d << (4 * j);
+            }
+            value_ += previous;
+            onesLeft_ = 0;
+        }
+    }
+
+    const NeighborListCompressor* compressor_ = nullptr;
+    std::size_t i_ = 0, iNext_, onesLeft_ = 0;
+    std::uint32_t value_ = 0;
+};
+
+HOST_DEVICE_INLINE NeighborListCompressorIterator NeighborListCompressor::begin() const
+{
+    return NeighborListCompressorIterator::begin(*this);
+}
+
+HOST_DEVICE_INLINE NeighborListCompressorIterator NeighborListCompressor::end() const
+{
+    return NeighborListCompressorIterator::end(*this);
+}
 
 } // namespace cstone

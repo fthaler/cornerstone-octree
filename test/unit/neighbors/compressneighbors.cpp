@@ -34,6 +34,8 @@
 
 using namespace cstone;
 
+static_assert(std::input_iterator<NeighborListCompressorIterator>);
+
 TEST(CompressNeighbors, roundtrip)
 {
     std::array<std::uint32_t, 17> nbs = {300, 301, 302, 100, 101, 200, 400, 402, 403,
@@ -48,11 +50,12 @@ TEST(CompressNeighbors, roundtrip)
     EXPECT_EQ(comp.size(), nbs.size());
     EXPECT_LT(comp.nbytes(), 4 * nbs.size());
 
-    std::array<std::uint32_t, nbs.size()> nbs_roundtrip;
-    comp.decompress(nbs_roundtrip.data(), nbs_roundtrip.size());
+    EXPECT_EQ(comp.size(), std::distance(comp.begin(), comp.end()));
 
-    for (std::size_t i = 0; i < nbs.size(); ++i)
-        EXPECT_EQ(nbs[i], nbs_roundtrip[i]);
+    std::size_t i = 0;
+    for (auto nb : comp)
+        EXPECT_EQ(nbs[i++], nb);
+    EXPECT_EQ(i, nbs.size());
 }
 
 TEST(CompressNeighbors, smallBuffer)
@@ -70,9 +73,8 @@ TEST(CompressNeighbors, smallBuffer)
     EXPECT_EQ(comp.size(), 3);
     EXPECT_LE(comp.nbytes(), 5);
 
-    std::array<std::uint32_t, nbs.size()> nbs_roundtrip;
-    comp.decompress(nbs_roundtrip.data(), nbs_roundtrip.size());
-
-    for (std::size_t i = 0; i < comp.size(); ++i)
-        EXPECT_EQ(nbs[i], nbs_roundtrip[i]);
+    std::size_t i = 0;
+    for (auto nb : comp)
+        EXPECT_EQ(nbs[i++], nb);
+    EXPECT_EQ(i, comp.size());
 }
