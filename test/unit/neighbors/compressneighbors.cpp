@@ -84,7 +84,7 @@ TEST(CompressNeighbors, smallBuffer)
 {
     std::array<std::uint32_t, 4> nbs = {300, 301, 302, 100};
 
-    char buffer[5];
+    char buffer[sizeof(unsigned) + 5];
     NeighborListCompressor comp(buffer, sizeof(buffer));
 
     EXPECT_TRUE(comp.add(nbs[0]));
