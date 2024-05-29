@@ -40,6 +40,48 @@
 namespace cstone
 {
 
+class NibbleBuffer
+{
+public:
+    NibbleBuffer(void* buffer, unsigned bufferSize, bool clear = true)
+        : buffer_(reinterpret_cast<std::uint8_t*>(buffer) + sizeof(unsigned))
+        , maxSize_(2 * (bufferSize - sizeof(unsigned)))
+    {
+        if (clear) sizeRef() = 0;
+    }
+
+    HOST_DEVICE_INLINE void push_back(std::uint8_t value)
+    {
+        assert(value < 16);
+        const auto [byte, offset] = std::div(sizeRef()++, 2);
+        const std::uint8_t mask   = offset ? 0x0f : 0xf0;
+        buffer_[byte]             = (buffer_[byte] & mask) | (value << (4 * offset));
+    }
+
+    HOST_DEVICE_INLINE std::uint8_t pop_back()
+    {
+        std::uint8_t value = (*this)[size() - 1];
+        --sizeRef();
+        return value;
+    }
+
+    HOST_DEVICE_INLINE std::uint8_t operator[](unsigned index) const
+    {
+        assert(index < size());
+        const auto [byte, offset] = std::div(index, 2);
+        return (buffer_[byte] >> (4 * offset)) & 0xf;
+    }
+
+    HOST_DEVICE_INLINE unsigned size() const { return *(reinterpret_cast<const unsigned*>(buffer_) - 1); }
+    HOST_DEVICE_INLINE unsigned max_size() const { return maxSize_; }
+
+private:
+    HOST_DEVICE_INLINE unsigned& sizeRef() { return *(reinterpret_cast<unsigned*>(buffer_) - 1); }
+
+    std::uint8_t* buffer_;
+    unsigned maxSize_;
+};
+
 class NeighborListCompressorIterator;
 
 class NeighborListCompressor

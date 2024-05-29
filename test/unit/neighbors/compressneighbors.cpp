@@ -36,6 +36,28 @@ using namespace cstone;
 
 static_assert(std::input_iterator<NeighborListCompressorIterator>);
 
+TEST(CompressNeighbors, nibbleBuffer)
+{
+    char buffer[100];
+
+    NibbleBuffer nibbles(buffer, sizeof(buffer));
+
+    EXPECT_EQ(nibbles.max_size(), 2 * (sizeof(buffer) - sizeof(unsigned)));
+
+    for (unsigned i = 0; i < nibbles.max_size(); ++i)
+        nibbles.push_back(i % 16);
+
+    EXPECT_EQ(nibbles.size(), nibbles.max_size());
+
+    for (unsigned i = 0; i < nibbles.max_size(); ++i)
+        EXPECT_EQ(nibbles[i], i % 16);
+
+    for (int i = nibbles.max_size() - 1; i >= 0; --i)
+        EXPECT_EQ(nibbles.pop_back(), i % 16);
+
+    EXPECT_EQ(nibbles.size(), 0);
+}
+
 TEST(CompressNeighbors, roundtrip)
 {
     std::array<std::uint32_t, 17> nbs = {300, 301, 302, 100, 101, 200, 400, 402, 403,
