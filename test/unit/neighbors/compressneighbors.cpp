@@ -67,7 +67,7 @@ TEST(CompressNeighbors, roundtrip)
     NeighborListCompressor comp(buffer, sizeof(buffer));
 
     for (auto nb : nbs)
-        EXPECT_TRUE(comp.add(nb));
+        EXPECT_TRUE(comp.push_back(nb));
 
     EXPECT_EQ(comp.size(), nbs.size());
     EXPECT_LT(comp.nbytes(), 4 * nbs.size());
@@ -87,10 +87,10 @@ TEST(CompressNeighbors, smallBuffer)
     char buffer[sizeof(unsigned) + 5];
     NeighborListCompressor comp(buffer, sizeof(buffer));
 
-    EXPECT_TRUE(comp.add(nbs[0]));
-    EXPECT_TRUE(comp.add(nbs[1]));
-    EXPECT_TRUE(comp.add(nbs[2]));
-    EXPECT_FALSE(comp.add(nbs[3]));
+    EXPECT_TRUE(comp.push_back(nbs[0]));
+    EXPECT_TRUE(comp.push_back(nbs[1]));
+    EXPECT_TRUE(comp.push_back(nbs[2]));
+    EXPECT_FALSE(comp.push_back(nbs[3]));
 
     EXPECT_EQ(comp.size(), 3);
     EXPECT_LE(comp.nbytes(), 5);

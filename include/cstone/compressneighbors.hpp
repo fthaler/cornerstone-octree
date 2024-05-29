@@ -97,7 +97,7 @@ public:
     NeighborListCompressor(NeighborListCompressor&&)                 = default;
     NeighborListCompressor& operator=(NeighborListCompressor&&)      = default;
 
-    HOST_DEVICE_INLINE bool add(std::uint32_t nbIndex)
+    HOST_DEVICE_INLINE bool push_back(std::uint32_t nbIndex)
     {
         const std::uint32_t value = nbIndex - prevNbIndex_;
         prevNbIndex_              = nbIndex;
