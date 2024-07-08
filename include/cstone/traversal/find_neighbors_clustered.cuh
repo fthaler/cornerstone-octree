@@ -983,14 +983,14 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
     block.sync();
     const unsigned nextTargetIdx = sharedTargetIdx;
     pipeline.producer_acquire();
-    cuda::memcpy_async(block, xShared, x + nextTargetIdx * GpuConfig::warpSize, sizeof(Tc) * GpuConfig::warpSize,
-                       pipeline);
-    cuda::memcpy_async(block, yShared, y + nextTargetIdx * GpuConfig::warpSize, sizeof(Tc) * GpuConfig::warpSize,
-                       pipeline);
-    cuda::memcpy_async(block, zShared, z + nextTargetIdx * GpuConfig::warpSize, sizeof(Tc) * GpuConfig::warpSize,
-                       pipeline);
-    cuda::memcpy_async(block, hShared, h + nextTargetIdx * GpuConfig::warpSize, sizeof(Th) * GpuConfig::warpSize,
-                       pipeline);
+    cuda::memcpy_async(block, xShared, x + nextTargetIdx * GpuConfig::warpSize,
+                       cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), pipeline);
+    cuda::memcpy_async(block, yShared, y + nextTargetIdx * GpuConfig::warpSize,
+                       cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), pipeline);
+    cuda::memcpy_async(block, zShared, z + nextTargetIdx * GpuConfig::warpSize,
+                       cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), pipeline);
+    cuda::memcpy_async(block, hShared, h + nextTargetIdx * GpuConfig::warpSize,
+                       cuda::aligned_size_t<16>(sizeof(Th) * GpuConfig::warpSize), pipeline);
     pipeline.producer_commit();
 
     while (true)
@@ -1015,13 +1015,13 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
         {
             pipeline.producer_acquire();
             cuda::memcpy_async(block, xShared, x + nextTargetIdx * GpuConfig::warpSize,
-                               sizeof(Tc) * GpuConfig::warpSize, pipeline);
+                               cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), pipeline);
             cuda::memcpy_async(block, yShared, y + nextTargetIdx * GpuConfig::warpSize,
-                               sizeof(Tc) * GpuConfig::warpSize, pipeline);
+                               cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), pipeline);
             cuda::memcpy_async(block, zShared, z + nextTargetIdx * GpuConfig::warpSize,
-                               sizeof(Tc) * GpuConfig::warpSize, pipeline);
+                               cuda::aligned_size_t<16>(sizeof(Tc) * GpuConfig::warpSize), pipeline);
             cuda::memcpy_async(block, hShared, h + nextTargetIdx * GpuConfig::warpSize,
-                               sizeof(Th) * GpuConfig::warpSize, pipeline);
+                               cuda::aligned_size_t<16>(sizeof(Th) * GpuConfig::warpSize), pipeline);
             pipeline.producer_commit();
         }
 
