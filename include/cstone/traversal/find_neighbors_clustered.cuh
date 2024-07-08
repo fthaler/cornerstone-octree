@@ -972,8 +972,8 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
     alignas(16) __shared__ Th hShared[GpuConfig::warpSize];
     __shared__ int sharedTargetIdx;
 
-    __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 1> pipeline_state;
-    auto pipeline = cuda::make_pipeline(block, &pipeline_state);
+    __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 1> pipelineState;
+    auto pipeline = cuda::make_pipeline(block, &pipelineState);
 
     constexpr auto pbc = BoundaryType::periodic;
 
