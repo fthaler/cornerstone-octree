@@ -705,13 +705,14 @@ void computeDensityClustered(
     };
 
     unsigned ncmax = ngmax;
-    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, GpuConfig::warpSize / ClusterConfig::iSize};
+    // dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, GpuConfig::warpSize / ClusterConfig::iSize};
     // cudaFuncSetAttribute(findNeighborsClustered4<T, T, decltype(computeDensity), T>,
     // cudaFuncAttributePreferredSharedMemoryCarveout, 1);
     // cudaFuncSetCacheConfig(findNeighborsClustered4<T, T, decltype(computeDensity), T>, cudaFuncCachePreferL1);
-    findNeighborsClustered7<<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box,
-                                                      rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax,
-                                                      computeDensity, rho);
+    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 1024 / GpuConfig::warpSize};
+    findNeighborsClustered8<1024 / GpuConfig::warpSize>
+        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
+                                   rawPtr(clusterNeighbors), ncmax, computeDensity, rho);
 }
 
 template<class Tc, class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeDensityF>
