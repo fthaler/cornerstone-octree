@@ -709,7 +709,7 @@ void computeDensityClustered(
     // cudaFuncSetAttribute(findNeighborsClustered4<T, T, decltype(computeDensity), T>,
     // cudaFuncAttributePreferredSharedMemoryCarveout, 1);
     // cudaFuncSetCacheConfig(findNeighborsClustered4<T, T, decltype(computeDensity), T>, cudaFuncCachePreferL1);
-    findNeighborsClustered6<<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box,
+    findNeighborsClustered7<<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box,
                                                       rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax,
                                                       computeDensity, rho);
 }
