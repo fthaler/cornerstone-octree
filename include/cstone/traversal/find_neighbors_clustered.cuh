@@ -1309,10 +1309,10 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
         };
 
         Tr sum                               = 0;
-        const auto computeClusterInteraction = [&](unsigned jCluster, bool includeSelf)
+        const auto computeClusterInteraction = [&](unsigned jCluster)
         {
             const unsigned j = jCluster * ClusterConfig::jSize + block.thread_index().y;
-            if (i < lastBody & j < lastBody & (includeSelf | (j / ClusterConfig::iSize != iCluster)))
+            if (i < lastBody & j < lastBody)
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
@@ -1326,14 +1326,14 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
                          (ClusterConfig::iSize > ClusterConfig::jSize ? ClusterConfig::iSize : ClusterConfig::jSize)) /
                             ClusterConfig::jSize;
              ++jCluster)
-            computeClusterInteraction(jCluster, true);
+            computeClusterInteraction(jCluster);
 
         const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], ncmax);
 #pragma unroll ClusterConfig::jSize
         for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
         {
             const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
-            computeClusterInteraction(jCluster, false);
+            computeClusterInteraction(jCluster);
         }
 
 #pragma unroll
