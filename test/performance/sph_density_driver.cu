@@ -709,8 +709,10 @@ void computeDensityClustered(
     // cudaFuncSetAttribute(findNeighborsClustered4<T, T, decltype(computeDensity), T>,
     // cudaFuncAttributePreferredSharedMemoryCarveout, 1);
     // cudaFuncSetCacheConfig(findNeighborsClustered4<T, T, decltype(computeDensity), T>, cudaFuncCachePreferL1);
-    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 1024 / GpuConfig::warpSize};
-    findNeighborsClustered8<1024 / GpuConfig::warpSize>
+    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 128 / GpuConfig::warpSize};
+    numBlocks      = 1 << 14;
+    // numBlocks = std::atoi(std::getenv("NUMBLOCKS"));
+    findNeighborsClustered9<128 / GpuConfig::warpSize>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), ncmax, computeDensity, rho);
 }
