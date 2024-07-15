@@ -1217,7 +1217,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
     }
 }
 
-template<int warpsPerBlock, class Tc, class Th, class Contribution, class Tr>
+template<int warpsPerBlock, bool bypassL1CacheOnLoads = true, class Tc, class Th, class Contribution, class Tr>
 __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPerBlock) void findNeighborsClustered8(
     cstone::LocalIndex firstBody,
     cstone::LocalIndex lastBody,
@@ -1254,26 +1254,51 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     auto iPipeline = cuda::make_pipeline();
 
     constexpr auto pbc = BoundaryType::periodic;
+    const bool anyPbc  = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
 
     const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
     unsigned iCluster = 0, nextICluster = 0;
 
     const auto preloadNextICluster = [&]
     {
-        if (block.thread_index().y == 0)
+        iPipeline.producer_acquire();
+        if constexpr (bypassL1CacheOnLoads)
         {
-            const unsigned nextI = nextICluster * ClusterConfig::iSize + block.thread_index().x;
-            iPipeline.producer_acquire();
-            cuda::memcpy_async(thread, &xiShared[block.thread_index().x], &x[nextI],
-                               cuda::aligned_size_t<sizeof(Tc)>(sizeof(Tc)), iPipeline);
-            cuda::memcpy_async(thread, &yiShared[block.thread_index().x], &y[nextI],
-                               cuda::aligned_size_t<sizeof(Tc)>(sizeof(Tc)), iPipeline);
-            cuda::memcpy_async(thread, &ziShared[block.thread_index().x], &z[nextI],
-                               cuda::aligned_size_t<sizeof(Tc)>(sizeof(Tc)), iPipeline);
-            cuda::memcpy_async(thread, &hiShared[block.thread_index().x], &h[nextI],
-                               cuda::aligned_size_t<sizeof(Th)>(sizeof(Th)), iPipeline);
-            iPipeline.producer_commit();
+            constexpr int numTcPer16Bytes = 16 / sizeof(Tc);
+            constexpr int numThPer16Bytes = 16 / sizeof(Th);
+            if (warp.thread_rank() < ClusterConfig::iSize / numTcPer16Bytes)
+            {
+                const unsigned nextI = nextICluster * ClusterConfig::iSize + warp.thread_rank() * numTcPer16Bytes;
+                cuda::memcpy_async(thread, &xiShared[warp.thread_rank() * numTcPer16Bytes], &x[nextI],
+                                   cuda::aligned_size_t<16>(16), iPipeline);
+                cuda::memcpy_async(thread, &yiShared[warp.thread_rank() * numTcPer16Bytes], &y[nextI],
+                                   cuda::aligned_size_t<16>(16), iPipeline);
+                cuda::memcpy_async(thread, &ziShared[warp.thread_rank() * numTcPer16Bytes], &z[nextI],
+                                   cuda::aligned_size_t<16>(16), iPipeline);
+            }
+            if (warp.thread_rank() < ClusterConfig::iSize / numThPer16Bytes)
+            {
+                const unsigned nextI = nextICluster * ClusterConfig::iSize + warp.thread_rank() * numThPer16Bytes;
+                cuda::memcpy_async(thread, &hiShared[warp.thread_rank() * numThPer16Bytes], &h[nextI],
+                                   cuda::aligned_size_t<16>(16), iPipeline);
+            }
         }
+        else
+        {
+            if (block.thread_index().y == 0)
+            {
+                const unsigned nextI = nextICluster * ClusterConfig::iSize + block.thread_index().x;
+                cuda::memcpy_async(thread, &xiShared[block.thread_index().x], &x[nextI],
+                                   cuda::aligned_size_t<sizeof(Tc)>(sizeof(Tc)), iPipeline);
+                cuda::memcpy_async(thread, &yiShared[block.thread_index().x], &y[nextI],
+                                   cuda::aligned_size_t<sizeof(Tc)>(sizeof(Tc)), iPipeline);
+                cuda::memcpy_async(thread, &ziShared[block.thread_index().x], &z[nextI],
+                                   cuda::aligned_size_t<sizeof(Tc)>(sizeof(Tc)), iPipeline);
+                cuda::memcpy_async(thread, &hiShared[block.thread_index().x], &h[nextI],
+                                   cuda::aligned_size_t<sizeof(Th)>(sizeof(Th)), iPipeline);
+            }
+        }
+        iPipeline.producer_commit();
     };
 
     if (warp.thread_rank() == 0) nextICluster = atomicAdd(&targetCounterGlob, 1);
@@ -1288,7 +1313,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 
         const unsigned i = iCluster * ClusterConfig::iSize + block.thread_index().x;
 
-        if (block.thread_index().y == 0) iPipeline.consumer_wait();
+        iPipeline.consumer_wait();
         warp.sync();
         const Vec3<Tc> iPos = {xiShared[block.thread_index().x], yiShared[block.thread_index().x],
                                ziShared[block.thread_index().x]};
@@ -1296,14 +1321,13 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 
         if (warp.thread_rank() == 0) nextICluster = atomicAdd(&targetCounterGlob, 1);
         nextICluster = warp.shfl(nextICluster, 0);
-        if (block.thread_index().y == 0) iPipeline.consumer_release();
+        iPipeline.consumer_release();
         if (nextICluster < numIClusters) preloadNextICluster();
 
         // const bool usePbc   = warp.any(anyPbc & !insideBox(iPos, {2 * hi, 2 * hi, 2 * hi}, box));
 
         const auto distSq = [&](const Vec3<Tc>& jPos)
         {
-            const bool anyPbc = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
             return anyPbc ? distanceSq<true>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box)
                           : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
         };
