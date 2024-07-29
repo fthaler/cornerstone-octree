@@ -74,13 +74,13 @@ public:
         return (buffer_[byte] >> (4 * offset)) & 0xf;
     }
 
-    HOST_DEVICE_FUN unsigned size() const { return *(reinterpret_cast<const unsigned*>(buffer_) - 1); }
+    HOST_DEVICE_FUN unsigned size() const { return reinterpret_cast<const unsigned*>(buffer_)[-1]; }
     HOST_DEVICE_FUN unsigned max_size() const { return maxSize_; }
 
     HOST_DEVICE_FUN unsigned nbytes() const { return sizeof(unsigned) + size() / 2; }
 
 private:
-    HOST_DEVICE_FUN unsigned& sizeRef() { return *(reinterpret_cast<unsigned*>(buffer_) - 1); }
+    HOST_DEVICE_FUN unsigned& sizeRef() { return reinterpret_cast<unsigned*>(buffer_)[-1]; }
 
     std::uint8_t* buffer_;
     unsigned maxSize_;
