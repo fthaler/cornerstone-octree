@@ -120,3 +120,66 @@ TEST(CompressNeighbors, empty)
     EXPECT_EQ(decomp.begin(), decomp.end());
     EXPECT_EQ(std::distance(decomp.begin(), decomp.end()), 0);
 }
+
+TEST(CompressNeighborsSimple, roundtrip)
+{
+    std::array<std::uint32_t, 17> nbs = {300, 301, 302, 100, 101, 200, 400, 402, 403,
+                                         404, 405, 406, 407, 408, 409, 410, 411};
+
+    char buffer[4 * nbs.size()];
+    SimpleNeighborListCompressor comp(buffer, sizeof(buffer));
+
+    for (auto nb : nbs)
+        EXPECT_TRUE(comp.push_back(nb));
+
+    EXPECT_EQ(comp.size(), nbs.size());
+    EXPECT_LT(comp.nbytes(), 4 * nbs.size());
+
+    SimpleNeighborListDecompressor decomp(buffer, sizeof(buffer));
+    EXPECT_EQ(comp.nbytes(), decomp.nbytes());
+
+    EXPECT_EQ(comp.size(), std::distance(decomp.begin(), decomp.end()));
+
+    std::size_t i = 0;
+    for (auto nb : decomp)
+        EXPECT_EQ(nbs[i++], nb);
+    EXPECT_EQ(i, nbs.size());
+}
+
+TEST(CompressNeighborsSimple, smallBuffer)
+{
+    std::array<std::uint32_t, 4> nbs = {300, 301, 302, 100};
+
+    char buffer[sizeof(std::uint32_t) * 3];
+    SimpleNeighborListCompressor comp(buffer, sizeof(buffer));
+
+    EXPECT_TRUE(comp.push_back(nbs[0]));
+    EXPECT_TRUE(comp.push_back(nbs[1]));
+    EXPECT_TRUE(comp.push_back(nbs[2]));
+    EXPECT_FALSE(comp.push_back(nbs[3]));
+
+    EXPECT_EQ(comp.size(), 3);
+    EXPECT_LE(comp.nbytes(), sizeof(buffer));
+
+    SimpleNeighborListDecompressor decomp(buffer, sizeof(buffer));
+    EXPECT_EQ(comp.nbytes(), decomp.nbytes());
+
+    std::size_t i = 0;
+    for (auto nb : decomp)
+        EXPECT_EQ(nbs[i++], nb);
+    EXPECT_EQ(i, comp.size());
+}
+
+TEST(CompressNeighborsSimple, empty)
+{
+    char buffer[100];
+    SimpleNeighborListCompressor comp(buffer, sizeof(buffer));
+
+    EXPECT_EQ(comp.size(), 0);
+    EXPECT_LE(comp.nbytes(), 2 * sizeof(std::uint32_t));
+
+    SimpleNeighborListDecompressor decomp(buffer, sizeof(buffer));
+    EXPECT_EQ(decomp.nbytes(), 2 * sizeof(std::uint32_t));
+    EXPECT_EQ(decomp.begin(), decomp.end());
+    EXPECT_EQ(std::distance(decomp.begin(), decomp.end()), 0);
+}

@@ -262,4 +262,159 @@ HOST_DEVICE_FUN NeighborListDecompIterator NeighborListDecompressor::end() const
     return NeighborListDecompIterator::end(*this);
 }
 
+class SimpleNeighborListDecompIterator;
+
+class SimpleNeighborListCompressor
+{
+public:
+    HOST_DEVICE_FUN SimpleNeighborListCompressor(void* buffer, unsigned bufferSize)
+        : buffer_(reinterpret_cast<std::uint32_t*>(buffer) + 2)
+        , maxNonContiguous_(bufferSize / sizeof(std::uint32_t) - 2)
+    {
+        assert(bufferSize >= 2 * sizeof(std::uint32_t));
+        sizeRef()          = 0;
+        nonContiguousRef() = 0;
+    }
+
+    SimpleNeighborListCompressor(const SimpleNeighborListCompressor&)            = delete;
+    SimpleNeighborListCompressor& operator=(const SimpleNeighborListCompressor&) = delete;
+    SimpleNeighborListCompressor(SimpleNeighborListCompressor&&)                 = default;
+    SimpleNeighborListCompressor& operator=(SimpleNeighborListCompressor&&)      = default;
+
+    HOST_DEVICE_FUN bool push_back(std::uint32_t nbIndex)
+    {
+        if (nonContiguous() == 0 || nbIndex != previous_ + 1)
+        {
+            if (nonContiguous() >= maxNonContiguous_ || size() >= 256) return false;
+
+            std::uint32_t diff = nbIndex - previous_;
+            assert(((diff >> 23) & 0xff) == 0xff || ((diff >> 23) & 0xff) == 0x00);
+            buffer_[nonContiguousRef()++] = (diff & 0x807fffff) | ((sizeRef()++ << 23) & 0x7f800000);
+            previous_                     = nbIndex;
+        }
+        else
+        {
+            ++sizeRef();
+            ++previous_;
+        }
+
+        return true;
+    }
+
+    HOST_DEVICE_FUN std::uint32_t size() const { return buffer_[-1]; }
+    HOST_DEVICE_FUN std::uint32_t nbytes() const { return (2 + nonContiguous()) * sizeof(std::uint32_t); }
+
+private:
+    HOST_DEVICE_FUN std::uint32_t& sizeRef() { return buffer_[-1]; }
+    HOST_DEVICE_FUN std::uint32_t nonContiguous() const { return buffer_[-2]; }
+    HOST_DEVICE_FUN std::uint32_t& nonContiguousRef() { return buffer_[-2]; }
+
+    std::uint32_t* buffer_;
+    std::uint32_t maxNonContiguous_, previous_ = 0;
+};
+
+class SimpleNeighborListDecompressor
+{
+public:
+    HOST_DEVICE_FUN explicit SimpleNeighborListDecompressor(const void* buffer, unsigned bufferSize)
+        : buffer_(reinterpret_cast<const std::uint32_t*>(buffer) + 2)
+    {
+        assert(bufferSize > 2 * sizeof(std::uint32_t));
+        assert(nbytes() < bufferSize);
+    }
+
+    HOST_DEVICE_FUN std::uint32_t size() const { return buffer_[-1]; }
+    HOST_DEVICE_FUN unsigned nbytes() const { return (2 + nonContiguous()) * sizeof(std::uint32_t); }
+
+    HOST_DEVICE_FUN SimpleNeighborListDecompIterator begin() const;
+    HOST_DEVICE_FUN SimpleNeighborListDecompIterator end() const;
+
+private:
+    friend class SimpleNeighborListDecompIterator;
+
+    HOST_DEVICE_FUN std::uint32_t nonContiguous() const { return buffer_[-2]; }
+
+    std::uint32_t const* buffer_;
+};
+
+class SimpleNeighborListDecompIterator
+{
+public:
+    using difference_type   = int;
+    using value_type        = std::uint32_t;
+    using pointer           = void;
+    using reference         = void;
+    using iterator_category = std::input_iterator_tag;
+
+    SimpleNeighborListDecompIterator(const SimpleNeighborListDecompIterator& other)            = default;
+    SimpleNeighborListDecompIterator(SimpleNeighborListDecompIterator&& other)                 = default;
+    SimpleNeighborListDecompIterator& operator=(const SimpleNeighborListDecompIterator& other) = default;
+    SimpleNeighborListDecompIterator& operator=(SimpleNeighborListDecompIterator&& other)      = default;
+
+    HOST_DEVICE_FUN static SimpleNeighborListDecompIterator begin(const SimpleNeighborListDecompressor& decomp)
+    {
+        return {&decomp, 0};
+    }
+    HOST_DEVICE_FUN static SimpleNeighborListDecompIterator end(const SimpleNeighborListDecompressor& decomp)
+    {
+        return {&decomp, decomp.size()};
+    }
+
+    HOST_DEVICE_FUN bool operator==(const SimpleNeighborListDecompIterator& other) const { return i_ == other.i_; }
+
+    HOST_DEVICE_FUN bool operator!=(const SimpleNeighborListDecompIterator& other) const { return !(*this == other); }
+
+    HOST_DEVICE_FUN std::uint32_t operator*() const { return value_; }
+
+    HOST_DEVICE_FUN SimpleNeighborListDecompIterator& operator++()
+    {
+        ++i_;
+        readValue();
+        return *this;
+    }
+
+    HOST_DEVICE_FUN std::uint32_t operator++(int)
+    {
+        std::uint32_t value = **this;
+        ++*this;
+        return value;
+    }
+
+private:
+    HOST_DEVICE_FUN SimpleNeighborListDecompIterator(const SimpleNeighborListDecompressor* decomp, unsigned i)
+        : decomp_(decomp)
+        , i_(i)
+    {
+        assert(decomp_);
+        readValue();
+    }
+
+    HOST_DEVICE_FUN void readValue()
+    {
+        while (j_ < decomp_->nonContiguous() && ((decomp_->buffer_[j_] >> 23) & 0xff) < i_)
+            ++j_;
+
+        if (j_ < decomp_->nonContiguous() && i_ == ((decomp_->buffer_[j_] >> 23) & 0xff))
+        {
+            std::uint32_t b = decomp_->buffer_[j_];
+            value_ += b >> 31 ? (b | 0x7f800000) : (b & 0x807fffff);
+        }
+        else { ++value_; }
+    }
+
+    const SimpleNeighborListDecompressor* decomp_ = nullptr;
+    std::uint32_t value_                          = 0;
+    unsigned i_, j_ = 0;
+};
+
+HOST_DEVICE_FUN SimpleNeighborListDecompIterator SimpleNeighborListDecompressor::begin() const
+{
+    return SimpleNeighborListDecompIterator::begin(*this);
+}
+
+HOST_DEVICE_FUN SimpleNeighborListDecompIterator SimpleNeighborListDecompressor::end() const
+{
+    return SimpleNeighborListDecompIterator::end(*this);
+}
+
 } // namespace cstone
