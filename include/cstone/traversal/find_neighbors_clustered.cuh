@@ -38,6 +38,8 @@
 #include "cstone/traversal/find_neighbors.cuh"
 #include "cstone/compressneighbors.hpp"
 
+#define CSTONE_USE_CUDA_PIPELINE 1
+
 namespace cstone
 {
 
@@ -1266,6 +1268,12 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     const auto warp   = cg::tiled_partition<GpuConfig::warpSize>(block);
     const auto thread = cg::this_thread();
 
+    constexpr auto pbc = BoundaryType::periodic;
+    const bool anyPbc  = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
+
+    const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
+
+#if CSTONE_USE_CUDA_PIPELINE
     alignas(16) __shared__ Tc xiSharedBuffer[warpsPerBlock][ClusterConfig::iSize];
     alignas(16) __shared__ Tc yiSharedBuffer[warpsPerBlock][ClusterConfig::iSize];
     alignas(16) __shared__ Tc ziSharedBuffer[warpsPerBlock][ClusterConfig::iSize];
@@ -1277,10 +1285,6 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 
     auto iPipeline = cuda::make_pipeline();
 
-    constexpr auto pbc = BoundaryType::periodic;
-    const bool anyPbc  = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
-
-    const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
     unsigned iCluster = 0, nextICluster = 0;
 
     const auto preloadNextICluster = [&]
@@ -1328,15 +1332,23 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     if (warp.thread_rank() == 0) nextICluster = atomicAdd(&targetCounterGlob, 1);
     nextICluster = warp.shfl(nextICluster, 0);
     preloadNextICluster();
+#endif
 
     while (true)
     {
+#if CSTONE_USE_CUDA_PIPELINE
         iCluster = nextICluster;
+#else
+        unsigned iCluster;
+        if (warp.thread_rank() == 0) iCluster = atomicAdd(&targetCounterGlob, 1);
+        iCluster = warp.shfl(iCluster, 0);
+#endif
 
         if (iCluster >= numIClusters) return;
 
         const unsigned i = iCluster * ClusterConfig::iSize + block.thread_index().x;
 
+#if CSTONE_USE_CUDA_PIPELINE
         iPipeline.consumer_wait();
         warp.sync();
         const Vec3<Tc> iPos = {xiShared[block.thread_index().x], yiShared[block.thread_index().x],
@@ -1347,6 +1359,10 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
         nextICluster = warp.shfl(nextICluster, 0);
         iPipeline.consumer_release();
         if (nextICluster < numIClusters) preloadNextICluster();
+#else
+        const Vec3<Tc> iPos = {x[i], y[i], z[i]};
+        const Th hi = h[i];
+#endif
 
         // const bool usePbc   = warp.any(anyPbc & !insideBox(iPos, {2 * hi, 2 * hi, 2 * hi}, box));
 
@@ -1559,6 +1575,12 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     const auto warp   = cg::tiled_partition<GpuConfig::warpSize>(block);
     const auto thread = cg::this_thread();
 
+    constexpr auto pbc = BoundaryType::periodic;
+    const bool anyPbc  = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
+
+    const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
+
+#if CSTONE_USE_CUDA_PIPELINE
     alignas(16) __shared__ Tc xiSharedBuffer[warpsPerBlock][ClusterConfig::iSize];
     alignas(16) __shared__ Tc yiSharedBuffer[warpsPerBlock][ClusterConfig::iSize];
     alignas(16) __shared__ Tc ziSharedBuffer[warpsPerBlock][ClusterConfig::iSize];
@@ -1570,10 +1592,6 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 
     auto iPipeline = cuda::make_pipeline();
 
-    constexpr auto pbc = BoundaryType::periodic;
-    const bool anyPbc  = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
-
-    const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
     unsigned iCluster = 0, nextICluster = 0;
 
     const auto preloadNextICluster = [&]
@@ -1621,25 +1639,36 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     if (warp.thread_rank() == 0) nextICluster = atomicAdd(&targetCounterGlob, 1);
     nextICluster = warp.shfl(nextICluster, 0);
     preloadNextICluster();
+#endif
 
     while (true)
     {
+#if CSTONE_USE_CUDA_PIPELINE
         iCluster = nextICluster;
+#else
+        unsigned iCluster;
+        if (warp.thread_rank() == 0) iCluster = atomicAdd(&targetCounterGlob, 1);
+        iCluster = warp.shfl(iCluster, 0);
+#endif
 
         if (iCluster >= numIClusters) return;
 
         const unsigned i = iCluster * ClusterConfig::iSize + block.thread_index().x;
 
+#if CSTONE_USE_CUDA_PIPELINE
         iPipeline.consumer_wait();
         warp.sync();
         const Vec3<Tc> iPos = {xiShared[block.thread_index().x], yiShared[block.thread_index().x],
                                ziShared[block.thread_index().x]};
         const Th hi         = hiShared[block.thread_index().x];
-
         if (warp.thread_rank() == 0) nextICluster = atomicAdd(&targetCounterGlob, 1);
         nextICluster = warp.shfl(nextICluster, 0);
         iPipeline.consumer_release();
         if (nextICluster < numIClusters) preloadNextICluster();
+#else
+        const Vec3<Tc> iPos = {x[i], y[i], z[i]};
+        const Th hi = h[i];
+#endif
 
         // const bool usePbc   = warp.any(anyPbc & !insideBox(iPos, {2 * hi, 2 * hi, 2 * hi}, box));
 
@@ -1684,3 +1713,5 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 }
 
 } // namespace cstone
+
+#undef CSTONE_USE_CUDA_PIPELINE
