@@ -698,21 +698,75 @@ void computeDensityClustered(
     resetTraversalCounters<<<1, 1>>>();
     auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T dist)
     {
-        if (i == j) return m[i];
+        T mj = m[j];
+        if (i == j) return mj;
         const T vloc = dist * (1 / hi);
         const T w    = table_lookup(wh, vloc);
-        return w * m[j];
+        return i == j ? mj : w * mj;
     };
 
     unsigned ncmax = ngmax;
-    // dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, GpuConfig::warpSize / ClusterConfig::iSize};
-    // cudaFuncSetAttribute(findNeighborsClustered4<T, T, decltype(computeDensity), T>,
-    // cudaFuncAttributePreferredSharedMemoryCarveout, 1);
-    // cudaFuncSetCacheConfig(findNeighborsClustered4<T, T, decltype(computeDensity), T>, cudaFuncCachePreferL1);
-    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 128 / GpuConfig::warpSize};
-    numBlocks      = 1 << 14;
-    // numBlocks = std::atoi(std::getenv("NUMBLOCKS"));
-    findNeighborsClustered9<128 / GpuConfig::warpSize>
+    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 512 / GpuConfig::warpSize};
+    numBlocks      = 1 << 11;
+    findNeighborsClustered8<512 / GpuConfig::warpSize>
+        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
+                                   rawPtr(clusterNeighbors), ncmax, computeDensity, rho);
+}
+
+template<class Tc, class T, class KeyType>
+std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
+buildNeighborhoodCompressedClustered(std::size_t firstBody,
+                                     std::size_t lastBody,
+                                     const Tc* x,
+                                     const Tc* y,
+                                     const Tc* z,
+                                     const T* h,
+                                     OctreeNsView<Tc, KeyType> tree,
+                                     const Box<Tc>& box,
+                                     unsigned ngmax)
+{
+    auto [clusterNeighbors, clusterNeighborsCount] =
+        buildNeighborhoodClustered(firstBody, lastBody, x, y, z, h, tree, box, ngmax);
+
+    unsigned ncmax        = ngmax;
+    std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
+    compressClusterNeighbors<<<1024, 1024>>>(iClusters, rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), ncmax);
+
+    return {clusterNeighbors, clusterNeighborsCount};
+}
+
+template<class Tc, class T>
+void computeDensityCompressedClustered(
+    const std::size_t firstBody,
+    const std::size_t lastBody,
+    const Tc* __restrict__ x,
+    const Tc* __restrict__ y,
+    const Tc* __restrict__ z,
+    const T* __restrict__ h,
+    const T* __restrict__ m,
+    const Box<Tc>& box,
+    const unsigned ngmax,
+    const T* __restrict__ wh,
+    T* __restrict__ rho,
+    const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
+{
+    auto& [clusterNeighbors, clusterNeighborsCount] = neighborhood;
+    unsigned numBodies                              = lastBody - firstBody;
+    unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
+
+    resetTraversalCounters<<<1, 1>>>();
+    auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T dist)
+    {
+        T mj         = m[j];
+        const T vloc = dist * (1 / hi);
+        const T w    = table_lookup(wh, vloc);
+        return i == j ? mj : w * mj;
+    };
+
+    unsigned ncmax = ngmax;
+    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 512 / GpuConfig::warpSize};
+    numBlocks      = 1 << 11;
+    findNeighborsClustered10<512 / GpuConfig::warpSize>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), ncmax, computeDensity, rho);
 }
@@ -888,6 +942,9 @@ int main()
     benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodBatched<Tc, T, KeyType>, computeDensityBatched<Tc, T>);
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<Tc, T, KeyType>, computeDensityClustered<Tc, T>);
+    std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE ---" << std::endl;
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodCompressedClustered<Tc, T, KeyType>,
+                                       computeDensityCompressedClustered<Tc, T>);
 
     return 0;
 }
