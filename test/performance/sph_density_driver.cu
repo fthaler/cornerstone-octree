@@ -669,7 +669,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     thrust::device_vector<int> globalPool(poolSize);
 
     resetTraversalCounters<<<1, 1>>>();
-    findClusterNeighbors2<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
+    findClusterNeighbors4<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
                                                                  rawPtr(clusterNeighborsCount),
                                                                  rawPtr(clusterNeighbors), ncmax, rawPtr(globalPool));
 
