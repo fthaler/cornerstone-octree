@@ -252,8 +252,8 @@ void findNeighborsC(std::size_t firstBody,
     unsigned poolSize  = TravConfig::poolSize(numBodies);
     static thrust::universal_vector<unsigned> clusterNeighbors, clusterNeighborsCount;
     static thrust::universal_vector<int> globalPool;
-    clusterNeighbors.resize(iceil(lastBody - 1, ClusterConfig::iSize) * ncmax);
-    clusterNeighborsCount.resize(iceil(lastBody - 1, ClusterConfig::iSize));
+    clusterNeighbors.resize(iceil(lastBody, ClusterConfig::iSize) * ncmax);
+    clusterNeighborsCount.resize(iceil(lastBody, ClusterConfig::iSize));
     globalPool.resize(poolSize);
 
     resetTraversalCounters<<<1, 1>>>();
