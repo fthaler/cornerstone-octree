@@ -856,10 +856,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
         }
 
         if (jClusterFillLevel > 0) // If there are leftover direct bodies
-        {
-            const bool laneHasJCluster = warp.thread_rank() < jClusterFillLevel;
             checkNeighborhood(jClusterQueue, jClusterFillLevel);
-        }
 
         if (warp.thread_rank() == 0) ncClustered[iCluster] = nc;
     }
@@ -1081,10 +1078,7 @@ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findClusterNeighbors6
         }
 
         if (jClusterFillLevel > 0) // If there are leftover direct bodies
-        {
-            const bool laneHasJCluster = warp.thread_rank() < jClusterFillLevel;
             checkNeighborhood(jClusterQueue, jClusterFillLevel);
-        }
 
         if (block.thread_index().x == 0) ncClustered[iCluster] = nc;
     }
