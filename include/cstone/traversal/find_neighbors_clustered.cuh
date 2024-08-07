@@ -954,6 +954,7 @@ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findClusterNeighbors6
                 if (newNeighbor)
                 {
                     unsigned ncLimited = imin(nc, ncmax);
+#pragma unroll 4
                     for (unsigned nb = 0; nb < ncLimited; nb += ClusterConfig::iSize)
                     {
                         newNeighbor &=
