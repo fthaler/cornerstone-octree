@@ -256,9 +256,12 @@ void findNeighborsC(std::size_t firstBody,
     clusterNeighborsCount.resize(iceil(lastBody, ClusterConfig::iSize));
     globalPool.resize(poolSize);
 
+    constexpr unsigned warpsPerBlock = 4;
+    dim3 threads = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
+
     resetTraversalCounters<<<1, 1>>>();
     auto t0 = std::chrono::high_resolution_clock::now();
-    findClusterNeighbors4<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
+    findClusterNeighbors6<warpsPerBlock><<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box,
                                                                  rawPtr(clusterNeighborsCount),
                                                                  rawPtr(clusterNeighbors), ncmax, rawPtr(globalPool));
     kernelSuccess("findClusterNeighbors");

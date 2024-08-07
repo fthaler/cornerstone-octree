@@ -865,6 +865,231 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     }
 }
 
+template<unsigned warpsPerBlock, bool UsePbc = true, class Tc, class Th, class KeyType>
+__global__
+__launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findClusterNeighbors6(cstone::LocalIndex firstBody,
+                                                                                 cstone::LocalIndex lastBody,
+                                                                                 const Tc* __restrict__ x,
+                                                                                 const Tc* __restrict__ y,
+                                                                                 const Tc* __restrict__ z,
+                                                                                 const Th* __restrict__ h,
+                                                                                 OctreeNsView<Tc, KeyType> tree,
+                                                                                 const Box<Tc> box,
+                                                                                 unsigned* __restrict__ ncClustered,
+                                                                                 unsigned* __restrict__ nidxClustered,
+                                                                                 unsigned ncmax,
+                                                                                 int* globalPool)
+{
+    namespace cg = cooperative_groups;
+
+    const auto grid  = cg::this_grid();
+    const auto block = cg::this_thread_block();
+    assert(block.dim_threads().x == ClusterConfig::iSize);
+    assert(block.dim_threads().y == GpuConfig::warpSize / ClusterConfig::iSize);
+    assert(block.dim_threads().z == warpsPerBlock);
+    static_assert(warpsPerBlock > 0 && ClusterConfig::iSize * ClusterConfig::jSize == GpuConfig::warpSize);
+    const auto warp = cg::tiled_partition<GpuConfig::warpSize>(block);
+
+    volatile __shared__ int sharedPool[GpuConfig::warpSize * warpsPerBlock];
+
+    assert(firstBody == 0); // TODO: other cases
+    const unsigned numTargets   = iceil(lastBody, GpuConfig::warpSize);
+    const unsigned numIClusters = iceil(lastBody, ClusterConfig::iSize);
+    const unsigned numJClusters = iceil(lastBody, ClusterConfig::jSize);
+
+    const TreeNodeIndex* __restrict__ childOffsets   = tree.childOffsets;
+    const TreeNodeIndex* __restrict__ internalToLeaf = tree.internalToLeaf;
+    const LocalIndex* __restrict__ layout            = tree.layout;
+    const Vec3<Tc>* __restrict__ centers             = tree.centers;
+    const Vec3<Tc>* __restrict__ sizes               = tree.sizes;
+
+    while (true)
+    {
+        unsigned target;
+        if (warp.thread_rank() == 0) target = atomicAdd(&targetCounterGlob, 1);
+        target = warp.shfl(target, 0);
+
+        if (target >= numTargets) return;
+
+        const unsigned iCluster = target * (GpuConfig::warpSize / ClusterConfig::iSize) + block.thread_index().y;
+
+        const unsigned i    = imin(iCluster * ClusterConfig::iSize + block.thread_index().x, lastBody - 1);
+        const Vec3<Tc> iPos = {x[i], y[i], z[i]};
+        const Th hi         = h[i];
+
+        Vec3<Tc> bbMin = {warpMin(iPos[0] - 2 * hi), warpMin(iPos[1] - 2 * hi), warpMin(iPos[2] - 2 * hi)};
+        Vec3<Tc> bbMax = {warpMax(iPos[0] + 2 * hi), warpMax(iPos[1] + 2 * hi), warpMax(iPos[2] + 2 * hi)};
+
+        const Vec3<Tc> targetCenter = (bbMax + bbMin) * Tc(0.5);
+        const Vec3<Tc> targetSize   = (bbMax - bbMin) * Tc(0.5);
+
+        const auto distSq = [&](const Vec3<Tc>& jPos)
+        { return distanceSq<UsePbc>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box); };
+
+        unsigned nc = 0;
+
+        auto checkNeighborhood = [&](const unsigned laneJCluster, const unsigned numLanesValid)
+        {
+#pragma unroll 2
+            for (unsigned n = 0; n < numLanesValid; ++n)
+            {
+                const unsigned jCluster = warp.shfl(laneJCluster, n);
+                if (jCluster >= numJClusters) continue;
+
+                bool isNeighbor = false;
+                if (iCluster < numIClusters & iCluster * ClusterConfig::iSize / ClusterConfig::jSize != jCluster &
+                    jCluster * ClusterConfig::jSize / ClusterConfig::iSize != iCluster)
+                {
+#pragma unroll
+                    for (unsigned jc = 0; jc < ClusterConfig::jSize; ++jc)
+                    {
+                        const unsigned j    = imin(jCluster * ClusterConfig::jSize + jc, lastBody - 1);
+                        const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                        const Th d2         = distSq(jPos);
+                        isNeighbor |= d2 < 4 * hi * hi;
+                    }
+                }
+
+                using mask_t        = decltype(warp.ballot(false));
+                mask_t iClusterMask = ((mask_t(1) << ClusterConfig::iSize) - 1)
+                                      << (ClusterConfig::iSize * block.thread_index().y);
+                bool newNeighbor = warp.ballot(isNeighbor) & iClusterMask;
+                if (newNeighbor)
+                {
+                    unsigned ncLimited = imin(nc, ncmax);
+                    for (unsigned nb = 0; nb < ncLimited; nb += ClusterConfig::iSize)
+                    {
+                        newNeighbor &=
+                            nidxClustered[clusterNeighborIndex(
+                                iCluster, imin(nb + block.thread_index().x, ncLimited - 1), ncmax)] != jCluster;
+                    }
+                }
+                if (!(warp.ballot(!newNeighbor) & iClusterMask))
+                {
+                    if (nc < ncmax && block.thread_index().x == 0)
+                        nidxClustered[clusterNeighborIndex(iCluster, nc, ncmax)] = jCluster;
+                    ++nc;
+                }
+            }
+        };
+
+        unsigned maxStack = 0;
+
+        int jClusterQueue; // warp queue for source jCluster indices
+        volatile int* tempQueue = sharedPool + GpuConfig::warpSize * warp.meta_group_rank();
+        int* cellQueue =
+            globalPool + TravConfig::memPerWarp * (grid.block_rank() * warp.meta_group_size() + warp.meta_group_rank());
+
+        // populate initial cell queue
+        if (warp.thread_rank() == 0) cellQueue[0] = 1;
+        warp.sync();
+
+        // these variables are always identical on all warp lanes
+        int numSources        = 1; // current stack size
+        int newSources        = 0; // stack size for next level
+        int oldSources        = 0; // cell indices done
+        int sourceOffset      = 0; // current level stack pointer, once this reaches numSources, the level is done
+        int jClusterFillLevel = 0; // fill level of the source jCluster warp queue
+
+        while (numSources > 0) // While there are source cells to traverse
+        {
+            int sourceIdx   = sourceOffset + warp.thread_rank();
+            int sourceQueue = 0;
+            if (warp.thread_rank() < GpuConfig::warpSize / 8)
+                sourceQueue = cellQueue[ringAddr(oldSources + sourceIdx)]; // Global source cell index in queue
+            sourceQueue = spreadSeg8(sourceQueue);
+            sourceIdx   = warp.shfl(sourceIdx, warp.thread_rank() / 8);
+
+            const Vec3<Tc> curSrcCenter = centers[sourceQueue];      // Current source cell center
+            const Vec3<Tc> curSrcSize   = sizes[sourceQueue];        // Current source cell center
+            const int childBegin        = childOffsets[sourceQueue]; // First child cell
+            const bool isNode           = childBegin;
+            const bool isClose          = cellOverlap<UsePbc>(curSrcCenter, curSrcSize, targetCenter, targetSize, box);
+            const bool isSource         = sourceIdx < numSources; // Source index is within bounds
+            const bool isDirect         = isClose && !isNode && isSource;
+            const int leafIdx           = isDirect ? internalToLeaf[sourceQueue] : 0; // the cstone leaf index
+
+            // Split
+            const bool isSplit     = isNode && isClose && isSource; // Source cell must be split
+            const int numChildLane = exclusiveScanBool(isSplit);    // Exclusive scan of numChild
+            const int numChildWarp = reduceBool(isSplit);           // Total numChild of current warp
+            sourceOffset +=
+                imin(GpuConfig::warpSize / 8, numSources - sourceOffset);       // advance current level stack pointer
+            int childIdx = oldSources + numSources + newSources + numChildLane; // Child index of current lane
+            if (isSplit) cellQueue[ringAddr(childIdx)] = childBegin;            // Queue child cells for next level
+            newSources += numChildWarp; // Increment source cell count for next loop
+
+            // check for cellQueue overflow
+            const unsigned stackUsed = newSources + numSources - sourceOffset; // current cellQueue size
+            maxStack                 = max(stackUsed, maxStack);
+            if (stackUsed > TravConfig::memPerWarp) return; // Exit if cellQueue overflows
+
+            // Direct
+            const int firstJCluster = layout[leafIdx] / ClusterConfig::jSize;
+            const int numJClusters  = (iceil(layout[leafIdx + 1], ClusterConfig::jSize) - firstJCluster) &
+                                     -int(isDirect); // Number of jClusters in cell
+            bool directTodo            = numJClusters;
+            const int numJClustersScan = inclusiveScanInt(numJClusters);  // Inclusive scan of numJClusters
+            int numJClustersLane       = numJClustersScan - numJClusters; // Exclusive scan of numJClusters
+            int numJClustersWarp =
+                shflSync(numJClustersScan, GpuConfig::warpSize - 1); // Total numJClusters of current warp
+            int prevJClusterIdx = 0;
+            while (numJClustersWarp > 0) // While there are jClusters to process from current source cell set
+            {
+                tempQueue[warp.thread_rank()] =
+                    1; // Default scan input is 1, such that consecutive lanes load consecutive bodies
+                if (directTodo && (numJClustersLane < GpuConfig::warpSize))
+                {
+                    directTodo                  = false;              // Set cell as processed
+                    tempQueue[numJClustersLane] = -1 - firstJCluster; // Put first source cell body index into the queue
+                }
+                const int jClusterIdx = inclusiveSegscanInt(tempQueue[warp.thread_rank()], prevJClusterIdx);
+                // broadcast last processed jClusterIdx from the last lane to restart the scan in the next iteration
+                prevJClusterIdx = shflSync(jClusterIdx, GpuConfig::warpSize - 1);
+
+                if (numJClustersWarp >= GpuConfig::warpSize) // Process jClusters from current set of source cells
+                {
+                    checkNeighborhood(jClusterIdx, GpuConfig::warpSize);
+                    numJClustersWarp -= GpuConfig::warpSize;
+                    numJClustersLane -= GpuConfig::warpSize;
+                }
+                else // Fewer than warpSize bodies remaining from current source cell set
+                {
+                    // push the remaining bodies into jClusterQueue
+                    int topUp     = shflUpSync(jClusterIdx, jClusterFillLevel);
+                    jClusterQueue = (warp.thread_rank() < jClusterFillLevel) ? jClusterQueue : topUp;
+
+                    jClusterFillLevel += numJClustersWarp;
+                    if (jClusterFillLevel >= GpuConfig::warpSize) // If this causes jClusterQueue to spill
+                    {
+                        checkNeighborhood(jClusterQueue, GpuConfig::warpSize);
+                        jClusterFillLevel -= GpuConfig::warpSize;
+                        // jClusterQueue is now empty; put body indices that spilled into the queue
+                        jClusterQueue = shflDownSync(jClusterIdx, numJClustersWarp - jClusterFillLevel);
+                    }
+                    numJClustersWarp = 0; // No more bodies to process from current source cells
+                }
+            }
+
+            //  If the current level is done
+            if (sourceOffset >= numSources)
+            {
+                oldSources += numSources;      // Update finished source size
+                numSources   = newSources;     // Update current source size
+                sourceOffset = newSources = 0; // Initialize next source size and offset
+            }
+        }
+
+        if (jClusterFillLevel > 0) // If there are leftover direct bodies
+        {
+            const bool laneHasJCluster = warp.thread_rank() < jClusterFillLevel;
+            checkNeighborhood(jClusterQueue, jClusterFillLevel);
+        }
+
+        if (block.thread_index().x == 0) ncClustered[iCluster] = nc;
+    }
+}
+
 __global__ void compressClusterNeighbors(const unsigned iClusters,
                                          const unsigned* __restrict__ ncClustered,
                                          unsigned* __restrict__ nidxClustered,
