@@ -706,7 +706,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
         bbMax = warp.shfl(bbMax, 0);
 
         const Vec3<Tc> iClusterCenter = (bbMax + bbMin) * Tc(0.5);
-        const Vec3<Tc> iClusterSize   = (bbMax - bbMin) * Tc(0.5) * 2;
+        const Vec3<Tc> iClusterSize   = (bbMax - bbMin) * Tc(0.5);
 
         const auto distSq = [&](const Vec3<Tc>& jPos)
         { return distanceSq<UsePbc>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box); };
