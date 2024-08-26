@@ -668,8 +668,13 @@ buildNeighborhoodClustered(std::size_t firstBody,
     thrust::device_vector<unsigned> clusterNeighborsCount(iClusters);
     thrust::device_vector<int> globalPool(poolSize);
 
+    // TODO: own traversal config for cluster kernels
+    static_assert(TravConfig::numThreads == 128);
+    constexpr unsigned warpsPerBlock = 4;
+    dim3 threads = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
+
     resetTraversalCounters<<<1, 1>>>();
-    findClusterNeighbors4<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
+    findClusterNeighbors8<warpsPerBlock><<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box,
                                                                  rawPtr(clusterNeighborsCount),
                                                                  rawPtr(clusterNeighbors), ncmax, rawPtr(globalPool));
 

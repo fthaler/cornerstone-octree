@@ -256,6 +256,8 @@ void findNeighborsC(std::size_t firstBody,
     clusterNeighborsCount.resize(iceil(lastBody, ClusterConfig::iSize));
     globalPool.resize(poolSize);
 
+    // TODO: own traversal config for cluster kernels
+    static_assert(TravConfig::numThreads == 128);
     constexpr unsigned warpsPerBlock = 4;
     dim3 threads = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
