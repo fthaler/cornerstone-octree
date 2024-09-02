@@ -31,6 +31,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <cuda/barrier>
 #include <cuda/pipeline>
 #include <cooperative_groups.h>
@@ -56,6 +58,48 @@ __host__ __device__ inline constexpr unsigned clusterNeighborIndex(unsigned clus
     constexpr unsigned blockSize = 1; // better for findNeighborsClustered3
     return (cluster / blockSize) * blockSize * ncmax + (cluster % blockSize) + neighbor * blockSize;
 }
+
+namespace detail
+{
+
+template<std::size_t I, class... Ts>
+__device__ inline auto& tuple_get_or_scalar(std::tuple<Ts...>& t)
+{
+    return std::get<I>(t);
+}
+
+template<std::size_t I, class... Ts>
+__device__ inline auto const& tuple_get_or_scalar(std::tuple<Ts...> const& t)
+{
+    return std::get<I>(t);
+}
+
+template<std::size_t I, class T>
+__device__ inline T const& tuple_get_or_scalar(T const& t)
+{
+    return t;
+}
+
+template<std::size_t I, class F, class... Tuples>
+__device__ inline void tuple_foreach_element(F&& f, Tuples&&... tuples)
+{
+    f(tuple_get_or_scalar<I>(std::forward<Tuples>(tuples))...);
+}
+
+template<std::size_t... Is, class F, class... Tuples>
+__device__ inline void tuple_foreach_impl(std::index_sequence<Is...>, F&& f, Tuples&&... tuples)
+{
+    (..., (tuple_foreach_element<Is>(std::forward<F>(f), std::forward<Tuples>(tuples)...)));
+}
+
+template<class F, class Tuple, class... Tuples>
+__device__ inline void tuple_foreach(F&& f, Tuple&& tuple, Tuples&&... tuples)
+{
+    tuple_foreach_impl(std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>(), std::forward<F>(f),
+                       std::forward<Tuple>(tuple), std::forward<Tuples>(tuples)...);
+}
+
+} // namespace detail
 
 template<class Tc, class Th, class KeyType>
 __global__ __launch_bounds__(TravConfig::numThreads) void findClusterNeighbors(cstone::LocalIndex firstBody,
@@ -2534,7 +2578,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
     }
 }
 
-template<int warpsPerBlock, bool bypassL1CacheOnLoads = true, class Tc, class Th, class Contribution, class Tr>
+template<int warpsPerBlock, bool bypassL1CacheOnLoads = true, class Tc, class Th, class Contribution, class... Tr>
 __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPerBlock) void findNeighborsClustered8(
     cstone::LocalIndex firstBody,
     cstone::LocalIndex lastBody,
@@ -2547,7 +2591,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     const unsigned* __restrict__ nidxClustered,
     unsigned ncmax,
     Contribution contribution,
-    Tr* __restrict__ result)
+    Tr* __restrict__... results)
 {
     namespace cg = cooperative_groups;
 
@@ -2664,7 +2708,8 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
                           : distanceSq<false>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box);
         };
 
-        Tr sum                               = 0;
+        std::tuple<Tr...> sums;
+        detail::tuple_foreach([](auto& sum) { sum = 0; }, sums);
         const auto computeClusterInteraction = [&](unsigned jCluster)
         {
             const unsigned j = jCluster * ClusterConfig::jSize + block.thread_index().y;
@@ -2672,7 +2717,9 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi)
+                    detail::tuple_foreach([](auto& sum, auto const& contrib) { sum += contrib; }, sums,
+                                          contribution(i, iPos, hi, j, jPos, std::sqrt(d2)));
             }
         };
 
@@ -2691,12 +2738,14 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
             const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
             computeClusterInteraction(jCluster);
         }
+        // detail::tuple_foreach([](auto const& sum) { printf("%.3f\n", sum); }, sums);
 
 #pragma unroll
         for (unsigned offset = GpuConfig::warpSize / 2; offset >= ClusterConfig::iSize; offset /= 2)
-            sum += warp.shfl_down(sum, offset);
+            detail::tuple_foreach([&](auto& sum) { sum += warp.shfl_down(sum, offset); }, sums);
 
-        if (block.thread_index().y == 0) result[i] = sum;
+        if (block.thread_index().y == 0)
+            detail::tuple_foreach([i](auto& res, auto const& sum) { res[i] = sum; }, std::make_tuple(results...), sums);
     }
 }
 
