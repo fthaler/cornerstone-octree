@@ -184,6 +184,8 @@ buildNeighborhoodNaiveDirect(std::size_t firstBody,
 {
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
     return {neighbors, neighborsCount, tree};
 }
 
@@ -274,6 +276,10 @@ buildNeighborhoodBatchedDirect(std::size_t firstBody,
                                                 TravConfig::targetSize);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
     thrust::device_vector<int> globalPool(poolSize);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size() +
+            sizeof(int) * globalPool.size()) /
+               1.0e6);
 
     return {neighbors, neighborsCount, globalPool, tree};
 }
@@ -417,6 +423,8 @@ buildNeighborhoodNaive(std::size_t firstBody,
 {
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
 
     buildNeighborhoodNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
         x, y, z, h, firstBody, lastBody, box, tree, ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
@@ -553,6 +561,10 @@ buildNeighborhoodBatched(std::size_t firstBody,
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
     thrust::device_vector<int> globalPool(poolSize);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size() +
+            sizeof(int) * globalPool.size()) /
+               1.0e6);
 
     resetTraversalCounters<<<1, 1>>>();
     buildNeighborhoodBatchedKernel<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
@@ -667,6 +679,10 @@ buildNeighborhoodClustered(std::size_t firstBody,
     thrust::device_vector<LocalIndex> clusterNeighbors(ncmax * iClusters);
     thrust::device_vector<unsigned> clusterNeighborsCount(iClusters);
     thrust::device_vector<int> globalPool(poolSize);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * clusterNeighbors.size() + sizeof(unsigned) * clusterNeighborsCount.size() +
+            sizeof(int) * globalPool.size()) /
+               1.0e6);
 
     // TODO: own traversal config for cluster kernels
     static_assert(TravConfig::numThreads == 128);
