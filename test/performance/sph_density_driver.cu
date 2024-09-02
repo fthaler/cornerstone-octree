@@ -917,9 +917,13 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
         cudaEventDestroy(events[i]);
     }
 
-    printf("GPU times: ");
+    printf("GPU times [s]: ");
     for (auto t : times)
         printf("%7.6fs ", t / 1000);
+    printf("\n");
+    printf("Gparticle-updates/s: ");
+    for (auto t : times)
+        printf("%7.6fs ", n / 1.0e6 / t);
     printf("\n");
 
     std::vector<T> rhoGPU(n);
