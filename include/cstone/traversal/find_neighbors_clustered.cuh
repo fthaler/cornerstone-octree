@@ -2623,7 +2623,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 
     if (warp.thread_rank() == 0) nextICluster = atomicAdd(&targetCounterGlob, 1);
     nextICluster = warp.shfl(nextICluster, 0);
-    preloadNextICluster();
+    if (nextICluster < numIClusters) preloadNextICluster();
 #endif
 
     while (true)
@@ -2930,7 +2930,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 
     if (warp.thread_rank() == 0) nextICluster = atomicAdd(&targetCounterGlob, 1);
     nextICluster = warp.shfl(nextICluster, 0);
-    preloadNextICluster();
+    if (nextICluster < numIClusters) preloadNextICluster();
 #endif
 
     while (true)
