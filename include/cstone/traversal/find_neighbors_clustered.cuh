@@ -37,7 +37,6 @@
 #include <cuda/pipeline>
 #include <cooperative_groups.h>
 #include <cub/warp/warp_merge_sort.cuh>
-#include <cub/warp/warp_scan.cuh>
 
 #include "cstone/compressneighbors.hpp"
 #include "cstone/primitives/warpscan.cuh"
@@ -2017,15 +2016,15 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 
         for (unsigned c = 0; c < GpuConfig::warpSize / ClusterConfig::iSize; ++c)
         {
-            unsigned ncc = warp.shfl(nc, c * ClusterConfig::iSize);
+            const unsigned ncc = warp.shfl(nc, c * ClusterConfig::iSize);
 
             constexpr unsigned itemsPerWarp = NcMax / GpuConfig::warpSize;
             unsigned items[itemsPerWarp];
 #pragma unroll
             for (unsigned i = 0; i < itemsPerWarp; ++i)
             {
-                unsigned nb = warp.thread_rank() * itemsPerWarp + i;
-                items[i]    = nb < ncc ? nidx[block.thread_index().z][c][nb] : unsigned(-1);
+                const unsigned nb = warp.thread_rank() * itemsPerWarp + i;
+                items[i]          = nb < ncc ? nidx[block.thread_index().z][c][nb] : unsigned(-1);
             }
             using WarpSort = cub::WarpMergeSort<unsigned, itemsPerWarp, GpuConfig::warpSize>;
             __shared__ typename WarpSort::TempStorage sortTmp[warpsPerBlock];
@@ -2037,7 +2036,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 #pragma unroll
             for (unsigned i = 0; i < itemsPerWarp; ++i)
             {
-                unsigned item = items[i];
+                const unsigned item = items[i];
                 if (item != prev & item != unsigned(-1))
                 {
                     items[unique++] = item;
@@ -2045,16 +2044,13 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                 }
             }
 
-            using WarpScan = cub::WarpScan<unsigned>;
-            __shared__ typename WarpScan::TempStorage scanTmp[warpsPerBlock];
-            unsigned startIndex;
-            WarpScan(scanTmp[block.thread_index().z]).ExclusiveSum(unique, startIndex);
+            const unsigned startIndex = inclusiveScanInt(unique) - unique;
 
-            unsigned ic = warp.shfl(iCluster, c * ClusterConfig::iSize);
+            const unsigned ic = warp.shfl(iCluster, c * ClusterConfig::iSize);
 #pragma unroll itemsPerWarp
             for (unsigned i = 0; i < unique; ++i)
             {
-                unsigned nb                                        = startIndex + i;
+                const unsigned nb                                  = startIndex + i;
                 nidxClustered[clusterNeighborIndex(ic, nb, ncmax)] = items[i];
             }
 
