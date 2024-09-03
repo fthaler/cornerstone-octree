@@ -263,7 +263,7 @@ void findNeighborsC(std::size_t firstBody,
 
     resetTraversalCounters<<<1, 1>>>();
     auto t0 = std::chrono::high_resolution_clock::now();
-    findClusterNeighbors8<warpsPerBlock><<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box,
+    findClusterNeighbors9<warpsPerBlock><<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box,
                                                                  rawPtr(clusterNeighborsCount),
                                                                  rawPtr(clusterNeighbors), ncmax, rawPtr(globalPool));
     kernelSuccess("findClusterNeighbors");
@@ -357,7 +357,7 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
     // RandomGaussianCoordinates<T, StrongKeyType> coords(n, box);
     // adjustSmoothingLength<KeyType>(n, 100, 200, coords.x(), coords.y(), coords.z(), h, box);
 
-    int ngmax = 200;
+    int ngmax = 256;
 
     std::vector<LocalIndex> neighborsCPU(ngmax * n);
     std::vector<unsigned> neighborsCountCPU(n);

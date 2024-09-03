@@ -810,7 +810,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     // RandomGaussianCoordinates<T, StrongKeyType> coords(n, box);
     // adjustSmoothingLength<KeyType>(n, 100, 200, coords.x(), coords.y(), coords.z(), h, box);
 
-    int ngmax = 200;
+    int ngmax = 256;
 
     const Tc* x       = coords.x().data();
     const Tc* y       = coords.y().data();

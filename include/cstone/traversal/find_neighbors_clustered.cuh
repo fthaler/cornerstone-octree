@@ -36,6 +36,8 @@
 #include <cuda/barrier>
 #include <cuda/pipeline>
 #include <cooperative_groups.h>
+#include <cub/warp/warp_merge_sort.cuh>
+#include <cub/warp/warp_scan.cuh>
 
 #include "cstone/compressneighbors.hpp"
 #include "cstone/primitives/warpscan.cuh"
@@ -1725,6 +1727,341 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
     }
 }
 
+template<unsigned warpsPerBlock,
+         bool UsePbc               = true,
+         bool bypassL1CacheOnLoads = true,
+         unsigned NcMax            = 256,
+         class Tc,
+         class Th,
+         class KeyType>
+__global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
+                             8) void findClusterNeighbors9(cstone::LocalIndex firstBody,
+                                                           cstone::LocalIndex lastBody,
+                                                           const Tc* __restrict__ x,
+                                                           const Tc* __restrict__ y,
+                                                           const Tc* __restrict__ z,
+                                                           const Th* __restrict__ h,
+                                                           OctreeNsView<Tc, KeyType> tree,
+                                                           const Box<Tc> box,
+                                                           unsigned* __restrict__ ncClustered,
+                                                           unsigned* __restrict__ nidxClustered,
+                                                           unsigned ncmax,
+                                                           int* globalPool)
+{
+    namespace cg = cooperative_groups;
+    assert(ncmax <= NcMax);
+
+    const auto grid  = cg::this_grid();
+    const auto block = cg::this_thread_block();
+    assert(block.dim_threads().x == ClusterConfig::iSize);
+    assert(block.dim_threads().y == GpuConfig::warpSize / ClusterConfig::iSize);
+    assert(block.dim_threads().z == warpsPerBlock);
+    static_assert(warpsPerBlock > 0 && ClusterConfig::iSize * ClusterConfig::jSize == GpuConfig::warpSize);
+    const auto warp = cg::tiled_partition<GpuConfig::warpSize>(block);
+
+    volatile __shared__ int sharedPool[GpuConfig::warpSize * warpsPerBlock];
+    volatile __shared__ unsigned nidx[warpsPerBlock][GpuConfig::warpSize / ClusterConfig::iSize][NcMax];
+
+    assert(firstBody == 0); // TODO: other cases
+    const unsigned numTargets   = iceil(lastBody, GpuConfig::warpSize);
+    const unsigned numIClusters = iceil(lastBody, ClusterConfig::iSize);
+    const unsigned numJClusters = iceil(lastBody, ClusterConfig::jSize);
+
+    const TreeNodeIndex* __restrict__ childOffsets   = tree.childOffsets;
+    const TreeNodeIndex* __restrict__ internalToLeaf = tree.internalToLeaf;
+    const LocalIndex* __restrict__ layout            = tree.layout;
+    const Vec3<Tc>* __restrict__ centers             = tree.centers;
+    const Vec3<Tc>* __restrict__ sizes               = tree.sizes;
+
+#if CSTONE_USE_CUDA_PIPELINE
+    alignas(16) __shared__ Tc xjSharedBuffer[warpsPerBlock][ClusterConfig::jSize];
+    alignas(16) __shared__ Tc yjSharedBuffer[warpsPerBlock][ClusterConfig::jSize];
+    alignas(16) __shared__ Tc zjSharedBuffer[warpsPerBlock][ClusterConfig::jSize];
+    Tc* const xjShared = xjSharedBuffer[block.thread_index().z];
+    Tc* const yjShared = yjSharedBuffer[block.thread_index().z];
+    Tc* const zjShared = zjSharedBuffer[block.thread_index().z];
+#endif
+
+    while (true)
+    {
+        unsigned target;
+        if (warp.thread_rank() == 0) target = atomicAdd(&targetCounterGlob, 1);
+        target = warp.shfl(target, 0);
+
+        if (target >= numTargets) return;
+
+        const unsigned iCluster = target * (GpuConfig::warpSize / ClusterConfig::iSize) + block.thread_index().y;
+
+        const unsigned i    = imin(target * GpuConfig::warpSize + warp.thread_rank(), lastBody - 1);
+        const Vec3<Tc> iPos = {x[i], y[i], z[i]};
+        const Th hi         = h[i];
+
+        Vec3<Tc> bbMin = {warpMin(iPos[0] - 2 * hi), warpMin(iPos[1] - 2 * hi), warpMin(iPos[2] - 2 * hi)};
+        Vec3<Tc> bbMax = {warpMax(iPos[0] + 2 * hi), warpMax(iPos[1] + 2 * hi), warpMax(iPos[2] + 2 * hi)};
+
+        const Vec3<Tc> targetCenter = (bbMax + bbMin) * Tc(0.5);
+        const Vec3<Tc> targetSize   = (bbMax - bbMin) * Tc(0.5);
+
+        const auto distSq = [&](const Vec3<Tc>& jPos)
+        { return distanceSq<UsePbc>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box); };
+
+        unsigned nc = 0;
+
+        const auto checkNeighborhood = [&](const unsigned laneJCluster, const unsigned numLanesValid)
+        {
+            assert(numLanesValid > 0);
+#if CSTONE_USE_CUDA_PIPELINE
+            const auto thread = cg::this_thread();
+            auto jPipeline    = cuda::make_pipeline();
+
+            unsigned nextJCluster = warp.shfl(laneJCluster, 0);
+            unsigned jCluster;
+
+            const auto preloadNextJCluster = [&]
+            {
+                jPipeline.producer_acquire();
+                if constexpr (bypassL1CacheOnLoads)
+                {
+                    constexpr int numTcPer16Bytes = 16 / sizeof(Tc);
+                    if (warp.thread_rank() < ClusterConfig::jSize / numTcPer16Bytes)
+                    {
+                        const unsigned nextJ = imin(
+                            nextJCluster * ClusterConfig::jSize + warp.thread_rank() * numTcPer16Bytes, lastBody - 1);
+                        cuda::memcpy_async(thread, &xjShared[warp.thread_rank() * numTcPer16Bytes], &x[nextJ],
+                                           cuda::aligned_size_t<16>(16), jPipeline);
+                        cuda::memcpy_async(thread, &yjShared[warp.thread_rank() * numTcPer16Bytes], &y[nextJ],
+                                           cuda::aligned_size_t<16>(16), jPipeline);
+                        cuda::memcpy_async(thread, &zjShared[warp.thread_rank() * numTcPer16Bytes], &z[nextJ],
+                                           cuda::aligned_size_t<16>(16), jPipeline);
+                    }
+                }
+                else
+                {
+                    if (warp.thread_rank() < ClusterConfig::jSize)
+                    {
+                        const unsigned nextJ =
+                            imin(nextJCluster * ClusterConfig::jSize + warp.thread_rank(), lastBody - 1);
+                        cuda::memcpy_async(thread, &xjShared[warp.thread_rank()], &x[nextJ],
+                                           cuda::aligned_size_t<sizeof(Tc)>(sizeof(Tc)), jPipeline);
+                        cuda::memcpy_async(thread, &yjShared[warp.thread_rank()], &y[nextJ],
+                                           cuda::aligned_size_t<sizeof(Tc)>(sizeof(Tc)), jPipeline);
+                        cuda::memcpy_async(thread, &zjShared[warp.thread_rank()], &z[nextJ],
+                                           cuda::aligned_size_t<sizeof(Tc)>(sizeof(Tc)), jPipeline);
+                    }
+                }
+                jPipeline.producer_commit();
+            };
+            preloadNextJCluster();
+#endif
+
+            for (unsigned n = 0; n < numLanesValid; ++n)
+            {
+#if CSTONE_USE_CUDA_PIPELINE
+                jCluster = nextJCluster;
+
+                Vec3<Tc> jPos[ClusterConfig::jSize];
+
+                jPipeline.consumer_wait();
+                warp.sync();
+#pragma unroll
+                for (unsigned jc = 0; jc < ClusterConfig::jSize; ++jc)
+                    jPos[jc] = {xjShared[jc], yjShared[jc], zjShared[jc]};
+
+                nextJCluster = warp.shfl(laneJCluster, imin(n + 1, numLanesValid - 1));
+                jPipeline.consumer_release();
+
+                if (nextJCluster != jCluster) preloadNextJCluster();
+#else
+                const unsigned jCluster = warp.shfl(laneJCluster, n);
+#endif
+
+                if (jCluster >= numJClusters) continue;
+
+                bool isNeighbor = false;
+                if (iCluster < numIClusters & iCluster * ClusterConfig::iSize / ClusterConfig::jSize != jCluster &
+                    jCluster * ClusterConfig::jSize / ClusterConfig::iSize != iCluster)
+                {
+#pragma unroll
+                    for (unsigned jc = 0; jc < ClusterConfig::jSize; ++jc)
+                    {
+#if CSTONE_USE_CUDA_PIPELINE
+                        const Th d2 = distSq(jPos[jc]);
+#else
+                        const unsigned j = imin(jCluster * ClusterConfig::jSize + jc, lastBody - 1);
+                        const Vec3<Tc> jPos = {x[j], y[j], z[j]};
+                        const Th d2 = distSq(jPos);
+#endif
+                        isNeighbor |= d2 < 4 * hi * hi;
+                    }
+                }
+
+                using mask_t        = decltype(warp.ballot(false));
+                mask_t iClusterMask = ((mask_t(1) << ClusterConfig::iSize) - 1)
+                                      << (ClusterConfig::iSize * block.thread_index().y);
+                bool newNeighbor = warp.ballot(isNeighbor) & iClusterMask;
+                if (newNeighbor)
+                {
+                    if (nc < ncmax && block.thread_index().x == 0)
+                        nidx[block.thread_index().z][block.thread_index().y][nc] = jCluster;
+                    ++nc;
+                }
+            }
+        };
+
+        int jClusterQueue; // warp queue for source jCluster indices
+        volatile int* tempQueue = sharedPool + GpuConfig::warpSize * warp.meta_group_rank();
+        int* cellQueue =
+            globalPool + TravConfig::memPerWarp * (grid.block_rank() * warp.meta_group_size() + warp.meta_group_rank());
+
+        // populate initial cell queue
+        if (warp.thread_rank() == 0) cellQueue[0] = 1;
+        warp.sync();
+
+        // these variables are always identical on all warp lanes
+        int numSources        = 1; // current stack size
+        int newSources        = 0; // stack size for next level
+        int oldSources        = 0; // cell indices done
+        int sourceOffset      = 0; // current level stack pointer, once this reaches numSources, the level is done
+        int jClusterFillLevel = 0; // fill level of the source jCluster warp queue
+
+        while (numSources > 0) // While there are source cells to traverse
+        {
+            int sourceIdx   = sourceOffset + warp.thread_rank();
+            int sourceQueue = 0;
+            if (warp.thread_rank() < GpuConfig::warpSize / 8)
+                sourceQueue = cellQueue[ringAddr(oldSources + sourceIdx)]; // Global source cell index in queue
+            sourceQueue = spreadSeg8(sourceQueue);
+            sourceIdx   = warp.shfl(sourceIdx, warp.thread_rank() / 8);
+
+            const Vec3<Tc> curSrcCenter = centers[sourceQueue];      // Current source cell center
+            const Vec3<Tc> curSrcSize   = sizes[sourceQueue];        // Current source cell center
+            const int childBegin        = childOffsets[sourceQueue]; // First child cell
+            const bool isNode           = childBegin;
+            const bool isClose          = cellOverlap<UsePbc>(curSrcCenter, curSrcSize, targetCenter, targetSize, box);
+            const bool isSource         = sourceIdx < numSources; // Source index is within bounds
+            const bool isDirect         = isClose && !isNode && isSource;
+            const int leafIdx           = isDirect ? internalToLeaf[sourceQueue] : 0; // the cstone leaf index
+
+            // Split
+            const bool isSplit     = isNode && isClose && isSource; // Source cell must be split
+            const int numChildLane = exclusiveScanBool(isSplit);    // Exclusive scan of numChild
+            const int numChildWarp = reduceBool(isSplit);           // Total numChild of current warp
+            sourceOffset +=
+                imin(GpuConfig::warpSize / 8, numSources - sourceOffset);       // advance current level stack pointer
+            int childIdx = oldSources + numSources + newSources + numChildLane; // Child index of current lane
+            if (isSplit) cellQueue[ringAddr(childIdx)] = childBegin;            // Queue child cells for next level
+            newSources += numChildWarp; // Increment source cell count for next loop
+
+            // check for cellQueue overflow
+            const unsigned stackUsed = newSources + numSources - sourceOffset; // current cellQueue size
+            if (stackUsed > TravConfig::memPerWarp) return;                    // Exit if cellQueue overflows
+
+            // Direct
+            const int firstJCluster = layout[leafIdx] / ClusterConfig::jSize;
+            const int numJClusters  = (iceil(layout[leafIdx + 1], ClusterConfig::jSize) - firstJCluster) &
+                                     -int(isDirect); // Number of jClusters in cell
+            bool directTodo            = numJClusters;
+            const int numJClustersScan = inclusiveScanInt(numJClusters);  // Inclusive scan of numJClusters
+            int numJClustersLane       = numJClustersScan - numJClusters; // Exclusive scan of numJClusters
+            int numJClustersWarp =
+                shflSync(numJClustersScan, GpuConfig::warpSize - 1); // Total numJClusters of current warp
+            int prevJClusterIdx = 0;
+            while (numJClustersWarp > 0) // While there are jClusters to process from current source cell set
+            {
+                tempQueue[warp.thread_rank()] =
+                    1; // Default scan input is 1, such that consecutive lanes load consecutive bodies
+                if (directTodo && (numJClustersLane < GpuConfig::warpSize))
+                {
+                    directTodo                  = false;              // Set cell as processed
+                    tempQueue[numJClustersLane] = -1 - firstJCluster; // Put first source cell body index into the queue
+                }
+                const int jClusterIdx = inclusiveSegscanInt(tempQueue[warp.thread_rank()], prevJClusterIdx);
+                // broadcast last processed jClusterIdx from the last lane to restart the scan in the next iteration
+                prevJClusterIdx = shflSync(jClusterIdx, GpuConfig::warpSize - 1);
+
+                if (numJClustersWarp >= GpuConfig::warpSize) // Process jClusters from current set of source cells
+                {
+                    checkNeighborhood(jClusterIdx, GpuConfig::warpSize);
+                    numJClustersWarp -= GpuConfig::warpSize;
+                    numJClustersLane -= GpuConfig::warpSize;
+                }
+                else // Fewer than warpSize bodies remaining from current source cell set
+                {
+                    // push the remaining bodies into jClusterQueue
+                    int topUp     = shflUpSync(jClusterIdx, jClusterFillLevel);
+                    jClusterQueue = (warp.thread_rank() < jClusterFillLevel) ? jClusterQueue : topUp;
+
+                    jClusterFillLevel += numJClustersWarp;
+                    if (jClusterFillLevel >= GpuConfig::warpSize) // If this causes jClusterQueue to spill
+                    {
+                        checkNeighborhood(jClusterQueue, GpuConfig::warpSize);
+                        jClusterFillLevel -= GpuConfig::warpSize;
+                        // jClusterQueue is now empty; put body indices that spilled into the queue
+                        jClusterQueue = shflDownSync(jClusterIdx, numJClustersWarp - jClusterFillLevel);
+                    }
+                    numJClustersWarp = 0; // No more bodies to process from current source cells
+                }
+            }
+
+            //  If the current level is done
+            if (sourceOffset >= numSources)
+            {
+                oldSources += numSources;      // Update finished source size
+                numSources   = newSources;     // Update current source size
+                sourceOffset = newSources = 0; // Initialize next source size and offset
+            }
+        }
+
+        if (jClusterFillLevel > 0) // If there are leftover direct bodies
+            checkNeighborhood(jClusterQueue, jClusterFillLevel);
+
+        for (unsigned c = 0; c < GpuConfig::warpSize / ClusterConfig::iSize; ++c)
+        {
+            unsigned ncc = warp.shfl(nc, c * ClusterConfig::iSize);
+
+            constexpr unsigned itemsPerWarp = NcMax / GpuConfig::warpSize;
+            unsigned items[itemsPerWarp];
+#pragma unroll
+            for (unsigned i = 0; i < itemsPerWarp; ++i)
+            {
+                unsigned nb = warp.thread_rank() * itemsPerWarp + i;
+                items[i]    = nb < ncc ? nidx[block.thread_index().z][c][nb] : unsigned(-1);
+            }
+            using WarpSort = cub::WarpMergeSort<unsigned, itemsPerWarp, GpuConfig::warpSize>;
+            __shared__ typename WarpSort::TempStorage sortTmp[warpsPerBlock];
+            WarpSort(sortTmp[block.thread_index().z]).Sort(items, std::less<unsigned>());
+
+            unsigned prev = warp.shfl_up(items[itemsPerWarp - 1], 1);
+            if (warp.thread_rank() == 0) prev = unsigned(-1);
+            unsigned unique = 0;
+#pragma unroll
+            for (unsigned i = 0; i < itemsPerWarp; ++i)
+            {
+                unsigned item = items[i];
+                if (item != prev & item != unsigned(-1))
+                {
+                    items[unique++] = item;
+                    prev            = item;
+                }
+            }
+
+            using WarpScan = cub::WarpScan<unsigned>;
+            __shared__ typename WarpScan::TempStorage scanTmp[warpsPerBlock];
+            unsigned startIndex;
+            WarpScan(scanTmp[block.thread_index().z]).ExclusiveSum(unique, startIndex);
+
+            unsigned ic = warp.shfl(iCluster, c * ClusterConfig::iSize);
+#pragma unroll itemsPerWarp
+            for (unsigned i = 0; i < unique; ++i)
+            {
+                unsigned nb                                        = startIndex + i;
+                nidxClustered[clusterNeighborIndex(ic, nb, ncmax)] = items[i];
+            }
+
+            if (warp.thread_rank() == GpuConfig::warpSize - 1) ncClustered[ic] = startIndex + unique;
+        }
+    }
+}
 __global__ void compressClusterNeighbors(const unsigned iClusters,
                                          const unsigned* __restrict__ ncClustered,
                                          unsigned* __restrict__ nidxClustered,
