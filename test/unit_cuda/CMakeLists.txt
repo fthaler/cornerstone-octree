@@ -12,6 +12,7 @@ if(CMAKE_CUDA_COMPILER OR CMAKE_HIP_COMPILER)
     add_library(gpu_unit_obj OBJECT
             domain/domaindecomp_gpu.cu
             halos/gather_halos_gpu.cu
+            neighbors/compressneighbors.cu
             primitives/clz.cu
             primitives/primitives_gpu.cu
             primitives/warpscan.cu
