@@ -46,7 +46,7 @@
 
 using namespace cstone;
 
-constexpr unsigned ncmax = 256;
+constexpr unsigned ncmax = 192;
 
 /* smoothing kernel evaluation functionality borrowed from SPH-EXA */
 
@@ -793,9 +793,9 @@ void computeDensityCompressedClustered(const std::size_t firstBody,
         return i == j ? mj : w * mj;
     };
 
-    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 512 / GpuConfig::warpSize};
+    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 256 / GpuConfig::warpSize};
     numBlocks      = 1 << 11;
-    findNeighborsClustered8<512 / GpuConfig::warpSize, true, ncmax, true><<<numBlocks, blockSize>>>(
+    findNeighborsClustered8<256 / GpuConfig::warpSize, true, ncmax, true><<<numBlocks, blockSize>>>(
         firstBody, lastBody, x, y, z, h, box, nullptr, rawPtr(clusterNeighbors), computeDensity, rho);
 }
 
