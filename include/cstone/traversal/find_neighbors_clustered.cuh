@@ -1748,6 +1748,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                                                            unsigned* __restrict__ nidxClustered,
                                                            int* globalPool)
 {
+    static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
     namespace cg = cooperative_groups;
 
     const auto grid  = cg::this_grid();
@@ -2957,6 +2958,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     Contribution contribution,
     Tr* __restrict__... results)
 {
+    static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
     namespace cg = cooperative_groups;
 
     const auto block = cg::this_thread_block();
