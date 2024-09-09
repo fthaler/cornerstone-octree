@@ -39,6 +39,7 @@
 #include <cub/warp/warp_merge_sort.cuh>
 
 #include "cstone/compressneighbors.hpp"
+#include "cstone/compressneighbors.cuh"
 #include "cstone/primitives/warpscan.cuh"
 #include "cstone/traversal/find_neighbors.cuh"
 
@@ -1730,6 +1731,7 @@ template<unsigned warpsPerBlock,
          bool UsePbc               = true,
          bool bypassL1CacheOnLoads = true,
          unsigned NcMax            = 256,
+         bool compress             = false,
          class Tc,
          class Th,
          class KeyType>
@@ -1744,11 +1746,9 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                                                            const Box<Tc> box,
                                                            unsigned* __restrict__ ncClustered,
                                                            unsigned* __restrict__ nidxClustered,
-                                                           unsigned ncmax,
                                                            int* globalPool)
 {
     namespace cg = cooperative_groups;
-    assert(ncmax <= NcMax);
 
     const auto grid  = cg::this_grid();
     const auto block = cg::this_thread_block();
@@ -1900,7 +1900,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                 bool newNeighbor = warp.ballot(isNeighbor) & iClusterMask;
                 if (newNeighbor)
                 {
-                    if (nc < ncmax && block.thread_index().x == 0)
+                    if (nc < NcMax && block.thread_index().x == 0)
                         nidx[block.thread_index().z][block.thread_index().y][nc] = jCluster;
                     ++nc;
                 }
@@ -2017,6 +2017,8 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
         for (unsigned c = 0; c < GpuConfig::warpSize / ClusterConfig::iSize; ++c)
         {
             const unsigned ncc = warp.shfl(nc, c * ClusterConfig::iSize);
+            const unsigned ic  = warp.shfl(iCluster, c * ClusterConfig::iSize);
+            if (ic >= numIClusters) continue;
 
             constexpr unsigned itemsPerWarp = NcMax / GpuConfig::warpSize;
             unsigned items[itemsPerWarp];
@@ -2044,17 +2046,40 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                 }
             }
 
-            const unsigned startIndex = inclusiveScanInt(unique) - unique;
+            const unsigned totalUnique = inclusiveScanInt(unique);
+            assert(totalUnique < NcMax);
+            const unsigned startIndex  = totalUnique - unique;
 
-            const unsigned ic = warp.shfl(iCluster, c * ClusterConfig::iSize);
-#pragma unroll itemsPerWarp
-            for (unsigned i = 0; i < unique; ++i)
+            if constexpr (compress)
             {
-                const unsigned nb                                  = startIndex + i;
-                nidxClustered[clusterNeighborIndex(ic, nb, ncmax)] = items[i];
-            }
+#pragma unroll itemsPerWarp
+                for (unsigned i = 0; i < unique; ++i)
+                {
+                    const unsigned nb                   = startIndex + i;
+                    nidx[block.thread_index().z][c][nb] = items[i];
+                }
+                const unsigned uniqueNeighbors = warp.shfl(totalUnique, GpuConfig::warpSize - 1);
+                assert(uniqueNeighbors < NcMax);
+#pragma unroll
+                for (unsigned i = 0; i < itemsPerWarp; ++i)
+                {
+                    items[i] = nidx[block.thread_index().z][c][itemsPerWarp * warp.thread_rank() + i];
+                }
 
-            if (warp.thread_rank() == GpuConfig::warpSize - 1) ncClustered[ic] = startIndex + unique;
+                warpCompressNeighbors<warpsPerBlock, itemsPerWarp>(
+                    items, (char*)&nidxClustered[clusterNeighborIndex(ic, 0, NcMax)], uniqueNeighbors);
+            }
+            else
+            {
+#pragma unroll itemsPerWarp
+                for (unsigned i = 0; i < unique; ++i)
+                {
+                    const unsigned nb                                  = startIndex + i;
+                    nidxClustered[clusterNeighborIndex(ic, nb, NcMax)] = items[i];
+                }
+
+                if (warp.thread_rank() == GpuConfig::warpSize - 1) ncClustered[ic] = startIndex + unique;
+            }
         }
     }
 }

@@ -233,7 +233,12 @@ std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBo
     return {clusterNeighborsCount, clusterNeighbors};
 }
 
-template<class Tc, class Th, class KeyType>
+template<bool compress             = false,
+         bool bypassL1CacheOnLoads = true,
+         unsigned NcMax            = 256,
+         class Tc,
+         class Th,
+         class KeyType>
 void findNeighborsC(std::size_t firstBody,
                     std::size_t lastBody,
                     const Tc* x,
@@ -244,15 +249,14 @@ void findNeighborsC(std::size_t firstBody,
                     const Box<Tc>& box,
                     unsigned* nc,
                     unsigned* nidx,
-                    unsigned ngmax,
-                    unsigned ncmax)
+                    unsigned ngmax)
 {
     unsigned numBodies = lastBody - firstBody;
     unsigned numBlocks = TravConfig::numBlocks(numBodies);
     unsigned poolSize  = TravConfig::poolSize(numBodies);
     static thrust::universal_vector<unsigned> clusterNeighbors, clusterNeighborsCount;
     static thrust::universal_vector<int> globalPool;
-    clusterNeighbors.resize(iceil(lastBody, ClusterConfig::iSize) * ncmax);
+    clusterNeighbors.resize(iceil(lastBody, ClusterConfig::iSize) * NcMax);
     clusterNeighborsCount.resize(iceil(lastBody, ClusterConfig::iSize));
     globalPool.resize(poolSize);
 
@@ -263,19 +267,19 @@ void findNeighborsC(std::size_t firstBody,
 
     resetTraversalCounters<<<1, 1>>>();
     auto t0 = std::chrono::high_resolution_clock::now();
-    findClusterNeighbors9<warpsPerBlock><<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box,
-                                                                 rawPtr(clusterNeighborsCount),
-                                                                 rawPtr(clusterNeighbors), ncmax, rawPtr(globalPool));
+    findClusterNeighbors9<warpsPerBlock, true, bypassL1CacheOnLoads, NcMax, compress>
+        <<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
+                                 rawPtr(clusterNeighbors), rawPtr(globalPool));
     kernelSuccess("findClusterNeighbors");
     auto t1   = std::chrono::high_resolution_clock::now();
     double dt = std::chrono::duration<double>(t1 - t0).count();
     std::cout << "Clustered NB build time " << dt << " s" << std::endl;
 
-    if (false) // enable for debugging cluster neighbors
+    if (!compress && false) // enable for debugging cluster neighbors
     {
 
         auto [clusterNeighborsCountCPU, clusterNeighborsCPU] =
-            findClusterNeighborsCPU(firstBody, lastBody, x, y, z, h, tree, box, ngmax, ncmax);
+            findClusterNeighborsCPU(firstBody, lastBody, x, y, z, h, tree, box, ngmax, NcMax);
 
         bool fail = false;
         for (std::size_t i = 0; i < clusterNeighborsCountCPU.size(); ++i)
@@ -294,16 +298,16 @@ void findNeighborsC(std::size_t firstBody,
             for (std::size_t iCluster = 0; iCluster < clusterNeighborsCountCPU.size(); ++iCluster)
             {
                 unsigned nc = clusterNeighborsCountCPU[iCluster];
-                std::sort(clusterNeighborsCPU.begin() + iCluster * ncmax,
-                          clusterNeighborsCPU.begin() + iCluster * ncmax + nc);
+                std::sort(clusterNeighborsCPU.begin() + iCluster * NcMax,
+                          clusterNeighborsCPU.begin() + iCluster * NcMax + nc);
                 std::vector<unsigned> sortedClusterNeighborsGPU(nc);
                 for (unsigned nb = 0; nb < nc; ++nb)
-                    sortedClusterNeighborsGPU[nb] = clusterNeighbors[clusterNeighborIndex(iCluster, nb, ncmax)];
+                    sortedClusterNeighborsGPU[nb] = clusterNeighbors[clusterNeighborIndex(iCluster, nb, NcMax)];
                 std::sort(sortedClusterNeighborsGPU.begin(), sortedClusterNeighborsGPU.end());
                 for (unsigned nb = 0; nb < nc; ++nb)
-                    if (clusterNeighborsCPU[iCluster * ncmax + nb] != sortedClusterNeighborsGPU[nb])
+                    if (clusterNeighborsCPU[iCluster * NcMax + nb] != sortedClusterNeighborsGPU[nb])
                     {
-                        std::cout << iCluster << ":" << nb << " " << clusterNeighborsCPU[iCluster * ncmax + nb] << " "
+                        std::cout << iCluster << ":" << nb << " " << clusterNeighborsCPU[iCluster * NcMax + nb] << " "
                                   << sortedClusterNeighborsGPU[nb] << "\n";
                         fail = true;
                     }
@@ -336,7 +340,7 @@ void findNeighborsC(std::size_t firstBody,
     t0 = std::chrono::high_resolution_clock::now();
     findNeighborsClustered<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box,
                                                                   rawPtr(clusterNeighborsCount),
-                                                                  rawPtr(clusterNeighbors), ncmax, countNeighbors, nc);
+                                                                  rawPtr(clusterNeighbors), NcMax, countNeighbors, nc);
     kernelSuccess("findClusterNeighbors");
     t1 = std::chrono::high_resolution_clock::now();
     dt = std::chrono::duration<double>(t1 - t0).count();
@@ -512,6 +516,6 @@ int main()
     std::cout << "--- CLUSTERED ---" << std::endl;
     auto clustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
                          const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
-    { findNeighborsC(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax, 512); };
+    { findNeighborsC<false>(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
     benchmarkGpu<Tc, KeyType>(clustered, neighborIndexBatched);
 }
