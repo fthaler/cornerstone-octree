@@ -173,10 +173,10 @@ warpCompressNeighbors(std::uint32_t neighbors[ItemsPerThread], char* output, con
     }
 
     const unsigned leftConsecutiveOnes = warp.shfl_up(consecutiveOnes[ItemsPerThread - 1], 1);
-    if (consecutiveOnes[0] > 6) consecutiveOnes[0] -= leftConsecutiveOnes;
 #pragma unroll
-    for (unsigned i = 1; i < ItemsPerThread; ++i)
+    for (unsigned i = ItemsPerThread - 1; i > 0; --i)
         if (consecutiveOnes[i] > 6) consecutiveOnes[i] -= consecutiveOnes[i - 1];
+    if (consecutiveOnes[0] > 6) consecutiveOnes[0] -= leftConsecutiveOnes;
 
     std::uint8_t infoNibbles[ItemsPerThread];
 #pragma unroll
