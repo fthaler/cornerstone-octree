@@ -2048,7 +2048,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 
             const unsigned totalUnique = inclusiveScanInt(unique);
             assert(totalUnique < NcMax);
-            const unsigned startIndex  = totalUnique - unique;
+            const unsigned startIndex = totalUnique - unique;
 
             if constexpr (compress)
             {
@@ -2936,7 +2936,14 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
     }
 }
 
-template<int warpsPerBlock, bool bypassL1CacheOnLoads = true, class Tc, class Th, class Contribution, class... Tr>
+template<int warpsPerBlock,
+         bool bypassL1CacheOnLoads = true,
+         unsigned NcMax            = 256,
+         bool compress             = false,
+         class Tc,
+         class Th,
+         class Contribution,
+         class... Tr>
 __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPerBlock) void findNeighborsClustered8(
     cstone::LocalIndex firstBody,
     cstone::LocalIndex lastBody,
@@ -2947,7 +2954,6 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     const Box<Tc> box,
     const unsigned* __restrict__ ncClustered,
     const unsigned* __restrict__ nidxClustered,
-    unsigned ncmax,
     Contribution contribution,
     Tr* __restrict__... results)
 {
@@ -3089,11 +3095,11 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
              ++jCluster)
             computeClusterInteraction(jCluster);
 
-        const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], ncmax);
+        const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
 #pragma unroll ClusterConfig::jSize
         for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
         {
-            const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, ncmax)];
+            const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, NcMax)];
             computeClusterInteraction(jCluster);
         }
         // detail::tuple_foreach([](auto const& sum) { printf("%.3f\n", sum); }, sums);
