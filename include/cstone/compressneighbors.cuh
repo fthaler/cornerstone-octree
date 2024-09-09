@@ -47,7 +47,7 @@ namespace detail
 {
 
 template<unsigned NumWarps, unsigned ItemsPerThread, class T, class Op>
-__device__ inline void warpInclusiveScan(T items[ItemsPerThread], Op&& op)
+__device__ __forceinline__ void warpInclusiveScan(T items[ItemsPerThread], Op&& op)
 {
     namespace cg    = cooperative_groups;
     const auto warp = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
@@ -73,19 +73,19 @@ __device__ inline void warpInclusiveScan(T items[ItemsPerThread], Op&& op)
 }
 
 template<unsigned NumWarps, unsigned ItemsPerThread, class T>
-__device__ inline void warpInclusiveSum(T items[ItemsPerThread])
+__device__ __forceinline__ void warpInclusiveSum(T items[ItemsPerThread])
 {
     warpInclusiveScan<NumWarps, ItemsPerThread>(items, cub::Sum());
 }
 
 template<unsigned NumWarps, unsigned ItemsPerThread, class T>
-__device__ inline void warpInclusiveMax(T items[ItemsPerThread])
+__device__ __forceinline__ void warpInclusiveMax(T items[ItemsPerThread])
 {
     warpInclusiveScan<NumWarps, ItemsPerThread>(items, cub::Max());
 }
 
 template<unsigned NumWarps, unsigned ItemsPerThread, class T>
-__device__ inline void warpStreamCompact(T items[ItemsPerThread], bool keep[ItemsPerThread], unsigned& kept)
+__device__ __forceinline__ void warpStreamCompact(T items[ItemsPerThread], bool keep[ItemsPerThread], unsigned& kept)
 {
     namespace cg    = cooperative_groups;
     const auto warp = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
@@ -111,7 +111,8 @@ __device__ inline void warpStreamCompact(T items[ItemsPerThread], bool keep[Item
 } // namespace detail
 
 template<unsigned NumWarps, unsigned ItemsPerThread>
-__device__ void warpCompressNeighbors(std::uint32_t neighbors[ItemsPerThread], char* output, const unsigned n)
+__device__ __forceinline__ void
+warpCompressNeighbors(std::uint32_t neighbors[ItemsPerThread], char* output, const unsigned n)
 {
     // TODO: add a buffer size limit, currently we just overflow
 
@@ -236,7 +237,7 @@ __device__ void warpCompressNeighbors(std::uint32_t neighbors[ItemsPerThread], c
 }
 
 template<unsigned NumWarps, unsigned ItemsPerThread>
-__device__ void
+__device__ __forceinline__ void
 warpDecompressNeighbors(const char* __restrict__ input, std::uint32_t* __restrict__ neighbors, unsigned& n)
 {
     namespace cg = cooperative_groups;
