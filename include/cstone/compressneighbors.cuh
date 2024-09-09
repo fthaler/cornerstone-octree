@@ -116,6 +116,8 @@ warpCompressNeighbors(std::uint32_t neighbors[ItemsPerThread], char* output, con
 {
     // TODO: add a buffer size limit, currently we just overflow
 
+    assert(n <= ItemsPerThread * GpuConfig::warpSize);
+
     namespace cg = cooperative_groups;
     auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
 
@@ -283,6 +285,7 @@ warpDecompressNeighbors(const char* __restrict__ input, std::uint32_t* __restric
     detail::warpInclusiveSum<NumWarps, ItemsPerThread>(dataIndices);
     detail::warpInclusiveSum<NumWarps, ItemsPerThread>(neighborIndices);
     n = warp.shfl(neighborIndices[ItemsPerThread - 1], GpuConfig::warpSize - 1);
+    assert(n <= ItemsPerThread * GpuConfig::warpSize);
 
 #pragma unroll
     for (unsigned i = 0; i < ItemsPerThread; ++i)
