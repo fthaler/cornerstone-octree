@@ -337,10 +337,12 @@ void findNeighborsC(std::size_t firstBody,
 
     cudaMemset(nc + firstBody, 0, numBodies * sizeof(unsigned));
     resetTraversalCounters<<<1, 1>>>();
-    t0 = std::chrono::high_resolution_clock::now();
-    findNeighborsClustered<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, box,
-                                                                  rawPtr(clusterNeighborsCount),
-                                                                  rawPtr(clusterNeighbors), NcMax, countNeighbors, nc);
+    t0             = std::chrono::high_resolution_clock::now();
+    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 512 / GpuConfig::warpSize};
+    numBlocks      = 1 << 11;
+    findNeighborsClustered8<512 / GpuConfig::warpSize>
+        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
+                                   rawPtr(clusterNeighbors), NcMax, countNeighbors, nc);
     kernelSuccess("findClusterNeighbors");
     t1 = std::chrono::high_resolution_clock::now();
     dt = std::chrono::duration<double>(t1 - t0).count();
