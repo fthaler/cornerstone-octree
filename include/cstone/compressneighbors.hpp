@@ -29,6 +29,8 @@
  * @author Felix Thaler <thaler@cscs.ch>
  */
 
+#pragma once
+
 #include <cassert>
 #include <cstdint>
 #include <iterator>
