@@ -204,6 +204,7 @@ std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBo
     std::vector<unsigned> clusterNeighborsCount(iClusters, 0);
     std::vector<unsigned> clusterNeighbors(iClusters * ncmax);
 
+    unsigned maxClusterNeighbors = 0;
     for (auto i = firstBody; i < lastBody; ++i)
     {
         auto iCluster               = i / ClusterConfig::iSize;
@@ -230,7 +231,9 @@ std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBo
                 ++clusterNeighborsCount[iCluster];
             }
         }
+        maxClusterNeighbors = std::max(maxClusterNeighbors, clusterNeighborsCount[iCluster]);
     }
+    printf("Max. cluster neighbors: %u\n", maxClusterNeighbors);
     return {clusterNeighborsCount, clusterNeighbors};
 }
 
@@ -392,19 +395,21 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
                                     centers.data(),
                                     sizes.data()};
 
+    unsigned maxNeighbors = 0;
     auto findNeighborsCpu = [&]()
     {
-#pragma omp parallel for
+#pragma omp parallel for reduction(max : maxNeighbors)
         for (LocalIndex i = 0; i < n; ++i)
         {
             neighborsCountCPU[i] =
                 findNeighbors(i, x, y, z, h.data(), nsView, box, ngmax, neighborsCPU.data() + i * ngmax);
+            maxNeighbors = std::max(maxNeighbors, neighborsCountCPU[i]);
         }
     };
 
     float cpuTime = timeCpu(findNeighborsCpu);
 
-    std::cout << "CPU time " << cpuTime << " s" << std::endl;
+    std::cout << "CPU time " << cpuTime << " s, max. neighbors: " << maxNeighbors << std::endl;
     std::copy(neighborsCountCPU.data(), neighborsCountCPU.data() + std::min(n, 64),
               std::ostream_iterator<int>(std::cout, " "));
     std::cout << std::endl;
