@@ -520,4 +520,11 @@ int main()
                          const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
     { findNeighborsC<false>(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
     benchmarkGpu<Tc, KeyType>(clustered, neighborIndexBatched);
+
+    std::cout << "--- COMPRESSED CLUSTERED ---" << std::endl;
+    auto compressedClustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y,
+                                   const auto* z, const auto* h, auto tree, const auto& box, unsigned* nc,
+                                   unsigned* nidx, unsigned ngmax)
+    { findNeighborsC<true>(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
+    benchmarkGpu<Tc, KeyType>(compressedClustered, neighborIndexBatched);
 }

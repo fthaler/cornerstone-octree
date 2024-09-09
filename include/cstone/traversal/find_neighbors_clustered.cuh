@@ -2973,6 +2973,13 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     assert(firstBody == 0); // TODO: other cases
     const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
 
+    unsigned* nidx = nullptr;
+    if constexpr (compress)
+    {
+        __shared__ unsigned nidxBuffer[warpsPerBlock][NcMax];
+        nidx = nidxBuffer[block.thread_index().z];
+    }
+
 #if CSTONE_USE_CUDA_PIPELINE
     alignas(16) __shared__ Tc xiSharedBuffer[warpsPerBlock][ClusterConfig::iSize];
     alignas(16) __shared__ Tc yiSharedBuffer[warpsPerBlock][ClusterConfig::iSize];
@@ -3095,20 +3102,33 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
              ++jCluster)
             computeClusterInteraction(jCluster);
 
-        const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
-#pragma unroll ClusterConfig::jSize
-        for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
+        if constexpr (compress)
         {
-            const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, NcMax)];
-            computeClusterInteraction(jCluster);
+            unsigned iClusterNeighborsCount;
+            warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>(
+                (const char*)&nidxClustered[clusterNeighborIndex(iCluster, 0, NcMax)], nidx, iClusterNeighborsCount);
+            for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
+            {
+                const unsigned jCluster = nidx[jc];
+                computeClusterInteraction(jCluster);
+            }
         }
-        // detail::tuple_foreach([](auto const& sum) { printf("%.3f\n", sum); }, sums);
+        else
+        {
+            const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
+#pragma unroll ClusterConfig::jSize
+            for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
+            {
+                const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, NcMax)];
+                computeClusterInteraction(jCluster);
+            }
+        }
 
 #pragma unroll
         for (unsigned offset = GpuConfig::warpSize / 2; offset >= ClusterConfig::iSize; offset /= 2)
             detail::tuple_foreach([&](auto& sum) { sum += warp.shfl_down(sum, offset); }, sums);
 
-        if (block.thread_index().y == 0)
+        if (block.thread_index().y == 0 & i < lastBody)
             detail::tuple_foreach([i](auto& res, auto const& sum) { res[i] = sum; }, std::make_tuple(results...), sums);
     }
 }
