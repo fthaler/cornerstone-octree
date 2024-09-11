@@ -235,6 +235,7 @@ void computeDensityNaiveDirect(
     auto& [neighbors, neighborsCount, tree] = neighborhood;
     computeDensityNaiveDirectKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
         x, y, z, h, m, wh, firstBody, lastBody, box, tree, rawPtr(neighbors), rawPtr(neighborsCount), ngmax, rho);
+    checkGpuErrors(cudaGetLastError());
 }
 
 template<class Tc, class T, class KeyType>
@@ -370,6 +371,7 @@ void computeDensityBatchedDirect(const std::size_t firstBody,
     computeDensityBatchedDirectKernel<<<numBlocks, TravConfig::numThreads>>>(
         firstBody, lastBody, x, y, z, h, m, box, tree, wh, rho, rawPtr(neighborsCount), rawPtr(neighbors), ngmax,
         rawPtr(globalPool));
+    checkGpuErrors(cudaGetLastError());
 }
 
 template<class Tc, class T, class KeyType>
@@ -411,6 +413,7 @@ buildNeighborhoodNaive(std::size_t firstBody,
 
     buildNeighborhoodNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
         x, y, z, h, firstBody, lastBody, box, tree, ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
+    checkGpuErrors(cudaGetLastError());
 
     return {neighbors, neighborsCount};
 }
@@ -474,6 +477,7 @@ void computeDensityNaive(
     auto& [neighbors, neighborsCount] = neighborhood;
     computeDensityNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
         x, y, z, h, m, wh, firstBody, lastBody, box, rawPtr(neighbors), rawPtr(neighborsCount), ngmax, rho);
+    checkGpuErrors(cudaGetLastError());
 }
 
 template<class Tc, class Th, class KeyType>
@@ -553,6 +557,7 @@ buildNeighborhoodBatched(std::size_t firstBody,
     buildNeighborhoodBatchedKernel<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
                                                                           rawPtr(neighborsCount), rawPtr(neighbors),
                                                                           ngmax, rawPtr(globalPool));
+    checkGpuErrors(cudaGetLastError());
 
     return {neighbors, neighborsCount};
 }
@@ -640,6 +645,7 @@ void computeDensityBatched(
     resetTraversalCounters<<<1, 1>>>();
     computeDensityBatchedKernel<<<numBlocks, TravConfig::numThreads>>>(
         firstBody, lastBody, x, y, z, h, m, box, wh, rho, rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
+    checkGpuErrors(cudaGetLastError());
 }
 
 template<class Tc, class T, class KeyType>
@@ -713,6 +719,7 @@ void computeDensityClustered(
     findNeighborsClustered8<512 / GpuConfig::warpSize, true, ncmax, false>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeDensity, rho);
+    checkGpuErrors(cudaGetLastError());
 }
 
 template<class Tc, class T, class KeyType>
@@ -743,6 +750,7 @@ thrust::device_vector<LocalIndex> buildNeighborhoodCompressedClustered(std::size
     resetTraversalCounters<<<1, 1>>>();
     findClusterNeighbors9<warpsPerBlock, true, true, ncmax, true><<<numBlocks, threads>>>(
         firstBody, lastBody, x, y, z, h, tree, box, nullptr, rawPtr(clusterNeighbors), rawPtr(globalPool));
+    checkGpuErrors(cudaGetLastError());
 
     return clusterNeighbors;
 }
@@ -778,6 +786,7 @@ void computeDensityCompressedClustered(const std::size_t firstBody,
     numBlocks      = 1 << 11;
     findNeighborsClustered8<256 / GpuConfig::warpSize, true, ncmax, true><<<numBlocks, blockSize>>>(
         firstBody, lastBody, x, y, z, h, box, nullptr, rawPtr(clusterNeighbors), computeDensity, rho);
+    checkGpuErrors(cudaGetLastError());
 }
 
 template<class Tc, class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeDensityF>
