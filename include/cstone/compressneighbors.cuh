@@ -134,6 +134,7 @@ warpCompressNeighbors(std::uint32_t neighbors[ItemsPerThread], char* output, con
     for (unsigned i = 1; i < ItemsPerThread; ++i)
         diff[i] = neighbors[i] - neighbors[i - 1];
     unsigned cumulativeOnes[ItemsPerThread];
+#pragma unroll
     for (unsigned i = 0; i < ItemsPerThread; ++i)
         cumulativeOnes[i] = diff[i] == 1;
     detail::warpInclusiveSum<NumWarps, ItemsPerThread>(cumulativeOnes);

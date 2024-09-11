@@ -2044,8 +2044,15 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                 const unsigned item = items[i];
                 if (item != prev & item != unsigned(-1))
                 {
-                    items[unique++] = item;
-                    prev            = item;
+                    // the following loop implements basically items[unique] = item;
+                    // but enables scalar replacement of items[]
+#pragma unroll
+                    for (unsigned j = 0; j < itemsPerWarp; ++j)
+                    {
+                        if (j == unique) items[unique] = item;
+                    }
+                    ++unique;
+                    prev = item;
                 }
             }
 
@@ -2055,11 +2062,17 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 
             if constexpr (compress)
             {
-#pragma unroll itemsPerWarp
-                for (unsigned i = 0; i < unique; ++i)
+                // the following loop with if-condition is equivalent to
+                // for (unsigned i = 0; i < unique; ++i)
+                // but enables scalar replacement of items[]
+#pragma unroll
+                for (unsigned i = 0; i < itemsPerWarp; ++i)
                 {
-                    const unsigned nb                   = startIndex + i;
-                    nidx[block.thread_index().z][c][nb] = items[i];
+                    if (i < unique)
+                    {
+                        const unsigned nb                   = startIndex + i;
+                        nidx[block.thread_index().z][c][nb] = items[i];
+                    }
                 }
                 const unsigned uniqueNeighbors = warp.shfl(totalUnique, GpuConfig::warpSize - 1);
                 assert(uniqueNeighbors < NcMax);
@@ -2076,11 +2089,14 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
             }
             else
             {
-#pragma unroll itemsPerWarp
-                for (unsigned i = 0; i < unique; ++i)
+#pragma unroll
+                for (unsigned i = 0; i < itemsPerWarp; ++i)
                 {
-                    const unsigned nb                                  = startIndex + i;
-                    nidxClustered[clusterNeighborIndex(ic, nb, NcMax)] = items[i];
+                    if (i < unique)
+                    {
+                        const unsigned nb                                  = startIndex + i;
+                        nidxClustered[clusterNeighborIndex(ic, nb, NcMax)] = items[i];
+                    }
                 }
 
                 if (warp.thread_rank() == GpuConfig::warpSize - 1) ncClustered[ic] = startIndex + unique;
