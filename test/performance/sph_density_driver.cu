@@ -108,6 +108,31 @@ __host__ __device__ inline T table_lookup(const T* table, T v)
     }
 }
 
+class CudaAutoTimer
+{
+    cudaEvent_t start, end;
+    const char* fmt;
+
+public:
+    CudaAutoTimer(const char* fmt)
+        : fmt(fmt)
+    {
+        cudaEventCreate(&start);
+        cudaEventCreate(&end);
+        cudaEventRecord(start);
+    }
+    ~CudaAutoTimer()
+    {
+        cudaEventRecord(end);
+        cudaEventSynchronize(end);
+        float duration;
+        cudaEventElapsedTime(&duration, start, end);
+        cudaEventDestroy(start);
+        cudaEventDestroy(end);
+        printf(fmt, duration / 1000.0);
+    }
+};
+
 template<class Tc, class T, class Tm, class KeyType>
 void computeDensityCPU(const std::size_t firstBody,
                        const std::size_t lastBody,
@@ -411,9 +436,12 @@ buildNeighborhoodNaive(std::size_t firstBody,
     printf("Memory usage of neighborhood data: %.2f MB\n",
            (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
 
-    buildNeighborhoodNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
-        x, y, z, h, firstBody, lastBody, box, tree, ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
-    checkGpuErrors(cudaGetLastError());
+    {
+        CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
+        buildNeighborhoodNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
+            x, y, z, h, firstBody, lastBody, box, tree, ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
+        checkGpuErrors(cudaGetLastError());
+    }
 
     return {neighbors, neighborsCount};
 }
@@ -553,11 +581,14 @@ buildNeighborhoodBatched(std::size_t firstBody,
             sizeof(int) * globalPool.size()) /
                1.0e6);
 
-    resetTraversalCounters<<<1, 1>>>();
-    buildNeighborhoodBatchedKernel<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
-                                                                          rawPtr(neighborsCount), rawPtr(neighbors),
-                                                                          ngmax, rawPtr(globalPool));
-    checkGpuErrors(cudaGetLastError());
+    {
+        CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
+        resetTraversalCounters<<<1, 1>>>();
+        buildNeighborhoodBatchedKernel<<<numBlocks, TravConfig::numThreads>>>(
+            firstBody, lastBody, x, y, z, h, tree, box, rawPtr(neighborsCount), rawPtr(neighbors), ngmax,
+            rawPtr(globalPool));
+        checkGpuErrors(cudaGetLastError());
+    }
 
     return {neighbors, neighborsCount};
 }
@@ -677,11 +708,14 @@ buildNeighborhoodClustered(std::size_t firstBody,
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
-    resetTraversalCounters<<<1, 1>>>();
-    findClusterNeighbors9<warpsPerBlock, true, true, ncmax, false>
-        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
-                                   rawPtr(clusterNeighbors), rawPtr(globalPool));
-    checkGpuErrors(cudaGetLastError());
+    {
+        CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
+        resetTraversalCounters<<<1, 1>>>();
+        findClusterNeighbors9<warpsPerBlock, true, true, ncmax, false>
+            <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
+                                       rawPtr(clusterNeighbors), rawPtr(globalPool));
+        checkGpuErrors(cudaGetLastError());
+    }
 
     return {clusterNeighbors, clusterNeighborsCount};
 }
@@ -749,10 +783,13 @@ thrust::device_vector<LocalIndex> buildNeighborhoodCompressedClustered(std::size
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
-    resetTraversalCounters<<<1, 1>>>();
-    findClusterNeighbors9<warpsPerBlock, true, true, ncmax, true><<<numBlocks, blockSize>>>(
-        firstBody, lastBody, x, y, z, h, tree, box, nullptr, rawPtr(clusterNeighbors), rawPtr(globalPool));
-    checkGpuErrors(cudaGetLastError());
+    {
+        CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
+        resetTraversalCounters<<<1, 1>>>();
+        findClusterNeighbors9<warpsPerBlock, true, true, ncmax, true><<<numBlocks, blockSize>>>(
+            firstBody, lastBody, x, y, z, h, tree, box, nullptr, rawPtr(clusterNeighbors), rawPtr(globalPool));
+        checkGpuErrors(cudaGetLastError());
+    }
 
     return clusterNeighbors;
 }
