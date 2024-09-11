@@ -1762,7 +1762,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
     const auto warp = cg::tiled_partition<GpuConfig::warpSize>(block);
 
     volatile __shared__ int sharedPool[GpuConfig::warpSize * warpsPerBlock];
-    volatile __shared__ unsigned nidx[warpsPerBlock][GpuConfig::warpSize / ClusterConfig::iSize][NcMax];
+    __shared__ unsigned nidx[warpsPerBlock][GpuConfig::warpSize / ClusterConfig::iSize][NcMax];
 
     assert(firstBody == 0); // TODO: other cases
     const unsigned numTargets   = iceil(lastBody, GpuConfig::warpSize);
