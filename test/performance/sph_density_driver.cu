@@ -108,30 +108,7 @@ __host__ __device__ inline T table_lookup(const T* table, T v)
     }
 }
 
-template<class Tc, class Th, class KeyType>
-std::tuple<std::vector<LocalIndex>, std::vector<unsigned>> buildNeighborhoodCPU(std::size_t firstBody,
-                                                                                std::size_t lastBody,
-                                                                                const Tc* x,
-                                                                                const Tc* y,
-                                                                                const Tc* z,
-                                                                                const Th* h,
-                                                                                OctreeNsView<Tc, KeyType> tree,
-                                                                                const Box<Tc>& box,
-                                                                                unsigned ngmax)
-{
-    std::vector<LocalIndex> neighbors(ngmax * lastBody);
-    std::vector<unsigned> neighborsCount(lastBody);
-
-#pragma omp parallel for
-    for (std::size_t i = firstBody; i < lastBody; ++i)
-    {
-        neighborsCount[i] = findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors.data() + i * ngmax);
-    }
-
-    return {neighbors, neighborsCount};
-}
-
-template<class Tc, class T, class Tm>
+template<class Tc, class T, class Tm, class KeyType>
 void computeDensityCPU(const std::size_t firstBody,
                        const std::size_t lastBody,
                        const Tc* x,
@@ -139,36 +116,40 @@ void computeDensityCPU(const std::size_t firstBody,
                        const Tc* z,
                        const T* h,
                        const Tm* m,
+                       const OctreeNsView<Tc, KeyType>& tree,
                        const Box<Tc>& box,
                        const unsigned ngmax,
                        const T* wh,
-                       T* rho,
-                       const std::tuple<std::vector<LocalIndex>, std::vector<unsigned>>& neighborhood)
+                       T* rho)
 {
-    auto& [neighbors, neighborsCount] = neighborhood;
-#pragma omp parallel for
-    for (std::size_t i = firstBody; i < lastBody; ++i)
+#pragma omp parallel
     {
-        const Tc xi  = x[i];
-        const Tc yi  = y[i];
-        const Tc zi  = z[i];
-        const T hi   = h[i];
-        const T mi   = m[i];
-        const T hInv = 1.0 / hi;
+        std::vector<unsigned> neighbors(ngmax);
 
-        unsigned nbs = neighborsCount[i];
-        T rhoi       = mi;
-        for (unsigned nb = 0; nb < nbs; ++nb)
+#pragma omp for
+        for (std::size_t i = firstBody; i < lastBody; ++i)
         {
-            unsigned j = neighbors[i * ngmax + nb];
-            T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
-            T vloc     = dist * hInv;
-            T w        = table_lookup<true>(wh, vloc);
+            const Tc xi  = x[i];
+            const Tc yi  = y[i];
+            const Tc zi  = z[i];
+            const T hi   = h[i];
+            const T mi   = m[i];
+            const T hInv = 1.0 / hi;
 
-            rhoi += w * m[j];
+            unsigned nbs = findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors.data());
+            T rhoi       = mi;
+            for (unsigned nb = 0; nb < nbs; ++nb)
+            {
+                unsigned j = neighbors[nb];
+                T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
+                T vloc     = dist * hInv;
+                T w        = table_lookup<true>(wh, vloc);
+
+                rhoi += w * m[j];
+            }
+
+            rho[i] = rhoi;
         }
-
-        rho[i] = rhoi;
     }
 }
 
@@ -848,9 +829,8 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
                                      sizes.data()};
 
     std::vector<T> rho(n), m(n, 1.0);
-    auto wh              = kernelTable<T>();
-    auto neighborhoodCPU = buildNeighborhoodCPU(0, n, x, y, z, h.data(), nsView, box, ngmax);
-    computeDensityCPU(0, n, x, y, z, h.data(), m.data(), box, ngmax, wh.data(), rho.data(), neighborhoodCPU);
+    auto wh = kernelTable<T>();
+    computeDensityCPU(0, n, x, y, z, h.data(), m.data(), nsView, box, ngmax, wh.data(), rho.data());
 
     thrust::device_vector<Tc> d_x(coords.x().begin(), coords.x().end());
     thrust::device_vector<Tc> d_y(coords.y().begin(), coords.y().end());
