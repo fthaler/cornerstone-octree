@@ -850,6 +850,10 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     thrust::device_vector<T> d_wh(wh.size());
     thrust::copy(wh.begin(), wh.end(), d_wh.begin());
 
+    printf("Memory usage of particle data: %.2f MB\n", (sizeof(Tc) * (d_x.size() + d_y.size() + d_z.size()) +
+                                                        sizeof(T) * (d_h.size() + d_m.size() + d_rho.size())) /
+                                                           1.0e6);
+
     thrust::device_vector<KeyType> d_prefixes             = octree.prefixes;
     thrust::device_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
     thrust::device_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
@@ -857,6 +861,12 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     thrust::device_vector<LocalIndex> d_layout            = layout;
     thrust::device_vector<Vec3<Tc>> d_centers             = centers;
     thrust::device_vector<Vec3<Tc>> d_sizes               = sizes;
+
+    printf("Memory usage of tree data: %.2f MB\n",
+           (sizeof(KeyType) * d_prefixes.size() +
+            sizeof(TreeNodeIndex) * (d_childOffsets.size() + d_internalToLeaf.size() + d_levelRange.size()) +
+            sizeof(LocalIndex) * d_layout.size() + sizeof(Vec3<Tc>) * (d_centers.size() + d_sizes.size())) /
+               1.0e6);
 
     OctreeNsView<Tc, KeyType> nsViewGpu{rawPtr(d_prefixes),   rawPtr(d_childOffsets), rawPtr(d_internalToLeaf),
                                         rawPtr(d_levelRange), rawPtr(d_layout),       rawPtr(d_centers),
