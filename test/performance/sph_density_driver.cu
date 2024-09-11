@@ -942,12 +942,16 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
         double rtol = 1e-5;
         return std::abs(a - b) <= atol + rtol * std::abs(b);
     };
+#pragma omp parallel for
     for (int i = 0; i < n; ++i)
     {
         if (!isclose(rhoGPU[i], rho[i]))
         {
-            printf("%i %.10f %.10f\n", i, rhoGPU[i], rho[i]);
-            ++numFails;
+#pragma omp critical
+            {
+                printf("%i %.10f %.10f\n", i, rhoGPU[i], rho[i]);
+                ++numFails;
+            }
         }
     }
     std::cout << "numFails: " << numFails << std::endl;
