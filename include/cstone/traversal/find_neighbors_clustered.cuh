@@ -50,8 +50,9 @@ namespace cstone
 
 struct ClusterConfig
 {
-    static constexpr unsigned iSize = 8;
-    static constexpr unsigned jSize = 4;
+    static constexpr unsigned iSize                   = 8;
+    static constexpr unsigned jSize                   = 4;
+    static constexpr unsigned expectedCompressionRate = 10;
 };
 
 __host__ __device__ inline constexpr unsigned long
@@ -2069,7 +2070,9 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                 }
 
                 warpCompressNeighbors<warpsPerBlock, itemsPerWarp>(
-                    items, (char*)&nidxClustered[clusterNeighborIndex(ic, 0, NcMax)], uniqueNeighbors);
+                    items,
+                    (char*)&nidxClustered[clusterNeighborIndex(ic, 0, NcMax / ClusterConfig::expectedCompressionRate)],
+                    uniqueNeighbors);
             }
             else
             {
@@ -3109,7 +3112,9 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
         {
             unsigned iClusterNeighborsCount;
             warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>(
-                (const char*)&nidxClustered[clusterNeighborIndex(iCluster, 0, NcMax)], nidx, iClusterNeighborsCount);
+                (const char*)&nidxClustered[clusterNeighborIndex(iCluster, 0,
+                                                                 NcMax / ClusterConfig::expectedCompressionRate)],
+                nidx, iClusterNeighborsCount);
             for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
             {
                 const unsigned jCluster = nidx[jc];

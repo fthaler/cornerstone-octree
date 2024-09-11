@@ -749,7 +749,7 @@ thrust::device_vector<LocalIndex> buildNeighborhoodCompressedClustered(std::size
     unsigned numBlocks    = TravConfig::numBlocks(numBodies);
     unsigned poolSize     = TravConfig::poolSize(numBodies);
     std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
-    thrust::device_vector<LocalIndex> clusterNeighbors(ncmax * iClusters);
+    thrust::device_vector<LocalIndex> clusterNeighbors((ncmax / ClusterConfig::expectedCompressionRate) * iClusters);
     thrust::device_vector<int> globalPool(poolSize);
     printf("Memory usage of neighborhood data: %.2f MB\n",
            (sizeof(LocalIndex) * clusterNeighbors.size() + sizeof(int) * globalPool.size()) / 1.0e6);
