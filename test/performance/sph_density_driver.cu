@@ -673,14 +673,15 @@ buildNeighborhoodClustered(std::size_t firstBody,
                1.0e6);
 
     // TODO: own traversal config for cluster kernels
-    static_assert(TravConfig::numThreads == 128);
-    constexpr unsigned warpsPerBlock = 4;
-    dim3 threads = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
+    constexpr unsigned threads       = 128;
+    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
+    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
     resetTraversalCounters<<<1, 1>>>();
     findClusterNeighbors9<warpsPerBlock, true, true, ncmax, false>
-        <<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
-                                 rawPtr(clusterNeighbors), rawPtr(globalPool));
+        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
+                                   rawPtr(clusterNeighbors), rawPtr(globalPool));
+    checkGpuErrors(cudaGetLastError());
 
     return {clusterNeighbors, clusterNeighborsCount};
 }
@@ -714,9 +715,11 @@ void computeDensityClustered(
         return i == j ? mj : w * mj;
     };
 
-    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 512 / GpuConfig::warpSize};
-    numBlocks      = 1 << 11;
-    findNeighborsClustered8<512 / GpuConfig::warpSize, true, ncmax, false>
+    constexpr unsigned threads       = 512;
+    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
+    dim3 blockSize                   = {ClusterConfig::iSize, ClusterConfig::jSize, warpsPerBlock};
+    numBlocks                        = 1 << 11;
+    findNeighborsClustered8<warpsPerBlock, true, ncmax, false>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeDensity, rho);
     checkGpuErrors(cudaGetLastError());
@@ -742,13 +745,12 @@ thrust::device_vector<LocalIndex> buildNeighborhoodCompressedClustered(std::size
     printf("Memory usage of neighborhood data: %.2f MB\n",
            (sizeof(LocalIndex) * clusterNeighbors.size() + sizeof(int) * globalPool.size()) / 1.0e6);
 
-    // TODO: own traversal config for cluster kernels
-    static_assert(TravConfig::numThreads == 128);
-    constexpr unsigned warpsPerBlock = 4;
-    dim3 threads = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
+    constexpr unsigned threads       = 64;
+    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
+    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
     resetTraversalCounters<<<1, 1>>>();
-    findClusterNeighbors9<warpsPerBlock, true, true, ncmax, true><<<numBlocks, threads>>>(
+    findClusterNeighbors9<warpsPerBlock, true, true, ncmax, true><<<numBlocks, blockSize>>>(
         firstBody, lastBody, x, y, z, h, tree, box, nullptr, rawPtr(clusterNeighbors), rawPtr(globalPool));
     checkGpuErrors(cudaGetLastError());
 
@@ -782,9 +784,11 @@ void computeDensityCompressedClustered(const std::size_t firstBody,
         return i == j ? mj : w * mj;
     };
 
-    dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 256 / GpuConfig::warpSize};
-    numBlocks      = 1 << 11;
-    findNeighborsClustered8<256 / GpuConfig::warpSize, true, ncmax, true><<<numBlocks, blockSize>>>(
+    constexpr unsigned threads       = 256;
+    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
+    dim3 blockSize                   = {ClusterConfig::iSize, ClusterConfig::jSize, warpsPerBlock};
+    numBlocks                        = 1 << 11;
+    findNeighborsClustered8<warpsPerBlock, true, ncmax, true><<<numBlocks, blockSize>>>(
         firstBody, lastBody, x, y, z, h, box, nullptr, rawPtr(clusterNeighbors), computeDensity, rho);
     checkGpuErrors(cudaGetLastError());
 }
