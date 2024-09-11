@@ -54,10 +54,11 @@ struct ClusterConfig
     static constexpr unsigned jSize = 4;
 };
 
-__host__ __device__ inline constexpr unsigned clusterNeighborIndex(unsigned cluster, unsigned neighbor, unsigned ncmax)
+__host__ __device__ inline constexpr unsigned long
+clusterNeighborIndex(unsigned long cluster, unsigned long neighbor, unsigned long ncmax)
 {
-    // constexpr unsigned blockSize = TravConfig::targetSize / ClusterConfig::iSize;
-    constexpr unsigned blockSize = 1; // better for findNeighborsClustered3
+    // constexpr unsigned long blockSize = TravConfig::targetSize / ClusterConfig::iSize;
+    constexpr unsigned long blockSize = 1; // better for findNeighborsClustered3
     return (cluster / blockSize) * blockSize * ncmax + (cluster % blockSize) + neighbor * blockSize;
 }
 

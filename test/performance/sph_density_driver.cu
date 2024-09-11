@@ -211,7 +211,7 @@ __global__ void computeDensityNaiveDirectKernel(const Tc* x,
     cstone::LocalIndex i   = firstId + tid;
     if (i >= lastId) { return; }
 
-    neighborsCount[i] = findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors + tid * ngmax);
+    neighborsCount[i] = findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors + (unsigned long)tid * ngmax);
 
     const Tc xi  = x[i];
     const Tc yi  = y[i];
@@ -224,7 +224,7 @@ __global__ void computeDensityNaiveDirectKernel(const Tc* x,
     T rhoi       = mi;
     for (unsigned nb = 0; nb < nbs; ++nb)
     {
-        unsigned j = neighbors[i * ngmax + nb];
+        unsigned j = neighbors[(unsigned long)i * ngmax + nb];
         T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
         T vloc     = dist * hInv;
         T w        = table_lookup(wh, vloc);
@@ -408,7 +408,7 @@ __global__ void buildNeighborhoodNaiveKernel(const Tc* x,
     cstone::LocalIndex id  = firstId + tid;
     if (id >= lastId) { return; }
 
-    neighborsCount[id] = findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors + tid * ngmax);
+    neighborsCount[id] = findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors + (unsigned long)tid * ngmax);
 }
 
 template<class Tc, class T, class KeyType>
@@ -464,7 +464,7 @@ __global__ void computeDensityNaiveKernel(const Tc* x,
     T rhoi       = mi;
     for (unsigned nb = 0; nb < nbs; ++nb)
     {
-        unsigned j = neighbors[i * ngmax + nb];
+        unsigned j = neighbors[(unsigned long)i * ngmax + nb];
         T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
         T vloc     = dist * hInv;
         T w        = table_lookup(wh, vloc);
@@ -523,7 +523,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void buildNeighborhoodBatch
 
         const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
         const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
-        unsigned* warpNidx                 = nidx + targetIdx * TravConfig::targetSize * ngmax;
+        unsigned* warpNidx                 = nidx + (unsigned long)targetIdx * TravConfig::targetSize * ngmax;
 
         unsigned nc_i[TravConfig::nwt] = {0};
 
@@ -609,8 +609,8 @@ __launch_bounds__(TravConfig::numThreads) void computeDensityBatchedKernel(cston
         for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
         {
             const cstone::LocalIndex i = bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx;
-            const unsigned* nidx =
-                neighbors + targetIdx * TravConfig::targetSize * ngmax + warpTarget * GpuConfig::warpSize + laneIdx;
+            const unsigned* nidx       = neighbors + (unsigned long)targetIdx * TravConfig::targetSize * ngmax +
+                                   warpTarget * GpuConfig::warpSize + laneIdx;
             if (i < bodyEnd)
             {
                 const Tc xi  = x[i];
