@@ -740,10 +740,10 @@ void computeDensityClustered(
     unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
 
     resetTraversalCounters<<<1, 1>>>();
-    auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T dist)
+    auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T dist2)
     {
-        T mj = m[j];
-        if (i == j) return mj;
+        T mj         = m[j];
+        const T dist = std::sqrt(dist2);
         const T vloc = dist * (1 / hi);
         const T w    = table_lookup(wh, vloc);
         return i == j ? mj : w * mj;
@@ -812,10 +812,10 @@ void computeDensityCompressedClustered(const std::size_t firstBody,
     unsigned numBlocks = TravConfig::numBlocks(numBodies);
 
     resetTraversalCounters<<<1, 1>>>();
-    auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T dist)
+    auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T dist2)
     {
-        T mj = m[j];
-        if (i == j) return mj;
+        T mj         = m[j];
+        const T dist = std::sqrt(dist2);
         const T vloc = dist * (1 / hi);
         const T w    = table_lookup(wh, vloc);
         return i == j ? mj : w * mj;

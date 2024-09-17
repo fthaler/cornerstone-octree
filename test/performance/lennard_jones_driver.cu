@@ -720,13 +720,12 @@ void computeLjClustered(
     unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
 
     resetTraversalCounters<<<1, 1>>>();
-    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T dist)
+    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T rsq)
     {
         T xx = iPos[0] - jPos[0];
         T yy = iPos[1] - jPos[1];
         T zz = iPos[2] - jPos[2];
         applyPBC(box, T(2) * hi, xx, yy, zz);
-        const T rsq = xx * xx + yy * yy + zz * zz;
 
         const T r2inv   = 1.0 / rsq;
         const T r6inv   = r2inv * r2inv * r2inv;
@@ -796,13 +795,12 @@ void computeLjCompressedClustered(const std::size_t firstBody,
     unsigned numBlocks = TravConfig::numBlocks(numBodies);
 
     resetTraversalCounters<<<1, 1>>>();
-    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T dist)
+    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T rsq)
     {
         T xx = iPos[0] - jPos[0];
         T yy = iPos[1] - jPos[1];
         T zz = iPos[2] - jPos[2];
         applyPBC(box, T(2) * hi, xx, yy, zz);
-        const T rsq = xx * xx + yy * yy + zz * zz;
 
         const T r2inv   = 1.0 / rsq;
         const T r6inv   = r2inv * r2inv * r2inv;

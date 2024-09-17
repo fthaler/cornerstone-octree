@@ -2307,7 +2307,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const Th d2 = distSq(jPos);
-                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
                 }
             }
 
@@ -2320,7 +2320,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered2(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const Th d2 = distSq(jPos);
-                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
                 }
             }
 
@@ -2408,7 +2408,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered3(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const Th d2 = distSq(jPos);
-                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
                 }
             }
 
@@ -2421,7 +2421,7 @@ __launch_bounds__(TravConfig::numThreads) void findNeighborsClustered3(cstone::L
                 {
                     const Vec3<Tc> jPos{x[j], y[j], z[j]};
                     const Th d2 = distSq(jPos);
-                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                    if (d2 < radiusSq) sum += contribution(i, iPos, hi, j, jPos, d2);
                 }
             }
 
@@ -2507,7 +2507,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
             }
         }
 
@@ -2521,7 +2521,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
             }
         }
 
@@ -2654,7 +2654,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
             }
         }
 
@@ -2668,7 +2668,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
             }
         }
 
@@ -2791,7 +2791,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
             }
         }
 
@@ -2805,7 +2805,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
             }
         }
 
@@ -2931,7 +2931,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
             }
         }
 
@@ -2945,7 +2945,7 @@ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* GpuConfig::warpSiz
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
             }
         }
 
@@ -3112,7 +3112,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
                 const Th d2 = distSq(jPos);
                 if (d2 < 4 * hi * hi)
                     detail::tuple_foreach([](auto& sum, auto const& contrib) { sum += contrib; }, sums,
-                                          contribution(i, iPos, hi, j, jPos, std::sqrt(d2)));
+                                          contribution(i, iPos, hi, j, jPos, d2));
             }
         };
 
@@ -3259,8 +3259,7 @@ __global__ /*__launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warps
             jPipeline.consumer_release();
             if (jCluster != nextJCluster) preloadJCluster(nextJCluster);
             const Th d2 = distSq(jPos);
-            if (i < lastBody & j < lastBody & d2 < 4 * hi * hi)
-                sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+            if (i < lastBody & j < lastBody & d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
         };
 
         constexpr unsigned overlappingJClusters =
@@ -3435,7 +3434,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Th d2 = distSq(jPos);
-                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, std::sqrt(d2));
+                if (d2 < 4 * hi * hi) sum += contribution(i, iPos, hi, j, jPos, d2);
             }
         };
 
