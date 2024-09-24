@@ -586,6 +586,9 @@ __launch_bounds__(TravConfig::numThreads) void computeLjBatchedKernel(cstone::Lo
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
     int targetIdx             = 0;
 
+    constexpr auto pbc = BoundaryType::periodic;
+    const bool anyPbc  = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
+
     while (true)
     {
         // first thread in warp grabs next target
@@ -618,7 +621,9 @@ __launch_bounds__(TravConfig::numThreads) void computeLjBatchedKernel(cstone::Lo
                     T xx             = xi - x[j];
                     T yy             = yi - y[j];
                     T zz             = zi - z[j];
-                    applyPBC(box, T(2) * hi, xx, yy, zz);
+                    xx -= (box.boundaryX() == pbc) * box.lx() * std::rint(xx * box.ilx());
+                    yy -= (box.boundaryY() == pbc) * box.ly() * std::rint(yy * box.ily());
+                    zz -= (box.boundaryZ() == pbc) * box.lz() * std::rint(zz * box.ilz());
                     const T rsq = xx * xx + yy * yy + zz * zz;
 
                     const T r2inv   = 1.0 / rsq;
