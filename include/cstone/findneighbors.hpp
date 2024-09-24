@@ -101,7 +101,8 @@ HOST_DEVICE_FUN unsigned findNeighbors(LocalIndex i,
                                        const OctreeNsView<Tc, KeyType>& tree,
                                        const Box<Tc>& box,
                                        unsigned ngmax,
-                                       LocalIndex* neighbors)
+                                       LocalIndex* neighbors,
+                                       unsigned long neighborsStride = 1)
 {
     auto xi = x[i];
     auto yi = y[i];
@@ -130,8 +131,8 @@ HOST_DEVICE_FUN unsigned findNeighbors(LocalIndex i,
         return norm2(minDistance(particle, nodeCenter, nodeSize)) < radiusSq;
     };
 
-    auto searchBoxPbc =
-        [i, particle, radiusSq, &tree, x, y, z, ngmax, neighbors, &numNeighbors, &box](TreeNodeIndex idx)
+    auto searchBoxPbc = [i, particle, radiusSq, &tree, x, y, z, ngmax, neighbors, neighborsStride, &numNeighbors,
+                         &box](TreeNodeIndex idx)
     {
         TreeNodeIndex leafIdx    = tree.internalToLeaf[idx];
         LocalIndex firstParticle = tree.layout[leafIdx];
@@ -142,13 +143,14 @@ HOST_DEVICE_FUN unsigned findNeighbors(LocalIndex i,
             if (j == i) { continue; }
             if (distanceSq<true>(x[j], y[j], z[j], particle[0], particle[1], particle[2], box) < radiusSq)
             {
-                if (numNeighbors < ngmax) { neighbors[numNeighbors] = j; }
+                if (numNeighbors < ngmax) { neighbors[numNeighbors * neighborsStride] = j; }
                 numNeighbors++;
             }
         }
     };
 
-    auto searchBox = [i, particle, radiusSq, &tree, x, y, z, ngmax, neighbors, &numNeighbors, &box](TreeNodeIndex idx)
+    auto searchBox = [i, particle, radiusSq, &tree, x, y, z, ngmax, neighbors, neighborsStride, &numNeighbors,
+                      &box](TreeNodeIndex idx)
     {
         TreeNodeIndex leafIdx    = tree.internalToLeaf[idx];
         LocalIndex firstParticle = tree.layout[leafIdx];
@@ -159,7 +161,7 @@ HOST_DEVICE_FUN unsigned findNeighbors(LocalIndex i,
             if (j == i) { continue; }
             if (distanceSq<false>(x[j], y[j], z[j], particle[0], particle[1], particle[2], box) < radiusSq)
             {
-                if (numNeighbors < ngmax) { neighbors[numNeighbors] = j; }
+                if (numNeighbors < ngmax) { neighbors[numNeighbors * neighborsStride] = j; }
                 numNeighbors++;
             }
         }

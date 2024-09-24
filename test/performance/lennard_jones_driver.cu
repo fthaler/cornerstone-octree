@@ -388,7 +388,7 @@ __global__ void buildNeighborhoodNaiveKernel(const Tc* x,
     cstone::LocalIndex id  = firstId + tid;
     if (id >= lastId) { return; }
 
-    neighborsCount[id] = findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors + tid * ngmax);
+    neighborsCount[id] = findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors + id, lastId);
 }
 
 template<class Tc, class T, class KeyType>
@@ -444,7 +444,7 @@ __global__ void computeLjNaiveKernel(const Tc* __restrict__ x,
     const unsigned nbs = neighborsCount[i];
     for (unsigned nb = 0; nb < nbs; ++nb)
     {
-        const unsigned j = neighbors[i * ngmax + nb];
+        const unsigned j = neighbors[i + (unsigned long)nb * lastId];
         T xx             = xi - x[j];
         T yy             = yi - y[j];
         T zz             = zi - z[j];

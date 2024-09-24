@@ -416,7 +416,7 @@ __global__ void buildNeighborhoodNaiveKernel(const Tc* x,
     cstone::LocalIndex id  = firstId + tid;
     if (id >= lastId) { return; }
 
-    neighborsCount[id] = findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors + (unsigned long)tid * ngmax);
+    neighborsCount[id] = findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors + tid, lastId);
 }
 
 template<class Tc, class T, class KeyType>
@@ -476,7 +476,7 @@ __global__ void computeDensityNaiveKernel(const Tc* x,
     T rhoi       = mi;
     for (unsigned nb = 0; nb < nbs; ++nb)
     {
-        unsigned j = neighbors[(unsigned long)i * ngmax + nb];
+        unsigned j = neighbors[i + (unsigned long)nb * lastId];
         T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
         T vloc     = dist * hInv;
         T w        = table_lookup(wh, vloc);
