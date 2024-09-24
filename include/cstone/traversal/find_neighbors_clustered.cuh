@@ -3119,7 +3119,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
                 const Th d2              = norm2(ijPosDiff);
                 if (d2 < 4 * hi * hi)
                     detail::tuple_foreach([](auto& sum, auto const& contrib) { sum += contrib; }, sums,
-                                          contribution(i, iPos, hi, j, jPos, d2));
+                                          contribution(i, iPos, hi, j, jPos, ijPosDiff, d2));
             }
         };
 

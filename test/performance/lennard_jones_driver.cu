@@ -720,19 +720,14 @@ void computeLjClustered(
     unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
 
     resetTraversalCounters<<<1, 1>>>();
-    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T rsq)
+    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, auto ijPosDiff, T rsq)
     {
-        T xx = iPos[0] - jPos[0];
-        T yy = iPos[1] - jPos[1];
-        T zz = iPos[2] - jPos[2];
-        applyPBC(box, T(2) * hi, xx, yy, zz);
-
-        const T r2inv   = 1.0 / rsq;
+        const T r2inv   = T(1) / rsq;
         const T r6inv   = r2inv * r2inv * r2inv;
         const T forcelj = r6inv * (lj1 * r6inv - lj2);
         const T fpair   = i == j ? 0 : forcelj * r2inv;
 
-        return std::make_tuple(xx * fpair, yy * fpair, zz * fpair);
+        return std::make_tuple(ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
 
     constexpr unsigned threads       = 512;
@@ -795,19 +790,14 @@ void computeLjCompressedClustered(const std::size_t firstBody,
     unsigned numBlocks = TravConfig::numBlocks(numBodies);
 
     resetTraversalCounters<<<1, 1>>>();
-    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, T rsq)
+    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, auto ijPosDiff, T rsq)
     {
-        T xx = iPos[0] - jPos[0];
-        T yy = iPos[1] - jPos[1];
-        T zz = iPos[2] - jPos[2];
-        applyPBC(box, T(2) * hi, xx, yy, zz);
-
         const T r2inv   = 1.0 / rsq;
         const T r6inv   = r2inv * r2inv * r2inv;
         const T forcelj = r6inv * (lj1 * r6inv - lj2);
         const T fpair   = i == j ? 0 : forcelj * r2inv;
 
-        return std::make_tuple(xx * fpair, yy * fpair, zz * fpair);
+        return std::make_tuple(ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
 
     constexpr unsigned threads       = 256;
