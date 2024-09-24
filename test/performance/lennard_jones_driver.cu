@@ -413,21 +413,21 @@ buildNeighborhoodNaive(std::size_t firstBody,
 }
 
 template<class Tc, class T>
-__global__ void computeLjNaiveKernel(const Tc* __restrict__ x,
-                                     const Tc* __restrict__ y,
-                                     const Tc* __restrict__ z,
-                                     const T* __restrict__ h,
-                                     const T lj1,
-                                     const T lj2,
-                                     const LocalIndex firstId,
-                                     const LocalIndex lastId,
-                                     const Box<Tc> box,
-                                     const unsigned* neighbors,
-                                     const unsigned* neighborsCount,
-                                     const unsigned ngmax,
-                                     T* fx,
-                                     T* fy,
-                                     T* fz)
+__global__ void __maxnreg__(40) computeLjNaiveKernel(const Tc* __restrict__ x,
+                                                     const Tc* __restrict__ y,
+                                                     const Tc* __restrict__ z,
+                                                     const T* __restrict__ h,
+                                                     const T lj1,
+                                                     const T lj2,
+                                                     const LocalIndex firstId,
+                                                     const LocalIndex lastId,
+                                                     const Box<Tc> box,
+                                                     const unsigned* neighbors,
+                                                     const unsigned* neighborsCount,
+                                                     const unsigned ngmax,
+                                                     T* fx,
+                                                     T* fy,
+                                                     T* fz)
 {
     cstone::LocalIndex tid = blockDim.x * blockIdx.x + threadIdx.x;
     cstone::LocalIndex i   = firstId + tid;
@@ -483,7 +483,7 @@ void computeLjNaive(const std::size_t firstBody,
                     const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
 {
     auto& [neighbors, neighborsCount] = neighborhood;
-    computeLjNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
+    computeLjNaiveKernel<<<iceil(lastBody - firstBody, 768), 768>>>(
         x, y, z, h, lj1, lj2, firstBody, lastBody, box, rawPtr(neighbors), rawPtr(neighborsCount), ngmax, fx, fy, fz);
 }
 
