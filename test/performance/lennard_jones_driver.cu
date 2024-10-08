@@ -46,7 +46,7 @@
 
 using namespace cstone;
 
-constexpr unsigned ncmax = 512;
+constexpr unsigned ncmax = 256;
 
 template<class Tc, class Th, class KeyType>
 std::tuple<std::vector<LocalIndex>, std::vector<unsigned>> buildNeighborhoodCPU(std::size_t firstBody,
