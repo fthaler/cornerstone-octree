@@ -35,7 +35,7 @@
 #include <cstdint>
 
 #include <cooperative_groups.h>
-#include <cub/cub.cuh>
+#include <cooperative_groups/scan.h>
 
 #include "cstone/cuda/gpu_config.cuh"
 #include "cstone/primitives/clz.hpp"
@@ -58,13 +58,7 @@ __device__ __forceinline__ void warpInclusiveScan(T items[ItemsPerThread], Op&& 
     for (unsigned i = 1; i < ItemsPerThread; ++i)
         global = op(global, items[i]);
 
-    using Scan = cub::WarpScan<T, GpuConfig::warpSize>;
-    __shared__ typename Scan::TempStorage tmp[NumWarps];
-
-    if constexpr (std::is_same_v<std::decay_t<Op>, cub::Sum>)
-        Scan(tmp[warp.meta_group_rank()]).ExclusiveSum(global, global);
-    else
-        Scan(tmp[warp.meta_group_rank()]).ExclusiveScan(global, global, std::forward<Op>(op));
+    global = cg::exclusive_scan(warp, global, std::forward<Op>(op));
 
     if (warp.thread_rank() != 0) items[0] = op(items[0], global);
 #pragma unroll
@@ -75,13 +69,13 @@ __device__ __forceinline__ void warpInclusiveScan(T items[ItemsPerThread], Op&& 
 template<unsigned NumWarps, unsigned ItemsPerThread, class T>
 __device__ __forceinline__ void warpInclusiveSum(T items[ItemsPerThread])
 {
-    warpInclusiveScan<NumWarps, ItemsPerThread>(items, cub::Sum());
+    warpInclusiveScan<NumWarps, ItemsPerThread>(items, cooperative_groups::plus<std::remove_const_t<T>>());
 }
 
 template<unsigned NumWarps, unsigned ItemsPerThread, class T>
 __device__ __forceinline__ void warpInclusiveMax(T items[ItemsPerThread])
 {
-    warpInclusiveScan<NumWarps, ItemsPerThread>(items, cub::Max());
+    warpInclusiveScan<NumWarps, ItemsPerThread>(items, cooperative_groups::greater<std::remove_const_t<T>>());
 }
 
 template<unsigned NumWarps, unsigned ItemsPerThread, class T>
