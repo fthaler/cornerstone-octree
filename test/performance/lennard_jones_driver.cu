@@ -923,12 +923,15 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
         double rtol = 1e-5;
         return std::abs(a - b) <= atol + rtol * std::abs(b);
     };
+#pragma omp parallel for
     for (int i = 0; i < n; ++i)
     {
         if (!isclose(fxGPU[i], fx[i]) || !isclose(fyGPU[i], fy[i]) || !isclose(fzGPU[i], fz[i]))
         {
+#pragma omp critical
             printf("%i (%.10f, %.10f, %.10f) (%.10f, %.10f, %.10f)\n", i, fxGPU[i], fyGPU[i], fzGPU[i], fx[i], fy[i],
                    fz[i]);
+#pragma omp atomic
             ++numFails;
         }
     }
