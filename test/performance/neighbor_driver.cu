@@ -460,24 +460,29 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
 
     int numFails     = 0;
     int numFailsList = 0;
-    for (int i = 0; i < n; ++i)
+#pragma omp parallel
     {
-        std::sort(neighborsCPU.data() + i * ngmax, neighborsCPU.data() + i * ngmax + neighborsCountCPU[i]);
-
-        std::vector<cstone::LocalIndex> nilist(neighborsCountGPU[i]);
-        for (unsigned j = 0; j < neighborsCountGPU[i]; ++j)
+        std::vector<cstone::LocalIndex> nilist;
+#pragma omp for
+        for (int i = 0; i < n; ++i)
         {
-            nilist[j] = neighborsGPU[neighborIndex(i, j, ngmax)];
-        }
-        std::sort(nilist.begin(), nilist.end());
+            std::sort(neighborsCPU.data() + i * ngmax, neighborsCPU.data() + i * ngmax + neighborsCountCPU[i]);
 
-        if (neighborsCountGPU[i] != neighborsCountCPU[i])
-        {
-            std::cout << i << " " << neighborsCountGPU[i] << " " << neighborsCountCPU[i] << std::endl;
-            numFails++;
-        }
+            nilist.resize(neighborsCountGPU[i]);
+            for (unsigned j = 0; j < neighborsCountGPU[i]; ++j)
+                nilist[j] = neighborsGPU[neighborIndex(i, j, ngmax)];
+            std::sort(nilist.begin(), nilist.end());
 
-        if (!std::equal(begin(nilist), end(nilist), neighborsCPU.begin() + i * ngmax)) { numFailsList++; }
+            if (neighborsCountGPU[i] != neighborsCountCPU[i])
+            {
+#pragma omp critical
+                std::cout << i << " " << neighborsCountGPU[i] << " " << neighborsCountCPU[i] << std::endl;
+#pragma omp atomic
+                ++numFails;
+            }
+
+            if (!std::equal(begin(nilist), end(nilist), neighborsCPU.begin() + i * ngmax)) { numFailsList++; }
+        }
     }
 
     bool allEqual = std::equal(begin(neighborsCountGPU), end(neighborsCountGPU), begin(neighborsCountCPU));
