@@ -323,7 +323,7 @@ void findNeighborsC(std::size_t firstBody,
         std::cout << "Interactions: " << (average_neighbors / expected_neighbors) << std::endl;
     }
 
-    auto countNeighbors = [=] __device__(unsigned i, auto iPos, auto hi, unsigned j, auto jPos, auto distanceSq)
+    auto countNeighbors = [=] __device__(unsigned i, auto, auto, unsigned j, auto, auto, auto)
     {
         if (i == j) return 0u;
 
