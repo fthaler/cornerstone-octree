@@ -507,7 +507,6 @@ __global__ __launch_bounds__(TravConfig::numThreads) void buildNeighborhoodBatch
 
     while (true)
     {
-        // first thread in warp grabs next target
         if (laneIdx == 0) { targetIdx = atomicAdd(&targetCounterGlob, 1); }
         targetIdx = shflSync(targetIdx, 0);
 
@@ -515,24 +514,27 @@ __global__ __launch_bounds__(TravConfig::numThreads) void buildNeighborhoodBatch
 
         const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
         const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
-        unsigned* warpNidx                 = nidx + targetIdx * TravConfig::targetSize * ngmax;
 
         unsigned nc_i[TravConfig::nwt] = {0};
 
         auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
         {
             if (nc_i[warpTarget] < ngmax)
-                warpNidx[nc_i[warpTarget] * TravConfig::targetSize + laneIdx + warpTarget * GpuConfig::warpSize] = j;
+            {
+                const cstone::LocalIndex i = bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx;
+                if (i < bodyEnd) nidx[i + (unsigned long)nc_i[warpTarget] * lastBody] = j;
+            }
             ++nc_i[warpTarget];
         };
 
         traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
 
         const cstone::LocalIndex bodyIdxLane = bodyBegin + laneIdx;
-        for (int i = 0; i < TravConfig::nwt; i++)
+#pragma unroll
+        for (int warpTarget = 0; warpTarget < TravConfig::nwt; warpTarget++)
         {
-            const cstone::LocalIndex bodyIdx = bodyIdxLane + i * GpuConfig::warpSize;
-            if (bodyIdx < bodyEnd) { nc[bodyIdx] = nc_i[i]; }
+            const cstone::LocalIndex bodyIdx = bodyIdxLane + warpTarget * GpuConfig::warpSize;
+            if (bodyIdx < bodyEnd) { nc[bodyIdx] = nc_i[warpTarget]; }
         }
     }
 }
@@ -565,46 +567,39 @@ buildNeighborhoodBatched(std::size_t firstBody,
 }
 
 template<class Tc, class T>
-__global__
-__launch_bounds__(TravConfig::numThreads) void computeLjBatchedKernel(cstone::LocalIndex firstBody,
-                                                                      cstone::LocalIndex lastBody,
-                                                                      const Tc* __restrict__ x,
-                                                                      const Tc* __restrict__ y,
-                                                                      const Tc* __restrict__ z,
-                                                                      const T* __restrict__ h,
-                                                                      const T lj1,
-                                                                      const T lj2,
-                                                                      const Box<Tc> box,
-                                                                      T* __restrict__ fx,
-                                                                      T* __restrict__ fy,
-                                                                      T* __restrict__ fz,
-                                                                      const unsigned* __restrict__ neighborsCount,
-                                                                      const unsigned* __restrict__ neighbors,
-                                                                      const unsigned ngmax)
+__global__ __maxnreg__(40) void computeLjBatchedKernel(cstone::LocalIndex firstBody,
+                                                       cstone::LocalIndex lastBody,
+                                                       const Tc* __restrict__ x,
+                                                       const Tc* __restrict__ y,
+                                                       const Tc* __restrict__ z,
+                                                       const T* __restrict__ h,
+                                                       const T lj1,
+                                                       const T lj2,
+                                                       const Box<Tc> box,
+                                                       T* __restrict__ fx,
+                                                       T* __restrict__ fy,
+                                                       T* __restrict__ fz,
+                                                       const unsigned* __restrict__ neighborsCount,
+                                                       const unsigned* __restrict__ neighbors,
+                                                       const unsigned ngmax)
 {
     const unsigned laneIdx    = threadIdx.x & (GpuConfig::warpSize - 1);
     const unsigned numTargets = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
     int targetIdx             = 0;
 
-    constexpr auto pbc = BoundaryType::periodic;
-    const bool anyPbc  = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
-
     while (true)
     {
-        // first thread in warp grabs next target
         if (laneIdx == 0) { targetIdx = atomicAdd(&targetCounterGlob, 1); }
         targetIdx = shflSync(targetIdx, 0);
 
         if (targetIdx >= numTargets) return;
 
         const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
-        const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
+#pragma unroll
         for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
         {
             const cstone::LocalIndex i = bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx;
-            const unsigned* nidx =
-                neighbors + targetIdx * TravConfig::targetSize * ngmax + warpTarget * GpuConfig::warpSize + laneIdx;
-            if (i < bodyEnd)
+            if (i < lastBody)
             {
                 const Tc xi = x[i];
                 const Tc yi = y[i];
@@ -617,13 +612,11 @@ __launch_bounds__(TravConfig::numThreads) void computeLjBatchedKernel(cstone::Lo
                 const unsigned nbs = imin(neighborsCount[i], ngmax);
                 for (unsigned nb = 0; nb < nbs; ++nb)
                 {
-                    const unsigned j = nidx[nb * TravConfig::targetSize];
+                    const unsigned j = neighbors[i + (unsigned long)nb * lastBody];
                     T xx             = xi - x[j];
                     T yy             = yi - y[j];
                     T zz             = zi - z[j];
-                    xx -= (box.boundaryX() == pbc) * box.lx() * std::rint(xx * box.ilx());
-                    yy -= (box.boundaryY() == pbc) * box.ly() * std::rint(yy * box.ily());
-                    zz -= (box.boundaryZ() == pbc) * box.lz() * std::rint(zz * box.ilz());
+                    applyPBC(box, T(2) * hi, xx, yy, zz);
                     const T rsq = xx * xx + yy * yy + zz * zz;
 
                     const T r2inv   = 1.0 / rsq;
@@ -662,11 +655,11 @@ void computeLjBatched(
     const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
 {
     auto& [neighbors, neighborsCount] = neighborhood;
-    unsigned numBodies                = lastBody - firstBody;
-    unsigned numBlocks                = TravConfig::numBlocks(numBodies);
+    constexpr unsigned blocks         = 1 << 10;
+    constexpr unsigned threads        = 768;
     resetTraversalCounters<<<1, 1>>>();
-    computeLjBatchedKernel<<<numBlocks, TravConfig::numThreads>>>(
-        firstBody, lastBody, x, y, z, h, lj1, lj2, box, fx, fy, fz, rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
+    computeLjBatchedKernel<<<blocks, threads>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box, fx, fy, fz,
+                                                rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
 }
 
 template<class Tc, class T, class KeyType>
