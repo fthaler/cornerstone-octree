@@ -83,6 +83,9 @@ void computeLjCPU(const std::size_t firstBody,
                   const T lj2,
                   const Box<Tc>& box,
                   const unsigned ngmax,
+                  T* __restrict__ fx,
+                  T* __restrict__ fy,
+                  T* __restrict__ fz,
                   T* __restrict__ afx,
                   T* __restrict__ afy,
                   T* __restrict__ afz,
@@ -99,6 +102,9 @@ void computeLjCPU(const std::size_t firstBody,
         T afxi      = 0;
         T afyi      = 0;
         T afzi      = 0;
+        fx[i]       = 0;
+        fy[i]       = 0;
+        fz[i]       = 0;
 
         const unsigned nbs = neighborsCount[i];
         for (unsigned nb = 0; nb < nbs; ++nb)
@@ -157,6 +163,9 @@ __global__ void computeLjNaiveDirectKernel(const Tc* __restrict__ x,
                                            unsigned* __restrict__ neighbors,
                                            unsigned* __restrict__ neighborsCount,
                                            const unsigned ngmax,
+                                           T* __restrict__ fx,
+                                           T* __restrict__ fy,
+                                           T* __restrict__ fz,
                                            T* __restrict__ afx,
                                            T* __restrict__ afy,
                                            T* __restrict__ afz)
@@ -174,6 +183,9 @@ __global__ void computeLjNaiveDirectKernel(const Tc* __restrict__ x,
     T afxi      = 0;
     T afyi      = 0;
     T afzi      = 0;
+    fx[i]       = 0;
+    fy[i]       = 0;
+    fz[i]       = 0;
 
     const unsigned nbs = imin(neighborsCount[i], ngmax);
     for (unsigned nb = 0; nb < nbs; ++nb)
@@ -212,16 +224,19 @@ void computeLjNaiveDirect(
     const T lj2,
     const Box<Tc>& box,
     const unsigned ngmax,
-    T* afx,
-    T* afy,
-    T* afz,
+    T* __restrict__ fx,
+    T* __restrict__ fy,
+    T* __restrict__ fz,
+    T* __restrict__ afx,
+    T* __restrict__ afy,
+    T* __restrict__ afz,
     std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>, OctreeNsView<Tc, KeyType>>&
         neighborhood)
 {
     auto& [neighbors, neighborsCount, tree] = neighborhood;
-    computeLjNaiveDirectKernel<<<iceil(lastBody - firstBody, 128), 128>>>(x, y, z, h, lj1, lj2, firstBody, lastBody,
-                                                                          box, tree, rawPtr(neighbors),
-                                                                          rawPtr(neighborsCount), ngmax, afx, afy, afz);
+    computeLjNaiveDirectKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
+        x, y, z, h, lj1, lj2, firstBody, lastBody, box, tree, rawPtr(neighbors), rawPtr(neighborsCount), ngmax, fx, fy,
+        fz, afx, afy, afz);
 }
 
 template<class Tc, class T, class KeyType>
@@ -262,6 +277,9 @@ __launch_bounds__(TravConfig::numThreads) void computeLjBatchedDirectKernel(csto
                                                                             const T lj2,
                                                                             const Box<Tc> box,
                                                                             const OctreeNsView<Tc, KeyType> tree,
+                                                                            T* __restrict__ fx,
+                                                                            T* __restrict__ fy,
+                                                                            T* __restrict__ fz,
                                                                             T* __restrict__ afx,
                                                                             T* __restrict__ afy,
                                                                             T* __restrict__ afz,
@@ -312,6 +330,9 @@ __launch_bounds__(TravConfig::numThreads) void computeLjBatchedDirectKernel(csto
                 T afxi      = 0;
                 T afyi      = 0;
                 T afzi      = 0;
+                fx[i]       = 0;
+                fy[i]       = 0;
+                fz[i]       = 0;
 
                 const unsigned nbs = imin(nc_i[warpTarget], ngmax);
                 for (unsigned nb = 0; nb < nbs; ++nb)
@@ -353,6 +374,9 @@ void computeLjBatchedDirect(const std::size_t firstBody,
                             const T lj2,
                             const Box<Tc>& box,
                             const unsigned ngmax,
+                            T* __restrict__ fx,
+                            T* __restrict__ fy,
+                            T* __restrict__ fz,
                             T* __restrict__ afx,
                             T* __restrict__ afy,
                             T* __restrict__ afz,
@@ -365,9 +389,9 @@ void computeLjBatchedDirect(const std::size_t firstBody,
     unsigned numBodies                                  = lastBody - firstBody;
     unsigned numBlocks                                  = TravConfig::numBlocks(numBodies);
     resetTraversalCounters<<<1, 1>>>();
-    computeLjBatchedDirectKernel<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box,
-                                                                        tree, afx, afy, afz, rawPtr(neighborsCount),
-                                                                        rawPtr(neighbors), ngmax, rawPtr(globalPool));
+    computeLjBatchedDirectKernel<<<numBlocks, TravConfig::numThreads>>>(
+        firstBody, lastBody, x, y, z, h, lj1, lj2, box, tree, fx, fy, fz, afx, afy, afz, rawPtr(neighborsCount),
+        rawPtr(neighbors), ngmax, rawPtr(globalPool));
 }
 
 template<class Tc, class T, class KeyType>
@@ -424,9 +448,12 @@ __global__ void __maxnreg__(40) computeLjNaiveKernel(const Tc* __restrict__ x,
                                                      const unsigned* neighbors,
                                                      const unsigned* neighborsCount,
                                                      const unsigned ngmax,
-                                                     T* afx,
-                                                     T* afy,
-                                                     T* afz)
+                                                     T* __restrict__ fx,
+                                                     T* __restrict__ fy,
+                                                     T* __restrict__ fz,
+                                                     T* __restrict__ afx,
+                                                     T* __restrict__ afy,
+                                                     T* __restrict__ afz)
 {
     cstone::LocalIndex tid = blockDim.x * blockIdx.x + threadIdx.x;
     cstone::LocalIndex i   = firstId + tid;
@@ -439,6 +466,9 @@ __global__ void __maxnreg__(40) computeLjNaiveKernel(const Tc* __restrict__ x,
     T afxi      = 0;
     T afyi      = 0;
     T afzi      = 0;
+    fx[i]       = 0;
+    fy[i]       = 0;
+    fz[i]       = 0;
 
     const unsigned nbs = neighborsCount[i];
     for (unsigned nb = 0; nb < nbs; ++nb)
@@ -476,6 +506,9 @@ void computeLjNaive(const std::size_t firstBody,
                     const T lj2,
                     const Box<Tc>& box,
                     const unsigned ngmax,
+                    T* __restrict__ fx,
+                    T* __restrict__ fy,
+                    T* __restrict__ fz,
                     T* __restrict__ afx,
                     T* __restrict__ afy,
                     T* __restrict__ afz,
@@ -484,7 +517,7 @@ void computeLjNaive(const std::size_t firstBody,
     auto& [neighbors, neighborsCount] = neighborhood;
     computeLjNaiveKernel<<<iceil(lastBody - firstBody, 768), 768>>>(x, y, z, h, lj1, lj2, firstBody, lastBody, box,
                                                                     rawPtr(neighbors), rawPtr(neighborsCount), ngmax,
-                                                                    afx, afy, afz);
+                                                                    fx, fy, fz, afx, afy, afz);
 }
 
 template<class Tc, class Th, class KeyType>
@@ -576,6 +609,9 @@ __global__ __maxnreg__(40) void computeLjBatchedKernel(cstone::LocalIndex firstB
                                                        const T lj1,
                                                        const T lj2,
                                                        const Box<Tc> box,
+                                                       T* __restrict__ fx,
+                                                       T* __restrict__ fy,
+                                                       T* __restrict__ fz,
                                                        T* __restrict__ afx,
                                                        T* __restrict__ afy,
                                                        T* __restrict__ afz,
@@ -608,6 +644,9 @@ __global__ __maxnreg__(40) void computeLjBatchedKernel(cstone::LocalIndex firstB
                 T afxi      = 0;
                 T afyi      = 0;
                 T afzi      = 0;
+                fx[i]       = 0;
+                fy[i]       = 0;
+                fz[i]       = 0;
 
                 const unsigned nbs = imin(neighborsCount[i], ngmax);
                 for (unsigned nb = 0; nb < nbs; ++nb)
@@ -649,6 +688,9 @@ void computeLjBatched(
     const T lj2,
     const Box<Tc>& box,
     const unsigned ngmax,
+    T* __restrict__ fx,
+    T* __restrict__ fy,
+    T* __restrict__ fz,
     T* __restrict__ afx,
     T* __restrict__ afy,
     T* __restrict__ afz,
@@ -658,8 +700,8 @@ void computeLjBatched(
     constexpr unsigned blocks         = 1 << 10;
     constexpr unsigned threads        = 768;
     resetTraversalCounters<<<1, 1>>>();
-    computeLjBatchedKernel<<<blocks, threads>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box, afx, afy, afz,
-                                                rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
+    computeLjBatchedKernel<<<blocks, threads>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box, fx, fy, fz, afx, afy,
+                                                afz, rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
 }
 
 template<class Tc, class T, class KeyType>
@@ -708,6 +750,9 @@ void computeLjClustered(
     const T lj2,
     const Box<Tc>& box,
     const unsigned ngmax,
+    T* __restrict__ fx,
+    T* __restrict__ fy,
+    T* __restrict__ fz,
     T* __restrict__ afx,
     T* __restrict__ afy,
     T* __restrict__ afz,
@@ -725,7 +770,7 @@ void computeLjClustered(
         const T forcelj = r6inv * (lj1 * r6inv - lj2);
         const T fpair   = i == j ? 0 : forcelj * r2inv;
 
-        return std::make_tuple(ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
+        return std::make_tuple(T(0), T(0), T(0), ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
 
     constexpr unsigned threads       = 512;
@@ -734,7 +779,7 @@ void computeLjClustered(
     numBlocks                        = 1 << 11;
     findNeighborsClustered8<warpsPerBlock, true, ncmax, false>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
-                                   rawPtr(clusterNeighbors), computeLj, afx, afy, afz);
+                                   rawPtr(clusterNeighbors), computeLj, fx, fy, fz, afx, afy, afz);
     checkGpuErrors(cudaGetLastError());
 }
 
@@ -779,6 +824,9 @@ void computeLjCompressedClustered(const std::size_t firstBody,
                                   const T lj2,
                                   const Box<Tc>& box,
                                   const unsigned ngmax,
+                                  T* __restrict__ fx,
+                                  T* __restrict__ fy,
+                                  T* __restrict__ fz,
                                   T* __restrict__ afx,
                                   T* __restrict__ afy,
                                   T* __restrict__ afz,
@@ -795,7 +843,7 @@ void computeLjCompressedClustered(const std::size_t firstBody,
         const T forcelj = r6inv * (lj1 * r6inv - lj2);
         const T fpair   = i == j ? 0 : forcelj * r2inv;
 
-        return std::make_tuple(ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
+        return std::make_tuple(T(0), T(0), T(0), ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
 
     constexpr unsigned threads       = 256;
@@ -803,7 +851,7 @@ void computeLjCompressedClustered(const std::size_t firstBody,
     dim3 blockSize                   = {ClusterConfig::iSize, ClusterConfig::jSize, warpsPerBlock};
     numBlocks                        = 1 << 11;
     findNeighborsClustered8<warpsPerBlock, true, ncmax, true><<<numBlocks, blockSize>>>(
-        firstBody, lastBody, x, y, z, h, box, nullptr, rawPtr(clusterNeighbors), computeLj, afx, afy, afz);
+        firstBody, lastBody, x, y, z, h, box, nullptr, rawPtr(clusterNeighbors), computeLj, fx, fy, fz, afx, afy, afz);
     checkGpuErrors(cudaGetLastError());
 }
 
@@ -850,17 +898,21 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
                                      centers.data(),
                                      sizes.data()};
 
-    std::vector<T> afx(n), afy(n), afz(n);
+    std::vector<T> fx(n), fy(n), fz(n), afx(n), afy(n), afz(n);
     auto neighborhoodCPU = buildNeighborhoodCPU(0, n, x, y, z, h.data(), nsView, box, ngmax);
     printf("Number of neighbors: %d\n", std::get<1>(neighborhoodCPU).at(0));
     const T lj1 = 48;
     const T lj2 = 24;
-    computeLjCPU(0, n, x, y, z, h.data(), lj1, lj2, box, ngmax, afx.data(), afy.data(), afz.data(), neighborhoodCPU);
+    computeLjCPU(0, n, x, y, z, h.data(), lj1, lj2, box, ngmax, fx.data(), fy.data(), fz.data(), afx.data(), afy.data(),
+                 afz.data(), neighborhoodCPU);
 
     thrust::device_vector<Tc> d_x(coords.x().begin(), coords.x().end());
     thrust::device_vector<Tc> d_y(coords.y().begin(), coords.y().end());
     thrust::device_vector<Tc> d_z(coords.z().begin(), coords.z().end());
     thrust::device_vector<T> d_h = h;
+    thrust::device_vector<T> d_fx(n);
+    thrust::device_vector<T> d_fy(n);
+    thrust::device_vector<T> d_fz(n);
     thrust::device_vector<T> d_afx(n);
     thrust::device_vector<T> d_afy(n);
     thrust::device_vector<T> d_afz(n);
@@ -890,8 +942,8 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     cudaEventRecord(events[0]);
     for (std::size_t i = 1; i < events.size(); ++i)
     {
-        computeLj(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), lj1, lj2, box, ngmax, rawPtr(d_afx),
-                  rawPtr(d_afy), rawPtr(d_afz), neighborhoodGPU);
+        computeLj(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), lj1, lj2, box, ngmax, rawPtr(d_fx),
+                  rawPtr(d_fy), rawPtr(d_fz), rawPtr(d_afx), rawPtr(d_afy), rawPtr(d_afz), neighborhoodGPU);
         cudaEventRecord(events[i]);
     }
     cudaEventSynchronize(events.back());
@@ -911,7 +963,10 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
         printf("%7.6fs ", n / 1.0e6 / t);
     printf("\n");
 
-    std::vector<T> afxGPU(n), afyGPU(n), afzGPU(n);
+    std::vector<T> fxGPU(n), fyGPU(n), fzGPU(n), afxGPU(n), afyGPU(n), afzGPU(n);
+    thrust::copy(d_fx.begin(), d_fx.end(), fxGPU.begin());
+    thrust::copy(d_fy.begin(), d_fy.end(), fyGPU.begin());
+    thrust::copy(d_fz.begin(), d_fz.end(), fzGPU.begin());
     thrust::copy(d_afx.begin(), d_afx.end(), afxGPU.begin());
     thrust::copy(d_afy.begin(), d_afy.end(), afyGPU.begin());
     thrust::copy(d_afz.begin(), d_afz.end(), afzGPU.begin());
@@ -926,7 +981,8 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
 #pragma omp parallel for
     for (int i = 0; i < n; ++i)
     {
-        if (!isclose(afxGPU[i], afx[i]) || !isclose(afyGPU[i], afy[i]) || !isclose(afzGPU[i], afz[i]))
+        if (!isclose(fxGPU[i], fx[i]) || !isclose(fyGPU[i], fy[i]) || !isclose(fzGPU[i], fz[i]) ||
+            !isclose(afxGPU[i], afx[i]) || !isclose(afyGPU[i], afy[i]) || !isclose(afzGPU[i], afz[i]))
         {
 #pragma omp critical
             printf("%i (%.10f, %.10f, %.10f) (%.10f, %.10f, %.10f)\n", i, afxGPU[i], afyGPU[i], afzGPU[i], afx[i],
