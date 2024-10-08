@@ -354,10 +354,11 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
     using KeyType = typename StrongKeyType::ValueType;
 
     Box<T> box{0, 1, BoundaryType::periodic};
-    int n = 2000000;
+    int scale = 1;
+    int n     = 2000000 / scale;
 
     RandomCoordinates<T, StrongKeyType> coords(n, box);
-    std::vector<T> h(n, 0.012);
+    std::vector<T> h(n, 0.012 * std::cbrt(scale));
 
     // RandomGaussianCoordinates<T, StrongKeyType> coords(n, box);
     // adjustSmoothingLength<KeyType>(n, 100, 200, coords.x(), coords.y(), coords.z(), h, box);
