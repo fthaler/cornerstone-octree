@@ -46,7 +46,7 @@
 
 using namespace cstone;
 
-constexpr unsigned ncmax = 192;
+constexpr unsigned ncmax = 256;
 
 /* smoothing kernel evaluation functionality borrowed from SPH-EXA */
 
@@ -836,17 +836,15 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     using KeyType = typename StrongKeyType::ValueType;
 
     Box<Tc> box{0, 1, BoundaryType::periodic};
-    int n = 2000000;
+    int scale = 10;
+    int n     = 100000 * scale;
 
     RandomCoordinates<Tc, StrongKeyType> coords(n, box);
-    std::vector<T> h(n, 0.012);
+    std::vector<T> h(n, 0.75 / 20 / std::cbrt(scale));
 
     const double r                  = 2 * h[0];
     const double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * n;
     std::cout << "Expected average number of neighbors: " << expected_neighbors << std::endl;
-
-    // RandomGaussianCoordinates<T, StrongKeyType> coords(n, box);
-    // adjustSmoothingLength<KeyType>(n, 100, 200, coords.x(), coords.y(), coords.z(), h, box);
 
     int ngmax = 256;
 
