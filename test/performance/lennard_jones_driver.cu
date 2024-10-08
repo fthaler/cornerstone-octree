@@ -817,10 +817,10 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
 
     FaceCenteredCubicCoordinates<Tc, StrongKeyType> coords(nx, nx, nx, box);
     const int n = coords.x().size();
-    std::vector<T> h(n, 2.8 / 2);
-    printf("%d\n", n);
+    std::vector<T> h(n, 3.8 / 2);
+    printf("Number of atoms: %d\n", n);
 
-    int ngmax = 256;
+    const int ngmax = 256;
 
     const Tc* x       = coords.x().data();
     const Tc* y       = coords.y().data();
