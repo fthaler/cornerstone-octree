@@ -36,6 +36,7 @@
 #include <cuda/barrier>
 #include <cuda/pipeline>
 #include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 #include <cub/warp/warp_merge_sort.cuh>
 
 #include "cstone/compressneighbors.hpp"
@@ -3155,9 +3156,8 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
             }
         }
 
-#pragma unroll
-        for (unsigned offset = GpuConfig::warpSize / 2; offset >= ClusterConfig::iSize; offset /= 2)
-            detail::tuple_foreach([&](auto& sum) { sum += warp.shfl_down(sum, offset); }, sums);
+        detail::tuple_foreach([&](auto& sum) { sum = cg::reduce(warp, sum, cg::plus<std::decay_t<decltype(sum)>>()); },
+                              sums);
 
         if (block.thread_index().y == 0 & i < lastBody)
             detail::tuple_foreach([i](auto& res, auto const& sum) { res[i] = sum; }, std::make_tuple(results...), sums);
