@@ -910,12 +910,12 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     thrust::device_vector<Tc> d_y(coords.y().begin(), coords.y().end());
     thrust::device_vector<Tc> d_z(coords.z().begin(), coords.z().end());
     thrust::device_vector<T> d_h = h;
-    thrust::device_vector<T> d_fx(n);
-    thrust::device_vector<T> d_fy(n);
-    thrust::device_vector<T> d_fz(n);
-    thrust::device_vector<T> d_afx(n);
-    thrust::device_vector<T> d_afy(n);
-    thrust::device_vector<T> d_afz(n);
+    thrust::device_vector<T> d_fx(n, std::numeric_limits<T>::quiet_NaN());
+    thrust::device_vector<T> d_fy(n, std::numeric_limits<T>::quiet_NaN());
+    thrust::device_vector<T> d_fz(n, std::numeric_limits<T>::quiet_NaN());
+    thrust::device_vector<T> d_afx(n, std::numeric_limits<T>::quiet_NaN());
+    thrust::device_vector<T> d_afy(n, std::numeric_limits<T>::quiet_NaN());
+    thrust::device_vector<T> d_afz(n, std::numeric_limits<T>::quiet_NaN());
 
     thrust::device_vector<KeyType> d_prefixes             = octree.prefixes;
     thrust::device_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
