@@ -935,7 +935,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     auto neighborhoodGPU =
         buildNeighborhood(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), nsViewGpu, box, ngmax);
 
-    std::array<float, 21> times;
+    std::array<float, 5> times;
     std::array<cudaEvent_t, times.size() + 1> events;
     for (auto& event : events)
         cudaEventCreate(&event);
