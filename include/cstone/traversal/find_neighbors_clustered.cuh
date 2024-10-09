@@ -486,9 +486,9 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 }
 
 template<int warpsPerBlock,
-         bool bypassL1CacheOnLoads = true,
+         bool BypassL1CacheOnLoads = true,
          unsigned NcMax            = 256,
-         bool compress             = false,
+         bool Compress             = false,
          class Tc,
          class Th,
          class Contribution,
@@ -524,7 +524,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
 
     unsigned* nidx = nullptr;
-    if constexpr (compress)
+    if constexpr (Compress)
     {
         __shared__ unsigned nidxBuffer[warpsPerBlock][NcMax];
         nidx = nidxBuffer[block.thread_index().z];
@@ -547,7 +547,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     const auto preloadNextICluster = [&]
     {
         iPipeline.producer_acquire();
-        if constexpr (bypassL1CacheOnLoads)
+        if constexpr (BypassL1CacheOnLoads)
         {
             constexpr int numTcPer16Bytes = 16 / sizeof(Tc);
             constexpr int numThPer16Bytes = 16 / sizeof(Th);
@@ -659,7 +659,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
              ++jCluster)
             computeClusterInteraction(jCluster);
 
-        if constexpr (compress)
+        if constexpr (Compress)
         {
             constexpr unsigned long maxCompressedNeighborsSize = NcMax / ClusterConfig::expectedCompressionRate;
             unsigned iClusterNeighborsCount;
