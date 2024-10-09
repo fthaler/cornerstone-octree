@@ -55,14 +55,6 @@ struct ClusterConfig
     static constexpr unsigned expectedCompressionRate = 10;
 };
 
-__host__ __device__ inline constexpr unsigned long
-clusterNeighborIndex(unsigned long cluster, unsigned long neighbor, unsigned long ncmax)
-{
-    // constexpr unsigned long blockSize = TravConfig::targetSize / ClusterConfig::iSize;
-    constexpr unsigned long blockSize = 1; // better for findNeighborsClustered
-    return (cluster / blockSize) * blockSize * ncmax + (cluster % blockSize) + neighbor * blockSize;
-}
-
 namespace detail
 {
 
@@ -458,10 +450,9 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                     items[i] = nidx[block.thread_index().z][c][itemsPerWarp * warp.thread_rank() + i];
                 }
 
+                constexpr unsigned long maxCompressedNeighborsSize = NcMax / ClusterConfig::expectedCompressionRate;
                 warpCompressNeighbors<warpsPerBlock, itemsPerWarp>(
-                    items,
-                    (char*)&nidxClustered[clusterNeighborIndex(ic, 0, NcMax / ClusterConfig::expectedCompressionRate)],
-                    uniqueNeighbors);
+                    items, (char*)&nidxClustered[ic * maxCompressedNeighborsSize], uniqueNeighbors);
             }
             else
             {
@@ -470,8 +461,8 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                 {
                     if (i < unique)
                     {
-                        const unsigned nb                                  = startIndex + i;
-                        nidxClustered[clusterNeighborIndex(ic, nb, NcMax)] = items[i];
+                        const unsigned nb                             = startIndex + i;
+                        nidxClustered[(unsigned long)ic * NcMax + nb] = items[i];
                     }
                 }
 
@@ -657,11 +648,10 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 
         if constexpr (compress)
         {
+            constexpr unsigned long maxCompressedNeighborsSize = NcMax / ClusterConfig::expectedCompressionRate;
             unsigned iClusterNeighborsCount;
             warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>(
-                (const char*)&nidxClustered[clusterNeighborIndex(iCluster, 0,
-                                                                 NcMax / ClusterConfig::expectedCompressionRate)],
-                nidx, iClusterNeighborsCount);
+                (const char*)&nidxClustered[iCluster * maxCompressedNeighborsSize], nidx, iClusterNeighborsCount);
             for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
             {
                 const unsigned jCluster = nidx[jc];
@@ -674,7 +664,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 #pragma unroll ClusterConfig::jSize
             for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
             {
-                const unsigned jCluster = nidxClustered[clusterNeighborIndex(iCluster, jc, NcMax)];
+                const unsigned jCluster = nidxClustered[(unsigned long)iCluster * NcMax + jc];
                 computeClusterInteraction(jCluster);
             }
         }

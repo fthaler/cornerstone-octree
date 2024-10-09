@@ -301,7 +301,7 @@ void findNeighborsC(std::size_t firstBody,
                           clusterNeighborsCPU.begin() + iCluster * ncmax + nc);
                 std::vector<unsigned> sortedClusterNeighborsGPU(nc);
                 for (unsigned nb = 0; nb < nc; ++nb)
-                    sortedClusterNeighborsGPU[nb] = clusterNeighbors[clusterNeighborIndex(iCluster, nb, ncmax)];
+                    sortedClusterNeighborsGPU[nb] = clusterNeighbors[(unsigned long)iCluster * ncmax + nb];
                 std::sort(sortedClusterNeighborsGPU.begin(), sortedClusterNeighborsGPU.end());
                 for (unsigned nb = 0; nb < nc; ++nb)
                     if (clusterNeighborsCPU[iCluster * ncmax + nb] != sortedClusterNeighborsGPU[nb])
