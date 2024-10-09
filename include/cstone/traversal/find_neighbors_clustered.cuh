@@ -621,7 +621,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 
         const auto posDiff = [&](const Vec3<Tc>& jPos)
         {
-            Vec3<Th> ijPosDiff = {Th(iPos[0] - jPos[0]), Th(iPos[1] - jPos[1]), Th(iPos[2] - jPos[2])};
+            Vec3<Tc> ijPosDiff = {iPos[0] - jPos[0], iPos[1] - jPos[1], iPos[2] - jPos[2]};
             if (anyPbc)
             {
                 ijPosDiff[0] -= (box.boundaryX() == pbc) * box.lx() * std::rint(ijPosDiff[0] * box.ilx());
@@ -639,7 +639,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
             if (i < lastBody & j < lastBody)
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                const Vec3<Th> ijPosDiff = posDiff(jPos);
+                const Vec3<Tc> ijPosDiff = posDiff(jPos);
                 const Th d2              = norm2(ijPosDiff);
                 if (d2 < 4 * hi * hi)
                     detail::tuple_foreach([](auto& sum, auto const& contrib) { sum += contrib; }, sums,
