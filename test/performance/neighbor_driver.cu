@@ -339,7 +339,7 @@ void findNeighborsC(std::size_t firstBody,
     t0             = std::chrono::high_resolution_clock::now();
     dim3 blockSize = {ClusterConfig::iSize, ClusterConfig::jSize, 512 / GpuConfig::warpSize};
     numBlocks      = 1 << 11;
-    findNeighborsClustered8<512 / GpuConfig::warpSize, bypassL1CacheOnLoads, ncmax, compress>
+    findNeighborsClustered<512 / GpuConfig::warpSize, bypassL1CacheOnLoads, ncmax, compress>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), countNeighbors, nc);
     kernelSuccess("findClusterNeighbors");

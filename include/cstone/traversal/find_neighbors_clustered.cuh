@@ -59,7 +59,7 @@ __host__ __device__ inline constexpr unsigned long
 clusterNeighborIndex(unsigned long cluster, unsigned long neighbor, unsigned long ncmax)
 {
     // constexpr unsigned long blockSize = TravConfig::targetSize / ClusterConfig::iSize;
-    constexpr unsigned long blockSize = 1; // better for findNeighborsClustered8
+    constexpr unsigned long blockSize = 1; // better for findNeighborsClustered
     return (cluster / blockSize) * blockSize * ncmax + (cluster % blockSize) + neighbor * blockSize;
 }
 
@@ -490,17 +490,17 @@ template<int warpsPerBlock,
          class Contribution,
          class... Tr>
 __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPerBlock,
-                             8) void findNeighborsClustered8(cstone::LocalIndex firstBody,
-                                                             cstone::LocalIndex lastBody,
-                                                             const Tc* __restrict__ x,
-                                                             const Tc* __restrict__ y,
-                                                             const Tc* __restrict__ z,
-                                                             const Th* __restrict__ h,
-                                                             const Box<Tc> box,
-                                                             const unsigned* __restrict__ ncClustered,
-                                                             const unsigned* __restrict__ nidxClustered,
-                                                             Contribution contribution,
-                                                             Tr* __restrict__... results)
+                             8) void findNeighborsClustered(cstone::LocalIndex firstBody,
+                                                            cstone::LocalIndex lastBody,
+                                                            const Tc* __restrict__ x,
+                                                            const Tc* __restrict__ y,
+                                                            const Tc* __restrict__ z,
+                                                            const Th* __restrict__ h,
+                                                            const Box<Tc> box,
+                                                            const unsigned* __restrict__ ncClustered,
+                                                            const unsigned* __restrict__ nidxClustered,
+                                                            Contribution contribution,
+                                                            Tr* __restrict__... results)
 {
     static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
     namespace cg = cooperative_groups;
