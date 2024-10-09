@@ -114,17 +114,17 @@ template<unsigned warpsPerBlock,
          class Th,
          class KeyType>
 __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
-                             8) void findClusterNeighbors9(cstone::LocalIndex firstBody,
-                                                           cstone::LocalIndex lastBody,
-                                                           const Tc* __restrict__ x,
-                                                           const Tc* __restrict__ y,
-                                                           const Tc* __restrict__ z,
-                                                           const Th* __restrict__ h,
-                                                           OctreeNsView<Tc, KeyType> tree,
-                                                           const Box<Tc> box,
-                                                           unsigned* __restrict__ ncClustered,
-                                                           unsigned* __restrict__ nidxClustered,
-                                                           int* globalPool)
+                             8) void findClusterNeighbors(cstone::LocalIndex firstBody,
+                                                          cstone::LocalIndex lastBody,
+                                                          const Tc* __restrict__ x,
+                                                          const Tc* __restrict__ y,
+                                                          const Tc* __restrict__ z,
+                                                          const Th* __restrict__ h,
+                                                          OctreeNsView<Tc, KeyType> tree,
+                                                          const Box<Tc> box,
+                                                          unsigned* __restrict__ ncClustered,
+                                                          unsigned* __restrict__ nidxClustered,
+                                                          int* globalPool)
 {
     static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
     namespace cg = cooperative_groups;

@@ -711,7 +711,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     {
         CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
         resetTraversalCounters<<<1, 1>>>();
-        findClusterNeighbors9<warpsPerBlock, true, true, ncmax, false>
+        findClusterNeighbors<warpsPerBlock, true, true, ncmax, false>
             <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
                                        rawPtr(clusterNeighbors), rawPtr(globalPool));
         checkGpuErrors(cudaGetLastError());
@@ -786,7 +786,7 @@ thrust::device_vector<LocalIndex> buildNeighborhoodCompressedClustered(std::size
     {
         CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
         resetTraversalCounters<<<1, 1>>>();
-        findClusterNeighbors9<warpsPerBlock, true, true, ncmax, true><<<numBlocks, blockSize>>>(
+        findClusterNeighbors<warpsPerBlock, true, true, ncmax, true><<<numBlocks, blockSize>>>(
             firstBody, lastBody, x, y, z, h, tree, box, nullptr, rawPtr(clusterNeighbors), rawPtr(globalPool));
         checkGpuErrors(cudaGetLastError());
     }

@@ -266,7 +266,7 @@ void findNeighborsC(std::size_t firstBody,
 
     resetTraversalCounters<<<1, 1>>>();
     auto t0 = std::chrono::high_resolution_clock::now();
-    findClusterNeighbors9<warpsPerBlock, true, bypassL1CacheOnLoads, ncmax, compress>
+    findClusterNeighbors<warpsPerBlock, true, bypassL1CacheOnLoads, ncmax, compress>
         <<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
                                  rawPtr(clusterNeighbors), rawPtr(globalPool));
     kernelSuccess("findClusterNeighbors");
