@@ -95,13 +95,99 @@ __device__ inline void tuple_foreach(F&& f, Tuple&& tuple, Tuples&&... tuples)
                        std::forward<Tuple>(tuple), std::forward<Tuples>(tuples)...);
 }
 
+template<unsigned warpsPerBlock, unsigned NcMax, bool Compress>
+__device__ inline void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
+                                                    const unsigned iClusterNc,
+                                                    unsigned* targetIClusterNidx,
+                                                    unsigned* targetIClusterNc)
+{
+    namespace cg     = cooperative_groups;
+    const auto block = cg::this_thread_block();
+    const auto warp  = cg::tiled_partition<GpuConfig::warpSize>(block);
+
+    constexpr unsigned itemsPerWarp = NcMax / GpuConfig::warpSize;
+    unsigned items[itemsPerWarp];
+#pragma unroll
+    for (unsigned i = 0; i < itemsPerWarp; ++i)
+    {
+        const unsigned nb = warp.thread_rank() * itemsPerWarp + i;
+        items[i]          = nb < iClusterNc ? iClusterNidx[nb] : unsigned(-1);
+    }
+    using WarpSort = cub::WarpMergeSort<unsigned, itemsPerWarp, GpuConfig::warpSize>;
+    __shared__ typename WarpSort::TempStorage sortTmp[warpsPerBlock];
+    WarpSort(sortTmp[warp.meta_group_rank()]).Sort(items, std::less<unsigned>());
+
+    unsigned prev = warp.shfl_up(items[itemsPerWarp - 1], 1);
+    if (warp.thread_rank() == 0) prev = unsigned(-1);
+    unsigned unique = 0;
+#pragma unroll
+    for (unsigned i = 0; i < itemsPerWarp; ++i)
+    {
+        const unsigned item = items[i];
+        if (item != prev & item != unsigned(-1))
+        {
+            // the following loop implements basically items[unique] = item;
+            // but enables scalar replacement of items[]
+#pragma unroll
+            for (unsigned j = 0; j < itemsPerWarp; ++j)
+            {
+                if (j == unique) items[unique] = item;
+            }
+            ++unique;
+            prev = item;
+        }
+    }
+
+    const unsigned totalUnique = inclusiveScanInt(unique);
+    assert(totalUnique < NcMax);
+    const unsigned startIndex = totalUnique - unique;
+
+    if constexpr (Compress)
+    {
+        // the following loop with if-condition is equivalent to
+        // for (unsigned i = 0; i < unique; ++i)
+        // but enables scalar replacement of items[]
+#pragma unroll
+        for (unsigned i = 0; i < itemsPerWarp; ++i)
+        {
+            if (i < unique)
+            {
+                const unsigned nb = startIndex + i;
+                iClusterNidx[nb]  = items[i];
+            }
+        }
+        const unsigned uniqueNeighbors = warp.shfl(totalUnique, GpuConfig::warpSize - 1);
+        assert(uniqueNeighbors < NcMax);
+#pragma unroll
+        for (unsigned i = 0; i < itemsPerWarp; ++i)
+            items[i] = iClusterNidx[itemsPerWarp * warp.thread_rank() + i];
+
+        constexpr unsigned long maxCompressedNeighborsSize = NcMax / ClusterConfig::expectedCompressionRate;
+        warpCompressNeighbors<warpsPerBlock, itemsPerWarp>(items, (char*)targetIClusterNidx, uniqueNeighbors);
+    }
+    else
+    {
+#pragma unroll
+        for (unsigned i = 0; i < itemsPerWarp; ++i)
+        {
+            if (i < unique)
+            {
+                const unsigned nb      = startIndex + i;
+                targetIClusterNidx[nb] = items[i];
+            }
+        }
+
+        if (warp.thread_rank() == GpuConfig::warpSize - 1) *targetIClusterNc = startIndex + unique;
+    }
+}
+
 } // namespace detail
 
 template<unsigned warpsPerBlock,
          bool UsePbc               = true,
-         bool bypassL1CacheOnLoads = true,
+         bool BypassL1CacheOnLoads = true,
          unsigned NcMax            = 256,
-         bool compress             = false,
+         bool Compress             = false,
          class Tc,
          class Th,
          class KeyType>
@@ -190,7 +276,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
             const auto preloadNextJCluster = [&]
             {
                 jPipeline.producer_acquire();
-                if constexpr (bypassL1CacheOnLoads)
+                if constexpr (BypassL1CacheOnLoads)
                 {
                     constexpr int numTcPer16Bytes = 16 / sizeof(Tc);
                     if (warp.thread_rank() < ClusterConfig::jSize / numTcPer16Bytes)
@@ -391,83 +477,10 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
             const unsigned ic  = warp.shfl(iCluster, c * ClusterConfig::iSize);
             if (ic >= numIClusters) continue;
 
-            constexpr unsigned itemsPerWarp = NcMax / GpuConfig::warpSize;
-            unsigned items[itemsPerWarp];
-#pragma unroll
-            for (unsigned i = 0; i < itemsPerWarp; ++i)
-            {
-                const unsigned nb = warp.thread_rank() * itemsPerWarp + i;
-                items[i]          = nb < ncc ? nidx[block.thread_index().z][c][nb] : unsigned(-1);
-            }
-            using WarpSort = cub::WarpMergeSort<unsigned, itemsPerWarp, GpuConfig::warpSize>;
-            __shared__ typename WarpSort::TempStorage sortTmp[warpsPerBlock];
-            WarpSort(sortTmp[block.thread_index().z]).Sort(items, std::less<unsigned>());
-
-            unsigned prev = warp.shfl_up(items[itemsPerWarp - 1], 1);
-            if (warp.thread_rank() == 0) prev = unsigned(-1);
-            unsigned unique = 0;
-#pragma unroll
-            for (unsigned i = 0; i < itemsPerWarp; ++i)
-            {
-                const unsigned item = items[i];
-                if (item != prev & item != unsigned(-1))
-                {
-                    // the following loop implements basically items[unique] = item;
-                    // but enables scalar replacement of items[]
-#pragma unroll
-                    for (unsigned j = 0; j < itemsPerWarp; ++j)
-                    {
-                        if (j == unique) items[unique] = item;
-                    }
-                    ++unique;
-                    prev = item;
-                }
-            }
-
-            const unsigned totalUnique = inclusiveScanInt(unique);
-            assert(totalUnique < NcMax);
-            const unsigned startIndex = totalUnique - unique;
-
-            if constexpr (compress)
-            {
-                // the following loop with if-condition is equivalent to
-                // for (unsigned i = 0; i < unique; ++i)
-                // but enables scalar replacement of items[]
-#pragma unroll
-                for (unsigned i = 0; i < itemsPerWarp; ++i)
-                {
-                    if (i < unique)
-                    {
-                        const unsigned nb                   = startIndex + i;
-                        nidx[block.thread_index().z][c][nb] = items[i];
-                    }
-                }
-                const unsigned uniqueNeighbors = warp.shfl(totalUnique, GpuConfig::warpSize - 1);
-                assert(uniqueNeighbors < NcMax);
-#pragma unroll
-                for (unsigned i = 0; i < itemsPerWarp; ++i)
-                {
-                    items[i] = nidx[block.thread_index().z][c][itemsPerWarp * warp.thread_rank() + i];
-                }
-
-                constexpr unsigned long maxCompressedNeighborsSize = NcMax / ClusterConfig::expectedCompressionRate;
-                warpCompressNeighbors<warpsPerBlock, itemsPerWarp>(
-                    items, (char*)&nidxClustered[ic * maxCompressedNeighborsSize], uniqueNeighbors);
-            }
-            else
-            {
-#pragma unroll
-                for (unsigned i = 0; i < itemsPerWarp; ++i)
-                {
-                    if (i < unique)
-                    {
-                        const unsigned nb                             = startIndex + i;
-                        nidxClustered[(unsigned long)ic * NcMax + nb] = items[i];
-                    }
-                }
-
-                if (warp.thread_rank() == GpuConfig::warpSize - 1) ncClustered[ic] = startIndex + unique;
-            }
+            constexpr unsigned long nbStoragePerICluster =
+                Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
+            detail::deduplicateAndStoreNeighbors<warpsPerBlock, NcMax, Compress>(
+                nidx[block.thread_index().z][c], ncc, &nidxClustered[ic * nbStoragePerICluster], &ncClustered[ic]);
         }
     }
 }
