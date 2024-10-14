@@ -751,8 +751,8 @@ void computeDensityClustered(
 
     constexpr unsigned threads       = 512;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
-    dim3 blockSize                   = {ClusterConfig::iSize, ClusterConfig::jSize, warpsPerBlock};
-    numBlocks                        = 1 << 11;
+    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
+    numBlocks      = 1 << 11;
     findNeighborsClustered<warpsPerBlock, true, ncmax, false>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeDensity, rho);
@@ -823,8 +823,8 @@ void computeDensityCompressedClustered(const std::size_t firstBody,
 
     constexpr unsigned threads       = 256;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
-    dim3 blockSize                   = {ClusterConfig::iSize, ClusterConfig::jSize, warpsPerBlock};
-    numBlocks                        = 1 << 11;
+    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
+    numBlocks      = 1 << 11;
     findNeighborsClustered<warpsPerBlock, true, ncmax, true><<<numBlocks, blockSize>>>(
         firstBody, lastBody, x, y, z, h, box, nullptr, rawPtr(clusterNeighbors), computeDensity, rho);
     checkGpuErrors(cudaGetLastError());

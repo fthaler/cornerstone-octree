@@ -212,7 +212,8 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
     assert(block.dim_threads().x == ClusterConfig::iSize);
     assert(block.dim_threads().y == GpuConfig::warpSize / ClusterConfig::iSize);
     assert(block.dim_threads().z == warpsPerBlock);
-    static_assert(warpsPerBlock > 0 && ClusterConfig::iSize * ClusterConfig::jSize == GpuConfig::warpSize);
+    static_assert(warpsPerBlock > 0 && ClusterConfig::iSize * ClusterConfig::jSize <= GpuConfig::warpSize);
+    static_assert(GpuConfig::warpSize % (ClusterConfig::iSize * ClusterConfig::jSize) == 0);
     const auto warp = cg::tiled_partition<GpuConfig::warpSize>(block);
 
     volatile __shared__ int sharedPool[GpuConfig::warpSize * warpsPerBlock];
@@ -276,7 +277,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
             const auto preloadNextJCluster = [&]
             {
                 jPipeline.producer_acquire();
-                if constexpr (BypassL1CacheOnLoads)
+                if constexpr (BypassL1CacheOnLoads && sizeof(Tc) * ClusterConfig::jSize % 16 == 0)
                 {
                     constexpr int numTcPer16Bytes = 16 / sizeof(Tc);
                     if (warp.thread_rank() < ClusterConfig::jSize / numTcPer16Bytes)
@@ -493,7 +494,7 @@ template<int warpsPerBlock,
          class Th,
          class Contribution,
          class... Tr>
-__global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPerBlock,
+__global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                              8) void findNeighborsClustered(cstone::LocalIndex firstBody,
                                                             cstone::LocalIndex lastBody,
                                                             const Tc* __restrict__ x,
@@ -511,8 +512,9 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
 
     const auto block = cg::this_thread_block();
     assert(block.dim_threads().x == ClusterConfig::iSize);
-    assert(block.dim_threads().y == ClusterConfig::jSize);
-    static_assert(warpsPerBlock > 0 && ClusterConfig::iSize * ClusterConfig::jSize == GpuConfig::warpSize);
+    assert(block.dim_threads().y == GpuConfig::warpSize / ClusterConfig::iSize);
+    static_assert(warpsPerBlock > 0 && ClusterConfig::iSize * ClusterConfig::jSize <= GpuConfig::warpSize);
+    static_assert(GpuConfig::warpSize % (ClusterConfig::iSize * ClusterConfig::jSize) == 0);
     assert(block.dim_threads().z == warpsPerBlock);
     const auto warp   = cg::tiled_partition<GpuConfig::warpSize>(block);
     const auto thread = cg::this_thread();
@@ -547,7 +549,8 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
     const auto preloadNextICluster = [&]
     {
         iPipeline.producer_acquire();
-        if constexpr (BypassL1CacheOnLoads)
+        if constexpr (BypassL1CacheOnLoads && sizeof(Tc) * ClusterConfig::iSize % 16 == 0 &&
+                      sizeof(Th) * ClusterConfig::jSize % 16 == 0)
         {
             constexpr int numTcPer16Bytes = 16 / sizeof(Tc);
             constexpr int numThPer16Bytes = 16 / sizeof(Th);
@@ -639,7 +642,7 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
         detail::tuple_foreach([](auto& sum) { sum = 0; }, sums);
         const auto computeClusterInteraction = [&](unsigned jCluster)
         {
-            const unsigned j = jCluster * ClusterConfig::jSize + block.thread_index().y;
+            const unsigned j = jCluster * ClusterConfig::jSize + block.thread_index().y % ClusterConfig::jSize;
             if (i < lastBody & j < lastBody)
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
@@ -651,12 +654,15 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
             }
         };
 
+        constexpr unsigned jClustersPerWarp   = GpuConfig::warpSize / ClusterConfig::iSize / ClusterConfig::jSize;
+        const unsigned minOverlappingJCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
+        const unsigned maxOverlappingJCluster =
+            (iCluster * ClusterConfig::iSize + std::max(ClusterConfig::iSize, ClusterConfig::jSize)) /
+            ClusterConfig::jSize;
+
 #pragma unroll
-        for (unsigned jCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
-             jCluster < (iCluster * ClusterConfig::iSize +
-                         (ClusterConfig::iSize > ClusterConfig::jSize ? ClusterConfig::iSize : ClusterConfig::jSize)) /
-                            ClusterConfig::jSize;
-             ++jCluster)
+        for (unsigned jCluster = minOverlappingJCluster + block.thread_index().y / ClusterConfig::jSize;
+             jCluster < maxOverlappingJCluster; jCluster += jClustersPerWarp)
             computeClusterInteraction(jCluster);
 
         if constexpr (Compress)
@@ -665,7 +671,8 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
             unsigned iClusterNeighborsCount;
             warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>(
                 (const char*)&nidxClustered[iCluster * maxCompressedNeighborsSize], nidx, iClusterNeighborsCount);
-            for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
+            for (unsigned jc = block.thread_index().y / ClusterConfig::jSize; jc < iClusterNeighborsCount;
+                 jc += jClustersPerWarp)
             {
                 const unsigned jCluster = nidx[jc];
                 computeClusterInteraction(jCluster);
@@ -675,7 +682,8 @@ __global__ __launch_bounds__(ClusterConfig::iSize* ClusterConfig::jSize* warpsPe
         {
             const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
 #pragma unroll ClusterConfig::jSize
-            for (unsigned jc = 0; jc < iClusterNeighborsCount; ++jc)
+            for (unsigned jc = block.thread_index().y / ClusterConfig::jSize; jc < iClusterNeighborsCount;
+                 jc += jClustersPerWarp)
             {
                 const unsigned jCluster = nidxClustered[(unsigned long)iCluster * NcMax + jc];
                 computeClusterInteraction(jCluster);
