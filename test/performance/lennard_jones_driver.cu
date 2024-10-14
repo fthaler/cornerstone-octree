@@ -704,7 +704,7 @@ void computeLjBatched(
                                                 afz, rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
 }
 
-template<class Tc, class T, class KeyType>
+template<bool Compress, class Tc, class T, class KeyType>
 std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
 buildNeighborhoodClustered(std::size_t firstBody,
                            std::size_t lastBody,
@@ -716,21 +716,22 @@ buildNeighborhoodClustered(std::size_t firstBody,
                            const Box<Tc>& box,
                            unsigned ngmax)
 {
-    unsigned numBodies    = lastBody - firstBody;
-    unsigned numBlocks    = TravConfig::numBlocks(numBodies);
-    unsigned poolSize     = TravConfig::poolSize(numBodies);
-    std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
-    thrust::device_vector<LocalIndex> clusterNeighbors(ncmax * iClusters);
-    thrust::device_vector<unsigned> clusterNeighborsCount(iClusters);
+    unsigned numBodies                           = lastBody - firstBody;
+    unsigned numBlocks                           = TravConfig::numBlocks(numBodies);
+    unsigned poolSize                            = TravConfig::poolSize(numBodies);
+    std::size_t iClusters                        = iceil(lastBody, ClusterConfig::iSize);
+    constexpr unsigned long nbStoragePerICluster = Compress ? ncmax / ClusterConfig::expectedCompressionRate : ncmax;
+    thrust::device_vector<LocalIndex> clusterNeighbors(nbStoragePerICluster * iClusters);
+    thrust::device_vector<unsigned> clusterNeighborsCount;
+    if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
     thrust::device_vector<int> globalPool(poolSize);
 
-    // TODO: own traversal config for cluster kernels
-    constexpr unsigned threads       = 128;
+    constexpr unsigned threads       = Compress ? 64 : 128;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
     resetTraversalCounters<<<1, 1>>>();
-    findClusterNeighbors<warpsPerBlock, true, true, ncmax, false>
+    findClusterNeighbors<warpsPerBlock, true, true, ncmax, Compress>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), rawPtr(globalPool));
     checkGpuErrors(cudaGetLastError());
@@ -738,7 +739,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     return {clusterNeighbors, clusterNeighborsCount};
 }
 
-template<class Tc, class T>
+template<bool Compress, class Tc, class T>
 void computeLjClustered(
     const std::size_t firstBody,
     const std::size_t lastBody,
@@ -773,85 +774,13 @@ void computeLjClustered(
         return std::make_tuple(T(0), T(0), T(0), ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
 
-    constexpr unsigned threads       = 512;
+    constexpr unsigned threads       = Compress ? 256 : 512;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
     numBlocks      = 1 << 11;
-    findNeighborsClustered<warpsPerBlock, true, ncmax, false>
+    findNeighborsClustered<warpsPerBlock, true, ncmax, Compress>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeLj, fx, fy, fz, afx, afy, afz);
-    checkGpuErrors(cudaGetLastError());
-}
-
-template<class Tc, class T, class KeyType>
-thrust::device_vector<LocalIndex> buildNeighborhoodCompressedClustered(std::size_t firstBody,
-                                                                       std::size_t lastBody,
-                                                                       const Tc* x,
-                                                                       const Tc* y,
-                                                                       const Tc* z,
-                                                                       const T* h,
-                                                                       OctreeNsView<Tc, KeyType> tree,
-                                                                       const Box<Tc>& box,
-                                                                       unsigned ngmax)
-{
-    unsigned numBodies    = lastBody - firstBody;
-    unsigned numBlocks    = TravConfig::numBlocks(numBodies);
-    unsigned poolSize     = TravConfig::poolSize(numBodies);
-    std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
-    thrust::device_vector<LocalIndex> clusterNeighbors((ncmax / ClusterConfig::expectedCompressionRate) * iClusters);
-    thrust::device_vector<int> globalPool(poolSize);
-
-    constexpr unsigned threads       = 64;
-    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
-    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-
-    resetTraversalCounters<<<1, 1>>>();
-    findClusterNeighbors<warpsPerBlock, true, true, ncmax, true><<<numBlocks, blockSize>>>(
-        firstBody, lastBody, x, y, z, h, tree, box, nullptr, rawPtr(clusterNeighbors), rawPtr(globalPool));
-    checkGpuErrors(cudaGetLastError());
-
-    return clusterNeighbors;
-}
-
-template<class Tc, class T>
-void computeLjCompressedClustered(const std::size_t firstBody,
-                                  const std::size_t lastBody,
-                                  const Tc* __restrict__ x,
-                                  const Tc* __restrict__ y,
-                                  const Tc* __restrict__ z,
-                                  const T* __restrict__ h,
-                                  const T lj1,
-                                  const T lj2,
-                                  const Box<Tc>& box,
-                                  const unsigned ngmax,
-                                  T* __restrict__ fx,
-                                  T* __restrict__ fy,
-                                  T* __restrict__ fz,
-                                  T* __restrict__ afx,
-                                  T* __restrict__ afy,
-                                  T* __restrict__ afz,
-                                  const thrust::device_vector<LocalIndex>& clusterNeighbors)
-{
-    unsigned numBodies = lastBody - firstBody;
-    unsigned numBlocks = TravConfig::numBlocks(numBodies);
-
-    resetTraversalCounters<<<1, 1>>>();
-    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, auto ijPosDiff, T rsq)
-    {
-        const T r2inv   = 1.0 / rsq;
-        const T r6inv   = r2inv * r2inv * r2inv;
-        const T forcelj = r6inv * (lj1 * r6inv - lj2);
-        const T fpair   = i == j ? 0 : forcelj * r2inv;
-
-        return std::make_tuple(T(0), T(0), T(0), ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
-    };
-
-    constexpr unsigned threads       = 256;
-    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
-    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-    numBlocks      = 1 << 11;
-    findNeighborsClustered<warpsPerBlock, true, ncmax, true><<<numBlocks, blockSize>>>(
-        firstBody, lastBody, x, y, z, h, box, nullptr, rawPtr(clusterNeighbors), computeLj, fx, fy, fz, afx, afy, afz);
     checkGpuErrors(cudaGetLastError());
 }
 
@@ -1017,10 +946,11 @@ int main()
     std::cout << "--- BATCHED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodBatched<Tc, T, KeyType>, computeLjBatched<Tc, T>);
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<Tc, T, KeyType>, computeLjClustered<Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, Tc, T, KeyType>,
+                                       computeLjClustered<false, Tc, T>);
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodCompressedClustered<Tc, T, KeyType>,
-                                       computeLjCompressedClustered<Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, Tc, T, KeyType>,
+                                       computeLjClustered<true, Tc, T>);
 
     return 0;
 }
