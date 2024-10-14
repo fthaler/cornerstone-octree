@@ -188,6 +188,7 @@ template<unsigned warpsPerBlock,
          bool BypassL1CacheOnLoads = true,
          unsigned NcMax            = 256,
          bool Compress             = false,
+         bool Symmetric            = false,
          class Tc,
          class Th,
          class KeyType>
@@ -336,7 +337,8 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 
                 bool isNeighbor = false;
                 if (iCluster < numIClusters & iCluster * ClusterConfig::iSize / ClusterConfig::jSize != jCluster &
-                    jCluster * ClusterConfig::jSize / ClusterConfig::iSize != iCluster)
+                    jCluster * ClusterConfig::jSize / ClusterConfig::iSize != iCluster &
+                    (!Symmetric | jCluster * ClusterConfig::jSize / ClusterConfig::iSize >= iCluster))
                 {
 #pragma unroll
                     for (unsigned jc = 0; jc < ClusterConfig::jSize; ++jc)
@@ -490,6 +492,7 @@ template<int warpsPerBlock,
          bool BypassL1CacheOnLoads = true,
          unsigned NcMax            = 256,
          bool Compress             = false,
+         bool Symmetric            = false,
          class Tc,
          class Th,
          class Contribution,
@@ -639,18 +642,31 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
         };
 
         std::tuple<Tr...> sums;
+        std::tuple<Tr...> zeros;
         detail::tuple_foreach([](auto& sum) { sum = 0; }, sums);
+        detail::tuple_foreach([](auto& zero) { zero = 0; }, zeros);
         const auto computeClusterInteraction = [&](unsigned jCluster)
         {
             const unsigned j = jCluster * ClusterConfig::jSize + block.thread_index().y % ClusterConfig::jSize;
-            if (i < lastBody & j < lastBody)
+            auto contrib     = zeros;
+            if (i < lastBody & j < lastBody & (!Symmetric | (i <= j)))
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Vec3<Tc> ijPosDiff = posDiff(jPos);
                 const Th d2              = norm2(ijPosDiff);
                 if (d2 < 4 * hi * hi)
-                    detail::tuple_foreach([](auto& sum, auto const& contrib) { sum += contrib; }, sums,
+                    detail::tuple_foreach([](auto& lhs, const auto& rhs) { lhs = rhs; }, contrib,
                                           contribution(i, iPos, hi, j, jPos, ijPosDiff, d2));
+            }
+            detail::tuple_foreach([](auto& sum, auto const& contrib) { sum += contrib; }, sums, contrib);
+            if constexpr (Symmetric)
+            {
+#pragma unroll
+                for (unsigned offset = ClusterConfig::iSize / 2; offset >= 1; offset /= 2)
+                    detail::tuple_foreach([&](auto& contrib) { contrib += warp.shfl_down(contrib, offset); }, contrib);
+                if (block.thread_index().x == 0 & j < lastBody)
+                    detail::tuple_foreach([j](auto& res, auto const& sum) { atomicAdd(&res[j], sum); },
+                                          std::make_tuple(results...), contrib);
             }
         };
 
@@ -695,7 +711,13 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
             detail::tuple_foreach([&](auto& sum) { sum += warp.shfl_down(sum, offset); }, sums);
 
         if (block.thread_index().y == 0 & i < lastBody)
-            detail::tuple_foreach([i](auto& res, auto const& sum) { res[i] = sum; }, std::make_tuple(results...), sums);
+            detail::tuple_foreach(
+                [i](auto& res, auto const& sum)
+                {
+                    if constexpr (Symmetric) { atomicAdd(&res[i], sum); }
+                    else { res[i] = sum; }
+                },
+                std::make_tuple(results...), sums);
     }
 }
 

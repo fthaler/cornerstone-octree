@@ -238,7 +238,12 @@ std::array<std::vector<unsigned>, 2> findClusterNeighborsCPU(std::size_t firstBo
     return {clusterNeighborsCount, clusterNeighbors};
 }
 
-template<bool compress = false, bool bypassL1CacheOnLoads = true, class Tc, class Th, class KeyType>
+template<bool compress             = false,
+         bool symmetric            = false,
+         bool bypassL1CacheOnLoads = true,
+         class Tc,
+         class Th,
+         class KeyType>
 void findNeighborsC(std::size_t firstBody,
                     std::size_t lastBody,
                     const Tc* x,
@@ -258,6 +263,7 @@ void findNeighborsC(std::size_t firstBody,
     static thrust::universal_vector<int> globalPool;
     clusterNeighbors.resize(iceil(lastBody, ClusterConfig::iSize) * ncmax);
     clusterNeighborsCount.resize(iceil(lastBody, ClusterConfig::iSize));
+    if constexpr (symmetric) thrust::fill(clusterNeighborsCount.begin(), clusterNeighborsCount.end(), 0);
     globalPool.resize(poolSize);
 
     // TODO: own traversal config for cluster kernels
@@ -267,7 +273,7 @@ void findNeighborsC(std::size_t firstBody,
 
     resetTraversalCounters<<<1, 1>>>();
     auto t0 = std::chrono::high_resolution_clock::now();
-    findClusterNeighbors<warpsPerBlock, true, bypassL1CacheOnLoads, ncmax, compress>
+    findClusterNeighbors<warpsPerBlock, true, bypassL1CacheOnLoads, ncmax, compress, symmetric>
         <<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
                                  rawPtr(clusterNeighbors), rawPtr(globalPool));
     checkGpuErrors(cudaGetLastError());
@@ -276,7 +282,7 @@ void findNeighborsC(std::size_t firstBody,
     double dt = std::chrono::duration<double>(t1 - t0).count();
     std::cout << "Clustered NB build time " << dt << " s" << std::endl;
 
-    if (!compress && false) // enable for debugging cluster neighbors
+    if (!compress && !symmetric && false) // enable for debugging cluster neighbors
     {
 
         auto [clusterNeighborsCountCPU, clusterNeighborsCPU] =
@@ -329,9 +335,15 @@ void findNeighborsC(std::size_t firstBody,
     {
         if (i == j) return 0u;
 
-        unsigned nb = atomicAdd(&nc[i], 1);
+        const unsigned nb = atomicAdd(&nc[i], 1);
         if (nb < ngmax) nidx[i * ngmax + nb] = j;
-        return 1u;
+        if constexpr (symmetric)
+        {
+            const unsigned nb = atomicAdd(&nc[j], 1);
+            if (nb < ngmax) nidx[j * ngmax + nb] = i;
+            return 0u;
+        }
+        else { return 1u; }
     };
 
     cudaMemset(nc + firstBody, 0, numBodies * sizeof(unsigned));
@@ -339,7 +351,7 @@ void findNeighborsC(std::size_t firstBody,
     t0             = std::chrono::high_resolution_clock::now();
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, 512 / GpuConfig::warpSize};
     numBlocks      = 1 << 11;
-    findNeighborsClustered<512 / GpuConfig::warpSize, bypassL1CacheOnLoads, ncmax, compress>
+    findNeighborsClustered<512 / GpuConfig::warpSize, bypassL1CacheOnLoads, ncmax, compress, symmetric>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), countNeighbors, nc);
     checkGpuErrors(cudaGetLastError());
@@ -467,22 +479,32 @@ void benchmarkGpu(FindNeighborsGpuF findNeighborsGpu, NeighborIndexF neighborInd
 #pragma omp for
         for (int i = 0; i < n; ++i)
         {
-            std::sort(neighborsCPU.data() + i * ngmax, neighborsCPU.data() + i * ngmax + neighborsCountCPU[i]);
-
-            nilist.resize(neighborsCountGPU[i]);
-            for (unsigned j = 0; j < neighborsCountGPU[i]; ++j)
-                nilist[j] = neighborsGPU[neighborIndex(i, j, ngmax)];
-            std::sort(nilist.begin(), nilist.end());
-
-            if (neighborsCountGPU[i] != neighborsCountCPU[i])
+            if (neighborsCountGPU[i] == neighborsCountCPU[i])
             {
-#pragma omp critical
-                std::cout << i << " " << neighborsCountGPU[i] << " " << neighborsCountCPU[i] << std::endl;
-#pragma omp atomic
-                ++numFails;
-            }
+                std::sort(neighborsCPU.data() + i * ngmax, neighborsCPU.data() + i * ngmax + neighborsCountCPU[i]);
 
-            if (!std::equal(begin(nilist), end(nilist), neighborsCPU.begin() + i * ngmax)) { numFailsList++; }
+                nilist.resize(neighborsCountGPU[i]);
+                for (unsigned j = 0; j < neighborsCountGPU[i]; ++j)
+                    nilist[j] = neighborsGPU[neighborIndex(i, j, ngmax)];
+                std::sort(nilist.begin(), nilist.end());
+
+                if (!std::equal(begin(nilist), end(nilist), neighborsCPU.begin() + i * ngmax))
+                {
+#pragma omp atomic
+                    ++numFailsList;
+                }
+            }
+            else
+            {
+                int failNum;
+#pragma omp atomic capture
+                failNum = numFails++;
+                if (failNum < 10)
+                {
+#pragma omp critical
+                    std::cout << i << " " << neighborsCountGPU[i] << " " << neighborsCountCPU[i] << std::endl;
+                }
+            }
         }
     }
 
@@ -536,4 +558,18 @@ int main()
                                    unsigned* nidx, unsigned ngmax)
     { findNeighborsC<true>(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
     benchmarkGpu<Tc, KeyType>(compressedClustered, neighborIndexNaive);
+
+    std::cout << "--- CLUSTERED SYMMETRIC ---" << std::endl;
+    auto clusteredSymmetric = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y,
+                                  const auto* z, const auto* h, auto tree, const auto& box, unsigned* nc,
+                                  unsigned* nidx, unsigned ngmax)
+    { findNeighborsC<false, true>(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
+    benchmarkGpu<Tc, KeyType>(clusteredSymmetric, neighborIndexNaive);
+
+    std::cout << "--- COMPRESSED CLUSTERED SYMMETRIC ---" << std::endl;
+    auto compressedClusteredSymmetric = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y,
+                                            const auto* z, const auto* h, auto tree, const auto& box, unsigned* nc,
+                                            unsigned* nidx, unsigned ngmax)
+    { findNeighborsC<true, true>(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
+    benchmarkGpu<Tc, KeyType>(compressedClusteredSymmetric, neighborIndexNaive);
 }
