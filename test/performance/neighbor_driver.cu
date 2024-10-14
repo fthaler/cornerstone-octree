@@ -163,6 +163,7 @@ auto findNeighborsBT(size_t firstBody,
     auto t0 = std::chrono::high_resolution_clock::now();
     traverseBT<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax,
                                                       rawPtr(globalPool));
+    checkGpuErrors(cudaGetLastError());
     kernelSuccess("traverseBT");
 
     auto t1   = std::chrono::high_resolution_clock::now();
@@ -269,6 +270,7 @@ void findNeighborsC(std::size_t firstBody,
     findClusterNeighbors<warpsPerBlock, true, bypassL1CacheOnLoads, ncmax, compress>
         <<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
                                  rawPtr(clusterNeighbors), rawPtr(globalPool));
+    checkGpuErrors(cudaGetLastError());
     kernelSuccess("findClusterNeighbors");
     auto t1   = std::chrono::high_resolution_clock::now();
     double dt = std::chrono::duration<double>(t1 - t0).count();
@@ -342,6 +344,7 @@ void findNeighborsC(std::size_t firstBody,
     findNeighborsClustered<512 / GpuConfig::warpSize, bypassL1CacheOnLoads, ncmax, compress>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), countNeighbors, nc);
+    checkGpuErrors(cudaGetLastError());
     kernelSuccess("findClusterNeighbors");
     t1 = std::chrono::high_resolution_clock::now();
     dt = std::chrono::duration<double>(t1 - t0).count();
@@ -505,6 +508,7 @@ int main()
     {
         findNeighborsKernel<<<iceil(lastBody - firstBody, 128), 128>>>(x, y, z, h, firstBody, lastBody, box, tree,
                                                                        ngmax, nidx, nc);
+        checkGpuErrors(cudaGetLastError());
     };
     auto neighborIndexNaive = [](unsigned i, unsigned j, unsigned ngmax) { return i * ngmax + j; };
     benchmarkGpu<Tc, KeyType>(naive, neighborIndexNaive);
