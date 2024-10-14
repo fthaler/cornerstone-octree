@@ -679,7 +679,7 @@ void computeDensityBatched(
     checkGpuErrors(cudaGetLastError());
 }
 
-template<bool Compress, class Tc, class T, class KeyType>
+template<bool Compress, bool Symmetric, class Tc, class T, class KeyType>
 std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
 buildNeighborhoodClustered(std::size_t firstBody,
                            std::size_t lastBody,
@@ -712,7 +712,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     {
         CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
         resetTraversalCounters<<<1, 1>>>();
-        findClusterNeighbors<warpsPerBlock, true, true, ncmax, Compress>
+        findClusterNeighbors<warpsPerBlock, true, true, ncmax, Compress, Symmetric>
             <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
                                        rawPtr(clusterNeighbors), rawPtr(globalPool));
         checkGpuErrors(cudaGetLastError());
@@ -721,7 +721,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     return {clusterNeighbors, clusterNeighborsCount};
 }
 
-template<bool Compress, class Tc, class T>
+template<bool Compress, bool Symmetric, class Tc, class T>
 void computeDensityClustered(
     const std::size_t firstBody,
     const std::size_t lastBody,
@@ -740,6 +740,8 @@ void computeDensityClustered(
     unsigned numBodies                              = lastBody - firstBody;
     unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
 
+    if constexpr (Symmetric) checkGpuErrors(cudaMemsetAsync(rho, 0, sizeof(T) * lastBody));
+
     resetTraversalCounters<<<1, 1>>>();
     auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, auto, T dist2)
     {
@@ -754,7 +756,7 @@ void computeDensityClustered(
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
     numBlocks      = 1 << 11;
-    findNeighborsClustered<warpsPerBlock, true, ncmax, Compress>
+    findNeighborsClustered<warpsPerBlock, true, ncmax, Compress, Symmetric>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeDensity, rho);
     checkGpuErrors(cudaGetLastError());
@@ -948,11 +950,17 @@ int main()
     std::cout << "--- BATCHED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodBatched<Tc, T, KeyType>, computeDensityBatched<Tc, T>);
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, Tc, T, KeyType>,
-                                       computeDensityClustered<false, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, false, Tc, T, KeyType>,
+                                       computeDensityClustered<false, false, Tc, T>);
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, Tc, T, KeyType>,
-                                       computeDensityClustered<true, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, false, Tc, T, KeyType>,
+                                       computeDensityClustered<true, false, Tc, T>);
+    std::cout << "--- CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, true, Tc, T, KeyType>,
+                                       computeDensityClustered<false, true, Tc, T>);
+    std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, true, Tc, T, KeyType>,
+                                       computeDensityClustered<true, true, Tc, T>);
 
     return 0;
 }

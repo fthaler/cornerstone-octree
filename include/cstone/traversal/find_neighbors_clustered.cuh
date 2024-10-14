@@ -492,7 +492,7 @@ template<int warpsPerBlock,
          bool BypassL1CacheOnLoads = true,
          unsigned NcMax            = 256,
          bool Compress             = false,
-         bool Symmetric            = false,
+         int Symmetric             = 0,
          class Tc,
          class Th,
          class Contribution,
@@ -511,6 +511,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
                                                             Tr* __restrict__... results)
 {
     static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
+    static_assert(Symmetric == 0 || Symmetric == 1 || Symmetric == -1, "Symmetric must be 0, 1, or -1");
     namespace cg = cooperative_groups;
 
     const auto block = cg::this_thread_block();
@@ -661,12 +662,17 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
             detail::tuple_foreach([](auto& sum, auto const& contrib) { sum += contrib; }, sums, contrib);
             if constexpr (Symmetric)
             {
+                if (i == j) detail::tuple_foreach([&](auto& contrib) { contrib = 0; }, contrib);
 #pragma unroll
                 for (unsigned offset = ClusterConfig::iSize / 2; offset >= 1; offset /= 2)
                     detail::tuple_foreach([&](auto& contrib) { contrib += warp.shfl_down(contrib, offset); }, contrib);
                 if (block.thread_index().x == 0 & j < lastBody)
-                    detail::tuple_foreach([j](auto& res, auto const& sum) { atomicAdd(&res[j], sum); },
-                                          std::make_tuple(results...), contrib);
+                    detail::tuple_foreach(
+                        [j](auto& res, auto const& sum)
+                        {
+                            if (sum != 0) atomicAdd(&res[j], Symmetric * sum);
+                        },
+                        std::make_tuple(results...), contrib);
             }
         };
 
@@ -714,7 +720,10 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
             detail::tuple_foreach(
                 [i](auto& res, auto const& sum)
                 {
-                    if constexpr (Symmetric) { atomicAdd(&res[i], sum); }
+                    if constexpr (Symmetric)
+                    {
+                        if (sum != 0) atomicAdd(&res[i], sum);
+                    }
                     else { res[i] = sum; }
                 },
                 std::make_tuple(results...), sums);

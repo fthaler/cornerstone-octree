@@ -704,7 +704,7 @@ void computeLjBatched(
                                                 afz, rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
 }
 
-template<bool Compress, class Tc, class T, class KeyType>
+template<bool Compress, bool Symmetric, class Tc, class T, class KeyType>
 std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
 buildNeighborhoodClustered(std::size_t firstBody,
                            std::size_t lastBody,
@@ -731,7 +731,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
     resetTraversalCounters<<<1, 1>>>();
-    findClusterNeighbors<warpsPerBlock, true, true, ncmax, Compress>
+    findClusterNeighbors<warpsPerBlock, true, true, ncmax, Compress, Symmetric>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), rawPtr(globalPool));
     checkGpuErrors(cudaGetLastError());
@@ -739,7 +739,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     return {clusterNeighbors, clusterNeighborsCount};
 }
 
-template<bool Compress, class Tc, class T>
+template<bool Compress, bool Symmetric, class Tc, class T>
 void computeLjClustered(
     const std::size_t firstBody,
     const std::size_t lastBody,
@@ -774,11 +774,21 @@ void computeLjClustered(
         return std::make_tuple(T(0), T(0), T(0), ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
 
+    if constexpr (Symmetric)
+    {
+        checkGpuErrors(cudaMemsetAsync(fx, 0, sizeof(T) * lastBody));
+        checkGpuErrors(cudaMemsetAsync(fy, 0, sizeof(T) * lastBody));
+        checkGpuErrors(cudaMemsetAsync(fz, 0, sizeof(T) * lastBody));
+        checkGpuErrors(cudaMemsetAsync(afx, 0, sizeof(T) * lastBody));
+        checkGpuErrors(cudaMemsetAsync(afy, 0, sizeof(T) * lastBody));
+        checkGpuErrors(cudaMemsetAsync(afz, 0, sizeof(T) * lastBody));
+    }
+
     constexpr unsigned threads       = Compress ? 256 : 512;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
     numBlocks      = 1 << 11;
-    findNeighborsClustered<warpsPerBlock, true, ncmax, Compress>
+    findNeighborsClustered<warpsPerBlock, true, ncmax, Compress, -int(Symmetric)>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeLj, fx, fy, fz, afx, afy, afz);
     checkGpuErrors(cudaGetLastError());
@@ -946,11 +956,17 @@ int main()
     std::cout << "--- BATCHED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodBatched<Tc, T, KeyType>, computeLjBatched<Tc, T>);
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, Tc, T, KeyType>,
-                                       computeLjClustered<false, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, false, Tc, T, KeyType>,
+                                       computeLjClustered<false, false, Tc, T>);
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, Tc, T, KeyType>,
-                                       computeLjClustered<true, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, false, Tc, T, KeyType>,
+                                       computeLjClustered<true, false, Tc, T>);
+    std::cout << "--- CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, true, Tc, T, KeyType>,
+                                       computeLjClustered<false, true, Tc, T>);
+    std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
+    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, true, Tc, T, KeyType>,
+                                       computeLjClustered<true, true, Tc, T>);
 
     return 0;
 }
