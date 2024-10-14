@@ -330,9 +330,7 @@ void findNeighborsC(std::size_t firstBody,
         if (i == j) return 0u;
 
         unsigned nb = atomicAdd(&nc[i], 1);
-        if (nb < ngmax)
-            nidx[(i / TravConfig::targetSize) * TravConfig::targetSize * ngmax + TravConfig::targetSize * nb +
-                 i % TravConfig::targetSize] = j;
+        if (nb < ngmax) nidx[i * ngmax + nb] = j;
         return 1u;
     };
 
@@ -530,12 +528,12 @@ int main()
     auto clustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y, const auto* z,
                          const auto* h, auto tree, const auto& box, unsigned* nc, unsigned* nidx, unsigned ngmax)
     { findNeighborsC<false>(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
-    benchmarkGpu<Tc, KeyType>(clustered, neighborIndexBatched);
+    benchmarkGpu<Tc, KeyType>(clustered, neighborIndexNaive);
 
     std::cout << "--- COMPRESSED CLUSTERED ---" << std::endl;
     auto compressedClustered = [&](std::size_t firstBody, std::size_t lastBody, const auto* x, const auto* y,
                                    const auto* z, const auto* h, auto tree, const auto& box, unsigned* nc,
                                    unsigned* nidx, unsigned ngmax)
     { findNeighborsC<true>(firstBody, lastBody, x, y, z, h, tree, box, nc, nidx, ngmax); };
-    benchmarkGpu<Tc, KeyType>(compressedClustered, neighborIndexBatched);
+    benchmarkGpu<Tc, KeyType>(compressedClustered, neighborIndexNaive);
 }
