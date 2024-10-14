@@ -986,10 +986,13 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     {
         if (!isclose(rhoGPU[i], rho[i]))
         {
-#pragma omp critical
+            int failNum;
+#pragma omp atomic capture
+            failNum = numFails++;
+            if (failNum < 10)
             {
+#pragma omp critical
                 printf("%i %.10f %.10f\n", i, rhoGPU[i], rho[i]);
-                ++numFails;
             }
         }
     }

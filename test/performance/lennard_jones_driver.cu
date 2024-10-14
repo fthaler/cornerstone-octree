@@ -984,11 +984,15 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
         if (!isclose(fxGPU[i], fx[i]) || !isclose(fyGPU[i], fy[i]) || !isclose(fzGPU[i], fz[i]) ||
             !isclose(afxGPU[i], afx[i]) || !isclose(afyGPU[i], afy[i]) || !isclose(afzGPU[i], afz[i]))
         {
+            int failNum;
+#pragma omp atomic capture
+            failNum = numFails++;
+            if (failNum < 10)
+            {
 #pragma omp critical
-            printf("%i (%.10f, %.10f, %.10f) (%.10f, %.10f, %.10f)\n", i, afxGPU[i], afyGPU[i], afzGPU[i], afx[i],
-                   afy[i], afz[i]);
-#pragma omp atomic
-            ++numFails;
+                printf("%i (%.10f, %.10f, %.10f) (%.10f, %.10f, %.10f)\n", i, afxGPU[i], afyGPU[i], afzGPU[i], afx[i],
+                       afy[i], afz[i]);
+            }
         }
     }
     std::cout << "numFails: " << numFails << std::endl;
