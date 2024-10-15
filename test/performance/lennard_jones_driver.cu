@@ -718,6 +718,13 @@ void computeLjClustered(
     unsigned numBodies                              = lastBody - firstBody;
     unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
 
+    if constexpr (Symmetric)
+    {
+        checkGpuErrors(cudaMemsetAsync(afx, 0, sizeof(T) * lastBody));
+        checkGpuErrors(cudaMemsetAsync(afy, 0, sizeof(T) * lastBody));
+        checkGpuErrors(cudaMemsetAsync(afz, 0, sizeof(T) * lastBody));
+    }
+
     resetTraversalCounters<<<1, 1>>>();
     auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, auto ijPosDiff, T rsq)
     {
@@ -728,13 +735,6 @@ void computeLjClustered(
 
         return std::make_tuple(ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
-
-    if constexpr (Symmetric)
-    {
-        checkGpuErrors(cudaMemsetAsync(afx, 0, sizeof(T) * lastBody));
-        checkGpuErrors(cudaMemsetAsync(afy, 0, sizeof(T) * lastBody));
-        checkGpuErrors(cudaMemsetAsync(afz, 0, sizeof(T) * lastBody));
-    }
 
     constexpr unsigned threads       = Compress ? 256 : 512;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
