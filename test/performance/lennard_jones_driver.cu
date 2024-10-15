@@ -740,7 +740,7 @@ void computeLjClustered(
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
     numBlocks      = 1 << 11;
-    findNeighborsClustered<warpsPerBlock, true, ncmax, Compress, Symmetric ? -1 : 0>
+    findNeighborsClustered<warpsPerBlock, true, true, ncmax, Compress, Symmetric ? -1 : 0>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeLj, afx, afy, afz);
     checkGpuErrors(cudaGetLastError());

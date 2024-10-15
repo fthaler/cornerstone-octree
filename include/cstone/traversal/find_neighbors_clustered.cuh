@@ -496,6 +496,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 }
 
 template<int warpsPerBlock,
+         bool UsePbc               = true,
          bool BypassL1CacheOnLoads = true,
          unsigned NcMax            = 256,
          bool Compress             = false,
@@ -531,7 +532,6 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
     const auto thread = cg::this_thread();
 
     constexpr auto pbc = BoundaryType::periodic;
-    const bool anyPbc  = box.boundaryX() == pbc | box.boundaryY() == pbc | box.boundaryZ() == pbc;
 
     assert(firstBody == 0); // TODO: other cases
     const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
@@ -635,12 +635,10 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
         const Th hi         = h[i];
 #endif
 
-        // const bool usePbc   = warp.any(anyPbc & !insideBox(iPos, {2 * hi, 2 * hi, 2 * hi}, box));
-
         const auto posDiff = [&](const Vec3<Tc>& jPos)
         {
             Vec3<Tc> ijPosDiff = {iPos[0] - jPos[0], iPos[1] - jPos[1], iPos[2] - jPos[2]};
-            if (anyPbc)
+            if constexpr (UsePbc)
             {
                 ijPosDiff[0] -= (box.boundaryX() == pbc) * box.lx() * std::rint(ijPosDiff[0] * box.ilx());
                 ijPosDiff[1] -= (box.boundaryY() == pbc) * box.ly() * std::rint(ijPosDiff[1] * box.ily());
