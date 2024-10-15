@@ -683,7 +683,6 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
         constexpr unsigned jClustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize / ClusterConfig::jSize;
         constexpr unsigned overlappingJClusters =
             ClusterConfig::iSize <= ClusterConfig::jSize ? 1 : ClusterConfig::iSize / ClusterConfig::jSize;
-#pragma unroll
         for (unsigned overlapping = 0; overlapping < overlappingJClusters; overlapping += jClustersPerWarp)
         {
             const unsigned o = overlapping + block.thread_index().y / ClusterConfig::jSize;
@@ -708,7 +707,6 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
         else
         {
             const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
-#pragma unroll ClusterConfig::jSize
             for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, NcMax); jc += jClustersPerWarp)
             {
                 const unsigned jcc = jc + block.thread_index().y / ClusterConfig::jSize;
