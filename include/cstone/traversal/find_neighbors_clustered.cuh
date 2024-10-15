@@ -505,18 +505,17 @@ template<int warpsPerBlock,
          class Th,
          class Contribution,
          class... Tr>
-__global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
-                             8) void findNeighborsClustered(cstone::LocalIndex firstBody,
-                                                            cstone::LocalIndex lastBody,
-                                                            const Tc* __restrict__ x,
-                                                            const Tc* __restrict__ y,
-                                                            const Tc* __restrict__ z,
-                                                            const Th* __restrict__ h,
-                                                            const Box<Tc> box,
-                                                            const unsigned* __restrict__ ncClustered,
-                                                            const unsigned* __restrict__ nidxClustered,
-                                                            Contribution contribution,
-                                                            Tr* __restrict__... results)
+__global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstBody,
+                                                       cstone::LocalIndex lastBody,
+                                                       const Tc* __restrict__ x,
+                                                       const Tc* __restrict__ y,
+                                                       const Tc* __restrict__ z,
+                                                       const Th* __restrict__ h,
+                                                       const Box<Tc> box,
+                                                       const unsigned* __restrict__ ncClustered,
+                                                       const unsigned* __restrict__ nidxClustered,
+                                                       Contribution contribution,
+                                                       Tr* __restrict__... results)
 {
     static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
     static_assert(Symmetric == 0 || Symmetric == 1 || Symmetric == -1, "Symmetric must be 0, 1, or -1");
