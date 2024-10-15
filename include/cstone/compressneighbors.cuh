@@ -289,6 +289,19 @@ warpDecompressNeighbors(const char* __restrict__ input, std::uint32_t* __restric
         neighborIndices[i] -= items[i];
     }
 
+    std::uint32_t data[ItemsPerThread];
+#pragma unroll
+    for (unsigned i = 0; i < ItemsPerThread; ++i)
+    {
+        if (!ones[i])
+        {
+            data[i] = 0;
+            for (unsigned j = 0; j < nnibbles[i]; ++j)
+                data[i] |= readNibble(dataNibblesBuffer, dataIndices[i] + j) << (4 * j);
+        }
+    }
+    warp.sync();
+
 #pragma unroll
     for (unsigned i = 0; i < ItemsPerThread; ++i)
     {
@@ -298,13 +311,7 @@ warpDecompressNeighbors(const char* __restrict__ input, std::uint32_t* __restric
             for (unsigned j = 0; j < ones[i]; ++j)
                 neighbors[neighborIndex + j] = 1;
         }
-        else
-        {
-            std::uint32_t data = 0;
-            for (unsigned j = 0; j < nnibbles[i]; ++j)
-                data |= readNibble(dataNibblesBuffer, dataIndices[i] + j) << (4 * j);
-            neighbors[neighborIndex] = data;
-        }
+        else { neighbors[neighborIndex] = data[i]; }
     }
 
     warp.sync();
