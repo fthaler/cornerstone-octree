@@ -676,16 +676,17 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
             }
         };
 
-        constexpr unsigned jClustersPerWarp   = GpuConfig::warpSize / ClusterConfig::iSize / ClusterConfig::jSize;
-        const unsigned minOverlappingJCluster = iCluster * ClusterConfig::iSize / ClusterConfig::jSize;
-        const unsigned maxOverlappingJCluster =
-            (iCluster * ClusterConfig::iSize + std::max(ClusterConfig::iSize, ClusterConfig::jSize)) /
-            ClusterConfig::jSize;
-
+        constexpr unsigned jClustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize / ClusterConfig::jSize;
+        constexpr unsigned overlappingJClusters =
+            ClusterConfig::iSize <= ClusterConfig::jSize ? 1 : ClusterConfig::iSize / ClusterConfig::jSize;
 #pragma unroll
-        for (unsigned jCluster = minOverlappingJCluster + block.thread_index().y / ClusterConfig::jSize;
-             jCluster < maxOverlappingJCluster; jCluster += jClustersPerWarp)
+        for (unsigned overlapping = 0; overlapping < overlappingJClusters; overlapping += jClustersPerWarp)
+        {
+            const unsigned o = overlapping + block.thread_index().y / ClusterConfig::jSize;
+            const unsigned jCluster =
+                o < overlappingJClusters ? iCluster * ClusterConfig::iSize / ClusterConfig::jSize + o : ~0u;
             computeClusterInteraction(jCluster);
+        }
 
         if constexpr (Compress)
         {
@@ -693,10 +694,10 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
             unsigned iClusterNeighborsCount;
             warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>(
                 (const char*)&nidxClustered[iCluster * maxCompressedNeighborsSize], nidx, iClusterNeighborsCount);
-            for (unsigned jc = block.thread_index().y / ClusterConfig::jSize; jc < iClusterNeighborsCount;
-                 jc += jClustersPerWarp)
+            for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, NcMax); jc += jClustersPerWarp)
             {
-                const unsigned jCluster = nidx[jc];
+                const unsigned jcc      = jc + block.thread_index().y / ClusterConfig::jSize;
+                const unsigned jCluster = jcc < iClusterNeighborsCount ? nidx[jcc] : ~0u;
                 computeClusterInteraction(jCluster);
             }
         }
@@ -704,10 +705,11 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
         {
             const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
 #pragma unroll ClusterConfig::jSize
-            for (unsigned jc = block.thread_index().y / ClusterConfig::jSize; jc < iClusterNeighborsCount;
-                 jc += jClustersPerWarp)
+            for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, NcMax); jc += jClustersPerWarp)
             {
-                const unsigned jCluster = nidxClustered[(unsigned long)iCluster * NcMax + jc];
+                const unsigned jcc = jc + block.thread_index().y / ClusterConfig::jSize;
+                const unsigned jCluster =
+                    jcc < iClusterNeighborsCount ? nidxClustered[(unsigned long)iCluster * NcMax + jcc] : ~0u;
                 computeClusterInteraction(jCluster);
             }
         }
