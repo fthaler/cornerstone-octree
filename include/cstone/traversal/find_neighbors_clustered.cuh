@@ -517,12 +517,11 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 }
 
 template<int warpsPerBlock,
-         bool UsePbc                 = true,
-         bool BypassL1CacheOnLoads   = true,
-         unsigned NcMax              = 256,
-         bool Compress               = false,
-         int Symmetric               = 0,
-         unsigned iClustersPerTarget = 1,
+         bool UsePbc               = true,
+         bool BypassL1CacheOnLoads = true,
+         unsigned NcMax            = 256,
+         bool Compress             = false,
+         int Symmetric             = 0,
          class Tc,
          class Th,
          class Contribution,
@@ -562,16 +561,12 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
 
     constexpr unsigned long compressedNcMax = Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
 
-    unsigned iCluster          = iClustersPerTarget - 1;
+    unsigned iCluster          = 0;
     const auto getNextICluster = [&]()
     {
-        if (iCluster % iClustersPerTarget == iClustersPerTarget - 1)
-        {
-            unsigned nextTarget;
-            if (warp.thread_rank() == 0) nextTarget = atomicAdd(&targetCounterGlob, 1);
-            return warp.shfl(nextTarget, 0) * iClustersPerTarget;
-        }
-        else { return iCluster + 1; }
+        unsigned nextTarget;
+        if (warp.thread_rank() == 0) nextTarget = atomicAdd(&targetCounterGlob, 1);
+        return warp.shfl(nextTarget, 0);
     };
 
 #if CSTONE_USE_CUDA_PIPELINE
