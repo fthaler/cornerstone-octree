@@ -162,7 +162,6 @@ __device__ inline void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
         for (unsigned i = 0; i < itemsPerWarp; ++i)
             items[i] = iClusterNidx[itemsPerWarp * warp.thread_rank() + i];
 
-        constexpr unsigned long maxCompressedNeighborsSize = NcMax / ClusterConfig::expectedCompressionRate;
         warpCompressNeighbors<warpsPerBlock, itemsPerWarp>(items, (char*)targetIClusterNidx, uniqueNeighbors);
     }
     else
