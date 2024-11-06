@@ -705,7 +705,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
             sizeof(int) * globalPool.size()) /
                1.0e6);
 
-    constexpr unsigned threads       = Compress ? 64 : 128;
+    constexpr unsigned threads       = Compress ? 64 : 64;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
@@ -752,7 +752,7 @@ void computeDensityClustered(
         return i == j ? mj : w * mj;
     };
 
-    constexpr unsigned threads       = Compress ? 256 : 512;
+    constexpr unsigned threads       = Compress ? 256 : 256;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
     numBlocks      = 1 << 11;

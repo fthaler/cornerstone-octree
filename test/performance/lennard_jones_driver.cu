@@ -932,7 +932,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
     thrust::device_vector<int> globalPool(poolSize);
 
-    constexpr unsigned threads       = Compress ? 64 : 128;
+    constexpr unsigned threads       = Compress ? 64 : 32;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
@@ -963,8 +963,6 @@ void computeLjClustered(
     const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
 {
     auto& [clusterNeighbors, clusterNeighborsCount] = neighborhood;
-    unsigned numBodies                              = lastBody - firstBody;
-    unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
 
     if constexpr (Symmetric)
     {
@@ -984,10 +982,10 @@ void computeLjClustered(
         return std::make_tuple(ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
 
-    constexpr unsigned threads       = Compress ? 256 : 512;
+    constexpr unsigned threads       = Compress ? 256 : 256;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
-    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-    numBlocks      = 1 << 11;
+    const dim3 blockSize     = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
+    const unsigned numBlocks = 1 << 11;
     findNeighborsClustered<warpsPerBlock, true, true, ncmax, Compress, Symmetric ? -1 : 0>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeLj, afx, afy, afz);

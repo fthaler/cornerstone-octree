@@ -191,7 +191,8 @@ struct alignas(16) Preloader
 {
     T buffer[warpsPerBlock][N];
 
-    inline __device__ void startLoad(const T* __restrict__ ptr, cuda::pipeline<cuda::thread_scope_thread>& pipeline)
+    inline __device__ void
+    startLoad(const T* __restrict__ ptr, cuda::pipeline<cuda::thread_scope_thread>& pipeline, unsigned n = N)
     {
         namespace cg  = cooperative_groups;
         auto block    = cg::this_thread_block();
@@ -204,8 +205,11 @@ struct alignas(16) Preloader
 #pragma unroll
             for (unsigned i = warp.thread_rank(); i < N / numTPer16Bytes; i += GpuConfig::warpSize)
             {
-                cuda::memcpy_async(thread, &warpBuffer[i * numTPer16Bytes], &ptr[i * numTPer16Bytes],
-                                   cuda::aligned_size_t<16>(16), pipeline);
+                if (i < (n + numTPer16Bytes - 1) / numTPer16Bytes)
+                {
+                    cuda::memcpy_async(thread, &warpBuffer[i * numTPer16Bytes], &ptr[i * numTPer16Bytes],
+                                       cuda::aligned_size_t<16>(16), pipeline);
+                }
             }
         }
         else
@@ -213,8 +217,11 @@ struct alignas(16) Preloader
 #pragma unroll
             for (unsigned i = warp.thread_rank(); i < N; i += GpuConfig::warpSize)
             {
-                cuda::memcpy_async(thread, &warpBuffer[i], &ptr[i], cuda::aligned_size_t<sizeof(T)>(sizeof(T)),
-                                   pipeline);
+                if (i < n)
+                {
+                    cuda::memcpy_async(thread, &warpBuffer[i], &ptr[i], cuda::aligned_size_t<sizeof(T)>(sizeof(T)),
+                                       pipeline);
+                }
             }
         }
     }
@@ -510,11 +517,12 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 }
 
 template<int warpsPerBlock,
-         bool UsePbc               = true,
-         bool BypassL1CacheOnLoads = true,
-         unsigned NcMax            = 256,
-         bool Compress             = false,
-         int Symmetric             = 0,
+         bool UsePbc                 = true,
+         bool BypassL1CacheOnLoads   = true,
+         unsigned NcMax              = 256,
+         bool Compress               = false,
+         int Symmetric               = 0,
+         unsigned iClustersPerTarget = 1,
          class Tc,
          class Th,
          class Contribution,
@@ -549,21 +557,32 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
     assert(firstBody == 0); // TODO: other cases
     const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
 
-    unsigned* nidx = nullptr;
-    if constexpr (Compress)
+    __shared__ unsigned nidxBuffer[warpsPerBlock][NcMax];
+    unsigned* const nidx = nidxBuffer[block.thread_index().z];
+
+    constexpr unsigned long compressedNcMax = Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
+
+    unsigned iCluster          = iClustersPerTarget - 1;
+    const auto getNextICluster = [&]()
     {
-        __shared__ unsigned nidxBuffer[warpsPerBlock][NcMax];
-        nidx = nidxBuffer[block.thread_index().z];
-    }
+        if (iCluster % iClustersPerTarget == iClustersPerTarget - 1)
+        {
+            unsigned nextTarget;
+            if (warp.thread_rank() == 0) nextTarget = atomicAdd(&targetCounterGlob, 1);
+            return warp.shfl(nextTarget, 0) * iClustersPerTarget;
+        }
+        else { return iCluster + 1; }
+    };
 
 #if CSTONE_USE_CUDA_PIPELINE
     __shared__ detail::Preloader<warpsPerBlock, BypassL1CacheOnLoads, Tc, ClusterConfig::iSize> xiPreloader,
         yiPreloader, ziPreloader;
     __shared__ detail::Preloader<warpsPerBlock, BypassL1CacheOnLoads, Th, ClusterConfig::iSize> hiPreloader;
+    __shared__ detail::Preloader<warpsPerBlock, BypassL1CacheOnLoads, unsigned, compressedNcMax> nidxPreloader;
 
     auto iPipeline = cuda::make_pipeline();
 
-    unsigned iCluster = 0, nextICluster = 0;
+    unsigned nextICluster = getNextICluster();
 
     const auto preloadNextICluster = [&]
     {
@@ -572,11 +591,11 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
         yiPreloader.startLoad(&y[nextICluster * ClusterConfig::iSize], iPipeline);
         ziPreloader.startLoad(&z[nextICluster * ClusterConfig::iSize], iPipeline);
         hiPreloader.startLoad(&h[nextICluster * ClusterConfig::iSize], iPipeline);
+        const unsigned nextIClusterNeighborsCount = Compress ? compressedNcMax : imin(ncClustered[nextICluster], NcMax);
+        nidxPreloader.startLoad(&nidxClustered[nextICluster * compressedNcMax], iPipeline, nextIClusterNeighborsCount);
         iPipeline.producer_commit();
     };
 
-    if (warp.thread_rank() == 0) nextICluster = atomicAdd(&targetCounterGlob, 1);
-    nextICluster = warp.shfl(nextICluster, 0);
     if (nextICluster < numIClusters) preloadNextICluster();
 #endif
 
@@ -585,14 +604,13 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
 #if CSTONE_USE_CUDA_PIPELINE
         iCluster = nextICluster;
 #else
-        unsigned iCluster;
-        if (warp.thread_rank() == 0) iCluster = atomicAdd(&targetCounterGlob, 1);
-        iCluster = warp.shfl(iCluster, 0);
+        iCluster = getNextICluster();
 #endif
 
         if (iCluster >= numIClusters) return;
 
-        const unsigned i = iCluster * ClusterConfig::iSize + block.thread_index().x;
+        const unsigned i                      = iCluster * ClusterConfig::iSize + block.thread_index().x;
+        const unsigned iClusterNeighborsCount = Compress ? compressedNcMax : imin(ncClustered[iCluster], NcMax);
 
 #if CSTONE_USE_CUDA_PIPELINE
         iPipeline.consumer_wait();
@@ -600,14 +618,19 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
         const Vec3<Tc> iPos = {xiPreloader[block.thread_index().x], yiPreloader[block.thread_index().x],
                                ziPreloader[block.thread_index().x]};
         const Th hi         = hiPreloader[block.thread_index().x];
+#pragma unroll
+        for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
+            nidx[nb] = nidxPreloader[nb];
 
-        if (warp.thread_rank() == 0) nextICluster = atomicAdd(&targetCounterGlob, 1);
-        nextICluster = warp.shfl(nextICluster, 0);
+        nextICluster = getNextICluster();
         iPipeline.consumer_release();
         if (nextICluster < numIClusters) preloadNextICluster();
 #else
         const Vec3<Tc> iPos = {x[i], y[i], z[i]};
         const Th hi         = h[i];
+#pragma unroll
+        for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
+            nidx[nb] = nidxClustered[iCluster * compressedNcMax + nb];
 #endif
 
         const auto posDiff = [&](const Vec3<Tc>& jPos)
@@ -658,6 +681,7 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
         constexpr unsigned jClustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize / ClusterConfig::jSize;
         constexpr unsigned overlappingJClusters =
             ClusterConfig::iSize <= ClusterConfig::jSize ? 1 : ClusterConfig::iSize / ClusterConfig::jSize;
+#pragma unroll
         for (unsigned overlapping = 0; overlapping < overlappingJClusters; overlapping += jClustersPerWarp)
         {
             const unsigned o = overlapping + block.thread_index().y / ClusterConfig::jSize;
@@ -668,11 +692,10 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
 
         if constexpr (Compress)
         {
-            constexpr unsigned long maxCompressedNeighborsSize = NcMax / ClusterConfig::expectedCompressionRate;
             unsigned iClusterNeighborsCount;
-            warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>(
-                (const char*)&nidxClustered[iCluster * maxCompressedNeighborsSize], nidx, iClusterNeighborsCount);
-            for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, NcMax); jc += jClustersPerWarp)
+            warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>((char*)nidx, nidx,
+                                                                                iClusterNeighborsCount);
+            for (unsigned jc = 0; jc < iClusterNeighborsCount; jc += jClustersPerWarp)
             {
                 const unsigned jcc      = jc + block.thread_index().y / ClusterConfig::jSize;
                 const unsigned jCluster = jcc < iClusterNeighborsCount ? nidx[jcc] : ~0u;
@@ -682,11 +705,10 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
         else
         {
             const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
-            for (unsigned jc = 0; jc < imin(iClusterNeighborsCount, NcMax); jc += jClustersPerWarp)
+            for (unsigned jc = 0; jc < iClusterNeighborsCount; jc += jClustersPerWarp)
             {
-                const unsigned jcc = jc + block.thread_index().y / ClusterConfig::jSize;
-                const unsigned jCluster =
-                    jcc < iClusterNeighborsCount ? nidxClustered[(unsigned long)iCluster * NcMax + jcc] : ~0u;
+                const unsigned jcc      = jc + block.thread_index().y / ClusterConfig::jSize;
+                const unsigned jCluster = jcc < iClusterNeighborsCount ? nidx[jcc] : ~0u;
                 computeClusterInteraction(jCluster, false);
             }
         }
