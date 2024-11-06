@@ -24,7 +24,7 @@
  */
 
 /*! @file
- * @brief  SPH density kernel with various neighbor search strategies
+ * @brief  Lennard-Jones kernel with various neighbor search strategies
  *
  * @author Felix Thaler <thaler@cscs.ch>
  */

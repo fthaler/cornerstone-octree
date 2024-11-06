@@ -180,7 +180,7 @@ __device__ inline void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
     }
 }
 
-__device__ inline bool includeNbSymmetric(unsigned i, unsigned j)
+constexpr inline bool includeNbSymmetric(unsigned i, unsigned j)
 {
     const bool s = i % 2 == j % 2;
     return i < j ? s : !s;
