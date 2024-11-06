@@ -30,10 +30,12 @@
  */
 
 #include <iostream>
+#include <map>
 
 #include <cuda/annotated_ptr>
 
 #include <thrust/device_vector.h>
+#include <thrust/universal_vector.h>
 
 #include "cstone/cuda/cuda_utils.cuh"
 #include "cstone/primitives/math.hpp"
@@ -662,6 +664,252 @@ void computeLjBatched(
                                                 rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
 }
 
+namespace gromacs_like
+{
+
+constexpr unsigned clusterSize               = 8;
+constexpr unsigned clusterPairSplit          = GpuConfig::warpSize == 64 ? 1 : 2;
+constexpr unsigned numClusterPerSupercluster = 8;
+constexpr unsigned jGroupSize                = 32 / numClusterPerSupercluster;
+constexpr unsigned superClusterSize          = numClusterPerSupercluster * clusterSize;
+
+struct Sci
+{
+    unsigned sci, cjPackedBegin, cjPackedEnd;
+};
+
+struct ImEi
+{
+    unsigned imask = 0u;
+};
+
+struct CjPacked
+{
+    unsigned cj[jGroupSize];
+    ImEi imei[clusterPairSplit];
+};
+
+template<class Tc, class T, class KeyType>
+std::tuple<thrust::universal_vector<Sci>, thrust::universal_vector<CjPacked>>
+buildNeighborhoodClustered(const std::size_t firstBody,
+                           const std::size_t lastBody,
+                           const Tc* x,
+                           const Tc* y,
+                           const Tc* z,
+                           const T* h,
+                           OctreeNsView<Tc, KeyType> tree,
+                           const Box<Tc>& box,
+                           unsigned ngmax)
+{
+    const std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
+
+    thrust::universal_vector<unsigned> neighbors(ncmax * lastBody);
+    thrust::universal_vector<unsigned> neighborsCount(lastBody);
+
+    buildNeighborhoodNaiveKernel<<<iceil(lastBody, 128), 128>>>(x, y, z, h, firstBody, lastBody, box, tree, ngmax,
+                                                                rawPtr(neighbors), rawPtr(neighborsCount));
+    checkGpuErrors(cudaDeviceSynchronize());
+
+    thrust::universal_vector<Sci> sciSorted;
+    thrust::universal_vector<CjPacked> cjPacked;
+
+    for (unsigned sci = 0; sci < iceil(lastBody, superClusterSize); ++sci)
+    {
+        std::map<unsigned, std::array<unsigned, clusterPairSplit>> superClusterNeighbors;
+
+        for (unsigned c = 0; c < numClusterPerSupercluster; ++c)
+        {
+            for (unsigned i = sci * superClusterSize + c * clusterSize;
+                 i < sci * superClusterSize + (c + 1) * clusterSize; ++i)
+            {
+                const unsigned ci  = i / clusterSize;
+                const unsigned nci = neighborsCount[i];
+                for (unsigned nb = 0; nb < nci; ++nb)
+                {
+                    const unsigned j   = neighbors[i + nb * lastBody];
+                    const unsigned cj  = j / clusterSize;
+                    const unsigned scj = j / superClusterSize;
+                    if (cstone::detail::includeNbSymmetric(sci, scj) || (sci == scj && ci <= cj))
+                    {
+                        auto [it, _] = superClusterNeighbors.emplace(cj, std::array<unsigned, clusterPairSplit>({0}));
+                        const unsigned split = (j - cj * clusterSize) / (clusterSize / clusterPairSplit);
+                        it->second.at(split) |= 1 << c;
+                    }
+                }
+            }
+        }
+
+        const unsigned cjPackedBegin = cjPacked.size();
+        CjPacked next                = {0};
+        unsigned groupIndex          = 0;
+        for (auto [cj, imask] : superClusterNeighbors)
+        {
+            next.cj[groupIndex] = cj;
+            for (unsigned split = 0; split < clusterPairSplit; ++split)
+                next.imei[split].imask |= imask[split] << (groupIndex * numClusterPerSupercluster);
+            groupIndex = (groupIndex + 1) % jGroupSize;
+            if (groupIndex == 0)
+            {
+                cjPacked.push_back(next);
+                next = {0};
+            }
+        }
+        if (groupIndex != 0) cjPacked.push_back(next);
+        const unsigned cjPackedEnd = cjPacked.size();
+        sciSorted.push_back({sci, cjPackedBegin, cjPackedEnd});
+    }
+
+    return {sciSorted, cjPacked};
+}
+
+template<class Tc, class T>
+__global__ __launch_bounds__(clusterSize* clusterSize,
+                             16) void computeLjClusteredKernel(cstone::LocalIndex firstBody,
+                                                               cstone::LocalIndex lastBody,
+                                                               const Tc* __restrict__ x,
+                                                               const Tc* __restrict__ y,
+                                                               const Tc* __restrict__ z,
+                                                               const T* __restrict__ h,
+                                                               const T lj1,
+                                                               const T lj2,
+                                                               const Box<Tc> box,
+                                                               T* __restrict__ afx,
+                                                               T* __restrict__ afy,
+                                                               T* __restrict__ afz,
+                                                               const Sci* __restrict__ sciSorted,
+                                                               const CjPacked* __restrict__ cjPacked)
+{
+    namespace cg = cooperative_groups;
+
+    constexpr unsigned superClusterInteractionMask = (1u << numClusterPerSupercluster) - 1u;
+
+    const auto block = cg::this_thread_block();
+    const auto warp  = cg::tiled_partition<GpuConfig::warpSize>(block);
+
+    const Sci nbSci               = sciSorted[block.group_index().x];
+    const unsigned sci            = nbSci.sci;
+    const unsigned cijPackedBegin = nbSci.cjPackedBegin;
+    const unsigned cijPackedEnd   = nbSci.cjPackedEnd;
+    T* const af[3]                = {afx, afy, afz};
+
+    using T3  = std::conditional_t<std::is_same_v<T, double>, double3, float3>;
+    using TC3 = std::conditional_t<std::is_same_v<Tc, double>, double3, float3>;
+
+    T3 fciBuf[numClusterPerSupercluster];
+    for (unsigned i = 0; i < numClusterPerSupercluster; ++i)
+        fciBuf[i] = {T(0), T(0), T(0)};
+
+    for (unsigned jPacked = cijPackedBegin; jPacked < cijPackedEnd; ++jPacked)
+    {
+        const unsigned imask = cjPacked[jPacked].imei[warp.meta_group_rank()].imask;
+        if (imask)
+        {
+            for (unsigned jm = 0; jm < jGroupSize; ++jm)
+            {
+                if (imask & (superClusterInteractionMask << (jm * numClusterPerSupercluster)))
+                {
+                    unsigned maskJi   = 1u << (jm * numClusterPerSupercluster);
+                    const unsigned cj = cjPacked[jPacked].cj[jm];
+                    const unsigned aj = cj * clusterSize + block.thread_index().y;
+                    const TC3 xj      = {x[aj], y[aj], z[aj]};
+                    T3 fcjBuf         = {T(0), T(0), T(0)};
+
+#pragma unroll
+                    for (unsigned i = 0; i < numClusterPerSupercluster; ++i)
+                    {
+                        if (imask & maskJi)
+                        {
+                            const unsigned ci = sci * numClusterPerSupercluster + i;
+                            const unsigned ai = ci * clusterSize + block.thread_index().x;
+                            if (ai < lastBody)
+                            {
+                                const TC3 xi = {x[ai], y[ai], z[ai]};
+                                const T hi   = h[ai];
+                                T3 rv        = {T(xi.x - xj.x), T(xi.y - xj.y), T(xi.z - xj.z)};
+                                applyPBC(box, T(2) * hi, rv.x, rv.y, rv.z);
+                                const T r2 = rv.x * rv.x + rv.y * rv.y + rv.z * rv.z;
+                                if (aj < lastBody && (ci != cj || ai < aj) && r2 < 4 * hi * hi)
+                                {
+                                    const T rinv    = rsqrt(r2);
+                                    const T r2inv   = rinv * rinv;
+                                    const T r6inv   = r2inv * r2inv * r2inv;
+                                    const T forcelj = r6inv * (lj1 * r6inv - lj2);
+                                    const T fpair   = forcelj * r2inv;
+                                    const T3 fij    = {rv.x * fpair, rv.y * fpair, rv.z * fpair};
+                                    fcjBuf.x -= fij.x;
+                                    fcjBuf.y -= fij.y;
+                                    fcjBuf.z -= fij.z;
+                                    fciBuf[i].x += fij.x;
+                                    fciBuf[i].y += fij.y;
+                                    fciBuf[i].z += fij.z;
+                                }
+                            }
+                        }
+                        maskJi += maskJi;
+                    }
+
+                    fcjBuf.x += warp.shfl_down(fcjBuf.x, 1);
+                    fcjBuf.y += warp.shfl_up(fcjBuf.y, 1);
+                    fcjBuf.z += warp.shfl_down(fcjBuf.z, 1);
+                    if (block.thread_index().x & 1) fcjBuf.x = fcjBuf.y;
+                    fcjBuf.x += warp.shfl_down(fcjBuf.x, 2);
+                    fcjBuf.z += warp.shfl_up(fcjBuf.z, 2);
+                    if (block.thread_index().x & 2) fcjBuf.x = fcjBuf.z;
+                    fcjBuf.x += warp.shfl_down(fcjBuf.x, 4);
+                    if (block.thread_index().x < 3 && aj < lastBody)
+                        atomicAdd(af[block.thread_index().x] + aj, fcjBuf.x);
+                }
+            }
+        }
+    }
+
+    for (unsigned i = 0; i < numClusterPerSupercluster; ++i)
+    {
+        const unsigned ai = (sci * numClusterPerSupercluster + i) * clusterSize + block.thread_index().x;
+        fciBuf[i].x += warp.shfl_down(fciBuf[i].x, clusterSize);
+        fciBuf[i].y += warp.shfl_up(fciBuf[i].y, clusterSize);
+        fciBuf[i].z += warp.shfl_down(fciBuf[i].z, clusterSize);
+        if (block.thread_index().y & 1) fciBuf[i].x = fciBuf[i].y;
+        fciBuf[i].x += warp.shfl_down(fciBuf[i].x, 2 * clusterSize);
+        fciBuf[i].z += warp.shfl_up(fciBuf[i].z, 2 * clusterSize);
+        if (block.thread_index().y & 2) fciBuf[i].x = fciBuf[i].z;
+        if ((block.thread_index().y & 3) < 3 && ai < lastBody)
+            atomicAdd(af[block.thread_index().y & 3] + ai, fciBuf[i].x);
+    }
+}
+
+template<class Tc, class T>
+void computeLjClustered(
+    const std::size_t firstBody,
+    const std::size_t lastBody,
+    const Tc* __restrict__ x,
+    const Tc* __restrict__ y,
+    const Tc* __restrict__ z,
+    const T* __restrict__ h,
+    const T lj1,
+    const T lj2,
+    const Box<Tc>& box,
+    const unsigned ngmax,
+    T* __restrict__ afx,
+    T* __restrict__ afy,
+    T* __restrict__ afz,
+    const std::tuple<thrust::universal_vector<Sci>, thrust::universal_vector<CjPacked>>& neighborhood)
+{
+    auto& [sciSorted, cjPacked] = neighborhood;
+
+    checkGpuErrors(cudaMemsetAsync(afx, 0, sizeof(T) * lastBody));
+    checkGpuErrors(cudaMemsetAsync(afy, 0, sizeof(T) * lastBody));
+    checkGpuErrors(cudaMemsetAsync(afz, 0, sizeof(T) * lastBody));
+
+    const dim3 blockSize     = {clusterSize, clusterSize, 1};
+    const unsigned numBlocks = sciSorted.size();
+    computeLjClusteredKernel<<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box, afx, afy, afz,
+                                                       rawPtr(sciSorted), rawPtr(cjPacked));
+    checkGpuErrors(cudaGetLastError());
+}
+
+} // namespace gromacs_like
+
 template<bool Compress, bool Symmetric, class Tc, class T, class KeyType>
 std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
 buildNeighborhoodClustered(std::size_t firstBody,
@@ -899,6 +1147,9 @@ int main()
     benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodNaive<Tc, T, KeyType>, computeLjNaive<Tc, T>);
     std::cout << "--- BATCHED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodBatched<Tc, T, KeyType>, computeLjBatched<Tc, T>);
+    std::cout << "--- GROMACS CLUSTERED TWO-STAGE ---" << std::endl;
+    benchmarkGPU<Tc, T, StrongKeyType>(gromacs_like::buildNeighborhoodClustered<Tc, T, KeyType>,
+                                       gromacs_like::computeLjClustered<Tc, T>);
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, false, Tc, T, KeyType>,
                                        computeLjClustered<false, false, Tc, T>);
