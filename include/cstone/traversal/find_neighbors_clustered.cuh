@@ -59,40 +59,40 @@ namespace detail
 {
 
 template<std::size_t I, class... Ts>
-__device__ inline auto& tuple_get_or_scalar(std::tuple<Ts...>& t)
+__device__ inline auto& tupleGetOrScalar(std::tuple<Ts...>& t)
 {
     return std::get<I>(t);
 }
 
 template<std::size_t I, class... Ts>
-__device__ inline auto const& tuple_get_or_scalar(std::tuple<Ts...> const& t)
+__device__ inline auto const& tupleGetOrScalar(std::tuple<Ts...> const& t)
 {
     return std::get<I>(t);
 }
 
 template<std::size_t I, class T>
-__device__ inline T const& tuple_get_or_scalar(T const& t)
+__device__ inline T const& tupleGetOrScalar(T const& t)
 {
     return t;
 }
 
 template<std::size_t I, class F, class... Tuples>
-__device__ inline void tuple_foreach_element(F&& f, Tuples&&... tuples)
+__device__ inline void tupleForeachElement(F&& f, Tuples&&... tuples)
 {
-    f(tuple_get_or_scalar<I>(std::forward<Tuples>(tuples))...);
+    f(tupleGetOrScalar<I>(std::forward<Tuples>(tuples))...);
 }
 
 template<std::size_t... Is, class F, class... Tuples>
-__device__ inline void tuple_foreach_impl(std::index_sequence<Is...>, F&& f, Tuples&&... tuples)
+__device__ inline void tupleForeachImpl(std::index_sequence<Is...>, F&& f, Tuples&&... tuples)
 {
-    (..., (tuple_foreach_element<Is>(std::forward<F>(f), std::forward<Tuples>(tuples)...)));
+    (..., (tupleForeachElement<Is>(std::forward<F>(f), std::forward<Tuples>(tuples)...)));
 }
 
 template<class F, class Tuple, class... Tuples>
-__device__ inline void tuple_foreach(F&& f, Tuple&& tuple, Tuples&&... tuples)
+__device__ inline void tupleForeach(F&& f, Tuple&& tuple, Tuples&&... tuples)
 {
-    tuple_foreach_impl(std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>(), std::forward<F>(f),
-                       std::forward<Tuple>(tuple), std::forward<Tuples>(tuples)...);
+    tupleForeachImpl(std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>(), std::forward<F>(f),
+                     std::forward<Tuple>(tuple), std::forward<Tuples>(tuples)...);
 }
 
 template<int Symmetric, class... T>
@@ -104,10 +104,10 @@ __device__ inline void storeTupleJSum(std::tuple<T...>& tuple, std::tuple<T*...>
 
 #pragma unroll
     for (unsigned offset = ClusterConfig::iSize / 2; offset >= 1; offset /= 2)
-        tuple_foreach([&](auto& t) { t += warp.shfl_down(t, offset); }, tuple);
+        tupleForeach([&](auto& t) { t += warp.shfl_down(t, offset); }, tuple);
 
     if ((block.thread_index().x == 0) & store)
-        detail::tuple_foreach(
+        detail::tupleForeach(
             [](auto* ptr, auto const& t)
             {
                 if (t != 0) atomicAdd(ptr, Symmetric * t);
@@ -124,10 +124,10 @@ __device__ inline void storeTupleISum(std::tuple<T...>& tuple, std::tuple<T*...>
 
 #pragma unroll
     for (unsigned offset = GpuConfig::warpSize / 2; offset >= ClusterConfig::iSize; offset /= 2)
-        detail::tuple_foreach([&](auto& t) { t += warp.shfl_down(t, offset); }, tuple);
+        detail::tupleForeach([&](auto& t) { t += warp.shfl_down(t, offset); }, tuple);
 
     if ((block.thread_index().y == 0) & store)
-        detail::tuple_foreach(
+        detail::tupleForeach(
             [](auto* ptr, auto const& t)
             {
                 if constexpr (Symmetric)
@@ -685,25 +685,25 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
         };
 
         std::tuple<Tr...> sums;
-        detail::tuple_foreach([](auto& sum) { sum = 0; }, sums);
+        detail::tupleForeach([](auto& sum) { sum = 0; }, sums);
         const auto computeClusterInteraction = [&](const unsigned jCluster, const bool self)
         {
             const unsigned j = jCluster * ClusterConfig::jSize + block.thread_index().y % ClusterConfig::jSize;
             std::tuple<Tr...> contrib;
-            detail::tuple_foreach([](auto& contrib) { contrib = 0; }, contrib);
+            detail::tupleForeach([](auto& contrib) { contrib = 0; }, contrib);
             if (i < lastBody & j < lastBody & (!Symmetric | !self | (i <= j)))
             {
                 const Vec3<Tc> jPos{x[j], y[j], z[j]};
                 const Vec3<Tc> ijPosDiff = posDiff(jPos);
                 const Th d2              = norm2(ijPosDiff);
                 if (d2 < 4 * hi * hi)
-                    detail::tuple_foreach([](auto& lhs, const auto& rhs) { lhs = rhs; }, contrib,
-                                          contribution(i, iPos, hi, j, jPos, ijPosDiff, d2));
+                    detail::tupleForeach([](auto& lhs, const auto& rhs) { lhs = rhs; }, contrib,
+                                         contribution(i, iPos, hi, j, jPos, ijPosDiff, d2));
             }
-            detail::tuple_foreach([](auto& sum, auto const& contrib) { sum += contrib; }, sums, contrib);
+            detail::tupleForeach([](auto& sum, auto const& contrib) { sum += contrib; }, sums, contrib);
             if constexpr (Symmetric)
             {
-                if (i == j) detail::tuple_foreach([&](auto& c) { c = 0; }, contrib);
+                if (i == j) detail::tupleForeach([&](auto& c) { c = 0; }, contrib);
 
                 detail::storeTupleJSum<Symmetric>(contrib, std::make_tuple(&results[j]...), j < lastBody);
             }
