@@ -452,7 +452,7 @@ __global__ void __maxnreg__(40) computeLjNaiveKernel(const Tc* __restrict__ x,
         applyPBC(box, T(2) * hi, xx, yy, zz);
         const T rsq = xx * xx + yy * yy + zz * zz;
 
-        const T r2inv   = 1.0 / rsq;
+        const T r2inv   = T(1) / rsq;
         const T r6inv   = r2inv * r2inv * r2inv;
         const T forcelj = r6inv * (lj1 * r6inv - lj2);
         const T fpair   = forcelj * r2inv;
@@ -621,7 +621,7 @@ __global__ __maxnreg__(40) void computeLjBatchedKernel(cstone::LocalIndex firstB
                     applyPBC(box, T(2) * hi, xx, yy, zz);
                     const T rsq = xx * xx + yy * yy + zz * zz;
 
-                    const T r2inv   = 1.0 / rsq;
+                    const T r2inv   = T(1) / rsq;
                     const T r6inv   = r2inv * r2inv * r2inv;
                     const T forcelj = r6inv * (lj1 * r6inv - lj2);
                     const T fpair   = forcelj * r2inv;
