@@ -95,6 +95,50 @@ __device__ inline void tuple_foreach(F&& f, Tuple&& tuple, Tuples&&... tuples)
                        std::forward<Tuple>(tuple), std::forward<Tuples>(tuples)...);
 }
 
+template<int Symmetric, class... T>
+__device__ inline void storeTupleJSum(std::tuple<T...>& tuple, std::tuple<T*...> const& ptrs, bool store)
+{
+    const auto block = cooperative_groups::this_thread_block();
+    assert(block.dim_threads().x == ClusterConfig::iSize);
+    const auto warp = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
+
+#pragma unroll
+    for (unsigned offset = ClusterConfig::iSize / 2; offset >= 1; offset /= 2)
+        tuple_foreach([&](auto& t) { t += warp.shfl_down(t, offset); }, tuple);
+
+    if ((block.thread_index().x == 0) & store)
+        detail::tuple_foreach(
+            [](auto* ptr, auto const& t)
+            {
+                if (t != 0) atomicAdd(ptr, Symmetric * t);
+            },
+            ptrs, tuple);
+}
+
+template<bool Symmetric, class... T>
+__device__ inline void storeTupleISum(std::tuple<T...>& tuple, std::tuple<T*...> const& ptrs, bool store)
+{
+    const auto block = cooperative_groups::this_thread_block();
+    assert(block.dim_threads().x == ClusterConfig::iSize);
+    const auto warp = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
+
+#pragma unroll
+    for (unsigned offset = GpuConfig::warpSize / 2; offset >= ClusterConfig::iSize; offset /= 2)
+        detail::tuple_foreach([&](auto& t) { t += warp.shfl_down(t, offset); }, tuple);
+
+    if ((block.thread_index().y == 0) & store)
+        detail::tuple_foreach(
+            [](auto* ptr, auto const& t)
+            {
+                if constexpr (Symmetric)
+                {
+                    if (t != 0) atomicAdd(ptr, t);
+                }
+                else { *ptr = t; }
+            },
+            ptrs, tuple);
+}
+
 template<unsigned warpsPerBlock, unsigned NcMax, bool Compress>
 __device__ inline void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
                                                     const unsigned iClusterNc,
@@ -374,9 +418,9 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 #if CSTONE_USE_CUDA_PIPELINE
                         const Th d2 = distSq(jPos[jc]);
 #else
-                        const unsigned j    = imin(jCluster * ClusterConfig::jSize + jc, lastBody - 1);
+                        const unsigned j = imin(jCluster * ClusterConfig::jSize + jc, lastBody - 1);
                         const Vec3<Tc> jPos = {x[j], y[j], z[j]};
-                        const Th d2         = distSq(jPos);
+                        const Th d2 = distSq(jPos);
 #endif
                         isNeighbor |= d2 < 4 * hi * hi;
                     }
@@ -622,7 +666,7 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
         if (nextICluster < numIClusters) preloadNextICluster();
 #else
         const Vec3<Tc> iPos = {x[i], y[i], z[i]};
-        const Th hi         = h[i];
+        const Th hi = h[i];
 #pragma unroll
         for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
             nidx[nb] = nidxClustered[iCluster * compressedNcMax + nb];
@@ -659,17 +703,9 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
             detail::tuple_foreach([](auto& sum, auto const& contrib) { sum += contrib; }, sums, contrib);
             if constexpr (Symmetric)
             {
-                if (i == j) detail::tuple_foreach([&](auto& contrib) { contrib = 0; }, contrib);
-#pragma unroll
-                for (unsigned offset = ClusterConfig::iSize / 2; offset >= 1; offset /= 2)
-                    detail::tuple_foreach([&](auto& contrib) { contrib += warp.shfl_down(contrib, offset); }, contrib);
-                if (block.thread_index().x == 0 & j < lastBody)
-                    detail::tuple_foreach(
-                        [j](auto& res, auto const& sum)
-                        {
-                            if (sum != 0) atomicAdd(&res[j], Symmetric * sum);
-                        },
-                        std::make_tuple(results...), contrib);
+                if (i == j) detail::tuple_foreach([&](auto& c) { c = 0; }, contrib);
+
+                detail::storeTupleJSum<Symmetric>(contrib, std::make_tuple(&results[j]...), j < lastBody);
             }
         };
 
@@ -708,21 +744,7 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
             }
         }
 
-#pragma unroll
-        for (unsigned offset = GpuConfig::warpSize / 2; offset >= ClusterConfig::iSize; offset /= 2)
-            detail::tuple_foreach([&](auto& sum) { sum += warp.shfl_down(sum, offset); }, sums);
-
-        if (block.thread_index().y == 0 & i < lastBody)
-            detail::tuple_foreach(
-                [i](auto& res, auto const& sum)
-                {
-                    if constexpr (Symmetric)
-                    {
-                        if (sum != 0) atomicAdd(&res[i], sum);
-                    }
-                    else { res[i] = sum; }
-                },
-                std::make_tuple(results...), sums);
+        detail::storeTupleISum<Symmetric>(sums, std::make_tuple(&results[i]...), i < lastBody);
     }
 }
 
