@@ -796,7 +796,7 @@ __global__ __launch_bounds__(clusterSize* clusterSize,
     using TC3 = std::conditional_t<std::is_same_v<Tc, double>, double3, float3>;
     using TC4 = std::conditional_t<std::is_same_v<T, double>, double4, float4>;
 
-    __shared__ TC4 xqib[numClusterPerSupercluster * clusterSize * sizeof(TC4)];
+    extern __shared__ TC4 xqib[];
 
     constexpr bool loadUsingAllXYThreads = clusterSize == numClusterPerSupercluster;
     if (loadUsingAllXYThreads || block.thread_index().y < numClusterPerSupercluster)
@@ -913,11 +913,12 @@ void computeLjClustered(
     checkGpuErrors(cudaMemsetAsync(afy, 0, sizeof(T) * lastBody));
     checkGpuErrors(cudaMemsetAsync(afz, 0, sizeof(T) * lastBody));
 
-    const dim3 blockSize     = {clusterSize, clusterSize, 1};
-    const unsigned numBlocks = sciSorted.size();
+    const dim3 blockSize         = {clusterSize, clusterSize, 1};
+    const unsigned numBlocks     = sciSorted.size();
+    const unsigned sharedMemSize = numClusterPerSupercluster * clusterSize * sizeof(Tc) * 4;
     cudaFuncSetCacheConfig(computeLjClusteredKernel<Tc, T>, cudaFuncCachePreferEqual);
-    computeLjClusteredKernel<<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box, afx, afy, afz,
-                                                       rawPtr(sciSorted), rawPtr(cjPacked));
+    computeLjClusteredKernel<<<numBlocks, blockSize, sharedMemSize>>>(
+        firstBody, lastBody, x, y, z, h, lj1, lj2, box, afx, afy, afz, rawPtr(sciSorted), rawPtr(cjPacked));
     checkGpuErrors(cudaGetLastError());
 }
 
