@@ -803,7 +803,7 @@ __global__ __launch_bounds__(clusterSize* clusterSize,
     {
         const unsigned ci = sci * numClusterPerSupercluster + block.thread_index().y;
         const unsigned ai = ci * clusterSize + block.thread_index().x;
-        xqib[block.thread_index().y * clusterSize + block.thread_index().x] = {x[ai], y[ai], z[ai], Tc(0)};
+        xqib[block.thread_index().y * clusterSize + block.thread_index().x] = {x[ai], y[ai], z[ai], Tc(h[ai])};
     }
     block.sync();
 
@@ -836,7 +836,7 @@ __global__ __launch_bounds__(clusterSize* clusterSize,
                             if (ai < lastBody)
                             {
                                 const TC4 xi = xqib[i * clusterSize + block.thread_index().x];
-                                const T hi   = h[ai];
+                                const T hi   = xi.w;
                                 T3 rv        = {T(xi.x - xj.x), T(xi.y - xj.y), T(xi.z - xj.z)};
                                 applyPBC(box, T(2) * hi, rv.x, rv.y, rv.z);
                                 const T r2 = rv.x * rv.x + rv.y * rv.y + rv.z * rv.z;
