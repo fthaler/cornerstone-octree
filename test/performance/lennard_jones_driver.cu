@@ -794,6 +794,18 @@ __global__ __launch_bounds__(clusterSize* clusterSize,
 
     using T3  = std::conditional_t<std::is_same_v<T, double>, double3, float3>;
     using TC3 = std::conditional_t<std::is_same_v<Tc, double>, double3, float3>;
+    using TC4 = std::conditional_t<std::is_same_v<T, double>, double4, float4>;
+
+    __shared__ TC4 xqib[numClusterPerSupercluster * clusterSize * sizeof(TC4)];
+
+    constexpr bool loadUsingAllXYThreads = clusterSize == numClusterPerSupercluster;
+    if (loadUsingAllXYThreads || block.thread_index().y < numClusterPerSupercluster)
+    {
+        const unsigned ci = sci * numClusterPerSupercluster + block.thread_index().y;
+        const unsigned ai = ci * clusterSize + block.thread_index().x;
+        xqib[block.thread_index().y * clusterSize + block.thread_index().x] = {x[ai], y[ai], z[ai], Tc(0)};
+    }
+    block.sync();
 
     T3 fciBuf[numClusterPerSupercluster];
     for (unsigned i = 0; i < numClusterPerSupercluster; ++i)
@@ -823,7 +835,7 @@ __global__ __launch_bounds__(clusterSize* clusterSize,
                             const unsigned ai = ci * clusterSize + block.thread_index().x;
                             if (ai < lastBody)
                             {
-                                const TC3 xi = {x[ai], y[ai], z[ai]};
+                                const TC4 xi = xqib[i * clusterSize + block.thread_index().x];
                                 const T hi   = h[ai];
                                 T3 rv        = {T(xi.x - xj.x), T(xi.y - xj.y), T(xi.z - xj.z)};
                                 applyPBC(box, T(2) * hi, rv.x, rv.y, rv.z);
@@ -903,6 +915,7 @@ void computeLjClustered(
 
     const dim3 blockSize     = {clusterSize, clusterSize, 1};
     const unsigned numBlocks = sciSorted.size();
+    cudaFuncSetCacheConfig(computeLjClusteredKernel<Tc, T>, cudaFuncCachePreferEqual);
     computeLjClusteredKernel<<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box, afx, afy, afz,
                                                        rawPtr(sciSorted), rawPtr(cjPacked));
     checkGpuErrors(cudaGetLastError());
