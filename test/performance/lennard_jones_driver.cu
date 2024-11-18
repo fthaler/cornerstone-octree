@@ -758,26 +758,31 @@ buildNeighborhoodClustered(const std::size_t firstBody,
         const unsigned cjPackedEnd = cjPacked.size();
         sciSorted.push_back({sci, cjPackedBegin, cjPackedEnd});
     }
+    // for (auto const& sci : sciSorted)
+    // printf("sci: %d, cjPackedBegin: %d, cjPackedEnd: %d\n", sci.sci, sci.cjPackedBegin, sci.cjPackedEnd);
+    // for (auto const& cj : cjPacked)
+    // printf("[%5d, %5d, %5d, %5d], %08x %08x\n", cj.cj[0], cj.cj[1], cj.cj[2], cj.cj[3], cj.imei[0].imask,
+    // cj.imei[1].imask);
 
     return {sciSorted, cjPacked};
 }
 
 template<class Tc, class T>
-__global__ __launch_bounds__(clusterSize* clusterSize,
-                             16) void computeLjClusteredKernel(cstone::LocalIndex firstBody,
-                                                               cstone::LocalIndex lastBody,
-                                                               const Tc* __restrict__ x,
-                                                               const Tc* __restrict__ y,
-                                                               const Tc* __restrict__ z,
-                                                               const T* __restrict__ h,
-                                                               const T lj1,
-                                                               const T lj2,
-                                                               const Box<Tc> box,
-                                                               T* __restrict__ afx,
-                                                               T* __restrict__ afy,
-                                                               T* __restrict__ afz,
-                                                               const Sci* __restrict__ sciSorted,
-                                                               const CjPacked* __restrict__ cjPacked)
+__global__
+__launch_bounds__(clusterSize* clusterSize) void computeLjClusteredKernel(cstone::LocalIndex firstBody,
+                                                                          cstone::LocalIndex lastBody,
+                                                                          const Tc* __restrict__ x,
+                                                                          const Tc* __restrict__ y,
+                                                                          const Tc* __restrict__ z,
+                                                                          const T* __restrict__ h,
+                                                                          const T lj1,
+                                                                          const T lj2,
+                                                                          const Box<Tc> box,
+                                                                          T* __restrict__ afx,
+                                                                          T* __restrict__ afy,
+                                                                          T* __restrict__ afz,
+                                                                          const Sci* __restrict__ sciSorted,
+                                                                          const CjPacked* __restrict__ cjPacked)
 {
     namespace cg = cooperative_groups;
 
