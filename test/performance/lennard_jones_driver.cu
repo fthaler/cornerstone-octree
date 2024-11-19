@@ -690,15 +690,15 @@ struct Sci
 
 struct Excl
 {
-    unsigned pair[exclSize];
+    std::array<unsigned, exclSize> pair;
 
-    constexpr bool operator==(Excl const& other) const
+    bool operator==(Excl const& other) const { return pair == other.pair; }
+
+    static Excl interactAll()
     {
-        for (unsigned e = 0; e < exclSize; ++e)
-        {
-            if (pair[e] != other.pair[e]) return false;
-        }
-        return true;
+        Excl res;
+        res.pair.fill(0xffffffff);
+        return res;
     }
 };
 
@@ -735,9 +735,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
 
     thrust::universal_vector<Sci> sciSorted;
     thrust::universal_vector<CjPacked> cjPacked;
-    thrust::universal_vector<Excl> excl(1);
-    for (unsigned p = 0; p < exclSize; ++p)
-        excl[0].pair[p] = ~0u;
+    thrust::universal_vector<Excl> excl = {Excl::interactAll()};
 
     using scdata_t = std::tuple<std::array<unsigned, clusterPairSplit>, std::array<Excl, clusterPairSplit>>;
 
