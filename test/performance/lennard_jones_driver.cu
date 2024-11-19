@@ -717,8 +717,6 @@ buildNeighborhoodClustered(const std::size_t firstBody,
                            const Box<Tc>& box,
                            unsigned ngmax)
 {
-    const std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
-
     thrust::universal_vector<unsigned> neighbors(ncmax * lastBody);
     thrust::universal_vector<unsigned> neighborsCount(lastBody);
 
@@ -728,11 +726,15 @@ buildNeighborhoodClustered(const std::size_t firstBody,
 
     thrust::universal_vector<Sci> sciSorted;
     thrust::universal_vector<CjPacked> cjPacked;
-    thrust::universal_vector<Excl> excl;
+    thrust::universal_vector<Excl> excl(1);
+    for (unsigned p = 0; p < exclSize; ++p)
+        excl[0].pair[p] = ~0u;
 
     using scdata_t = std::tuple<std::array<unsigned, clusterPairSplit>, std::array<Excl, clusterPairSplit>>;
 
-    for (unsigned sci = 0; sci < iceil(lastBody, superClusterSize); ++sci)
+    const unsigned numSuperclusters = iceil(lastBody, superClusterSize);
+    const unsigned numClusters      = iceil(lastBody, clusterSize);
+    for (unsigned sci = 0; sci < numSuperclusters; ++sci)
     {
         std::map<unsigned, scdata_t> superClusterNeighbors;
 
@@ -769,8 +771,12 @@ buildNeighborhoodClustered(const std::size_t firstBody,
         CjPacked next                               = {0};
         unsigned groupIndex                         = 0;
         std::array<Excl, clusterPairSplit> nextExcl = {0};
+        bool useExactExcl                           = sci == numSuperclusters - 1;
+        bool useDiagonalExcel                       = false;
         for (auto&& [cj, data] : superClusterNeighbors)
         {
+            if (cj / numClusterPerSupercluster == sci) useDiagonalExcel = true;
+            if (cj == numClusters - 1) useExactExcl = true;
             auto&& [imask, wexcl] = data;
             next.cj[groupIndex]   = cj;
             for (unsigned split = 0; split < clusterPairSplit; ++split)
@@ -782,6 +788,40 @@ buildNeighborhoodClustered(const std::size_t firstBody,
             groupIndex = (groupIndex + 1) % jGroupSize;
             if (groupIndex == 0)
             {
+                if (!useExactExcl)
+                {
+                    if (useDiagonalExcel)
+                    {
+                        nextExcl = {0};
+                        for (unsigned j = 0; j < clusterSize; ++j)
+                        {
+                            for (unsigned i = 0; i < clusterSize; ++i)
+                            {
+                                const unsigned thread = i + (j % (clusterSize / clusterPairSplit)) * clusterSize;
+                                const unsigned split  = j / (clusterSize / clusterPairSplit);
+                                for (unsigned jm = 0; jm < jGroupSize; ++jm)
+                                {
+                                    for (unsigned c = 0; c < numClusterPerSupercluster; ++c)
+                                    {
+                                        const unsigned ci  = sci * numClusterPerSupercluster + c;
+                                        const unsigned cj  = next.cj[jm];
+                                        const unsigned scj = cj / numClusterPerSupercluster;
+                                        nextExcl[split].pair[thread] |= cstone::detail::includeNbSymmetric(sci, scj) ||
+                                                                                (sci == scj && ci < cj) ||
+                                                                                (ci == cj && i < j)
+                                                                            ? 1 << (c + jm * numClusterPerSupercluster)
+                                                                            : 0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (unsigned split = 0; split < clusterPairSplit; ++split)
+                            nextExcl[split] = excl[0];
+                    }
+                }
                 for (unsigned split = 0; split < clusterPairSplit; ++split)
                 {
                     unsigned e = 0;
@@ -793,12 +833,19 @@ buildNeighborhoodClustered(const std::size_t firstBody,
                     if (e == excl.size()) excl.push_back(nextExcl[split]);
                 }
                 cjPacked.push_back(next);
-                next     = {0};
-                nextExcl = {0};
+                next             = {0};
+                nextExcl         = {0};
+                useExactExcl     = sci == numSuperclusters - 1;
+                useDiagonalExcel = false;
             }
         }
         if (groupIndex != 0)
         {
+            if (!useExactExcl && !useDiagonalExcel)
+            {
+                for (unsigned split = 0; split < clusterPairSplit; ++split)
+                    nextExcl[split] = excl[0];
+            }
             for (unsigned split = 0; split < clusterPairSplit; ++split)
             {
                 unsigned e;
