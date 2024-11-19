@@ -754,6 +754,53 @@ clusterNeighborsOfSuperCluster(const thrust::universal_vector<unsigned>& neighbo
     return superClusterNeighbors;
 }
 
+void optimizeExcl(const unsigned lastBody,
+                  const unsigned sci,
+                  const CjPacked& cjPacked,
+                  std::array<Excl, clusterPairSplit>& excl)
+{
+    // Keep exact interaction on last super cluster to avoid OOB accesses
+    const unsigned numSuperclusters = iceil(lastBody, superClusterSize);
+    if (sci == numSuperclusters - 1) return;
+
+    const unsigned numClusters = iceil(lastBody, clusterSize);
+    bool selfInteraction       = false;
+    for (unsigned cj : cjPacked.cj)
+    {
+        // Keep exact interaction on last j-cluster to avoid OOB accesses
+        if (cj == numClusters - 1) return;
+        if (cj / numClusterPerSupercluster == sci) selfInteraction = true;
+    }
+
+    if (!selfInteraction)
+    {
+        // Compute all interactions if j-clusters do not overlap super cluster
+        for (unsigned split = 0; split < clusterPairSplit; ++split)
+            excl[split].pair.fill(0xffffffffu);
+        return;
+    }
+
+    // Use triangular masks (i < j) where j-clusters overlap with super cluster
+    for (unsigned jj = 0; jj < clusterSize; ++jj)
+    {
+        for (unsigned ii = 0; ii < clusterSize; ++ii)
+        {
+            const unsigned thread = ii + (jj % (clusterSize / clusterPairSplit)) * clusterSize;
+            const unsigned split  = jj / (clusterSize / clusterPairSplit);
+            for (unsigned jm = 0; jm < jGroupSize; ++jm)
+            {
+                for (unsigned cii = 0; cii < numClusterPerSupercluster; ++cii)
+                {
+                    const unsigned ci = sci * numClusterPerSupercluster + cii;
+                    const unsigned i  = ci * clusterSize + ii;
+                    const unsigned j  = cjPacked.cj[jm] * clusterSize + jj;
+                    excl[split].pair[thread] |= includeNb(i, j) ? 1 << (cii + jm * numClusterPerSupercluster) : 0;
+                }
+            }
+        }
+    }
+}
+
 template<class Tc, class T, class KeyType>
 std::tuple<thrust::universal_vector<Sci>, thrust::universal_vector<CjPacked>, thrust::universal_vector<Excl>>
 buildNeighborhoodClustered(const std::size_t firstBody,
@@ -784,7 +831,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
     const unsigned numClusters      = iceil(lastBody, clusterSize);
     for (unsigned sci = 0; sci < numSuperclusters; ++sci)
     {
-        auto superClusterNeighbors = clusterNeighborsOfSuperCluster(neighbors, neighborsCount, ngmax, sci);
+        const auto superClusterNeighbors = clusterNeighborsOfSuperCluster(neighbors, neighborsCount, ngmax, sci);
 
         const unsigned cjPackedBegin                = cjPacked.size();
         CjPacked next                               = {0};
@@ -806,37 +853,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
             groupIndex = (groupIndex + 1) % jGroupSize;
             if (groupIndex == 0)
             {
-                if (!useExactExcl)
-                {
-                    if (useDiagonalExcel)
-                    {
-                        nextExcl = {0};
-                        for (unsigned j = 0; j < clusterSize; ++j)
-                        {
-                            for (unsigned i = 0; i < clusterSize; ++i)
-                            {
-                                const unsigned thread = i + (j % (clusterSize / clusterPairSplit)) * clusterSize;
-                                const unsigned split  = j / (clusterSize / clusterPairSplit);
-                                for (unsigned jm = 0; jm < jGroupSize; ++jm)
-                                {
-                                    for (unsigned c = 0; c < numClusterPerSupercluster; ++c)
-                                    {
-                                        const unsigned ci = sci * numClusterPerSupercluster + c;
-                                        nextExcl[split].pair[thread] |=
-                                            includeNb(ci * clusterSize + i, next.cj[jm] * clusterSize + j)
-                                                ? 1 << (c + jm * numClusterPerSupercluster)
-                                                : 0;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        for (unsigned split = 0; split < clusterPairSplit; ++split)
-                            nextExcl[split] = excl[0];
-                    }
-                }
+                optimizeExcl(lastBody, sci, next, nextExcl);
                 for (unsigned split = 0; split < clusterPairSplit; ++split)
                 {
                     unsigned e = 0;
@@ -856,11 +873,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
         }
         if (groupIndex != 0)
         {
-            if (!useExactExcl && !useDiagonalExcel)
-            {
-                for (unsigned split = 0; split < clusterPairSplit; ++split)
-                    nextExcl[split] = excl[0];
-            }
+            optimizeExcl(lastBody, sci, next, nextExcl);
             for (unsigned split = 0; split < clusterPairSplit; ++split)
             {
                 unsigned e;
