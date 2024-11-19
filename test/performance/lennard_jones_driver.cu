@@ -667,6 +667,8 @@ void computeLjBatched(
 namespace gromacs_like
 {
 
+// Constants from GROMACS
+
 constexpr unsigned clusterSize               = 8;
 constexpr unsigned clusterPairSplit          = GpuConfig::warpSize == 64 ? 1 : 2;
 constexpr unsigned numClusterPerSupercluster = 8;
@@ -674,14 +676,7 @@ constexpr unsigned jGroupSize                = 32 / numClusterPerSupercluster;
 constexpr unsigned superClusterSize          = numClusterPerSupercluster * clusterSize;
 constexpr unsigned exclSize                  = clusterSize * clusterSize / clusterPairSplit;
 
-constexpr bool includeNb(unsigned i, unsigned j)
-{
-    const unsigned ci  = i / clusterSize;
-    const unsigned sci = ci / numClusterPerSupercluster;
-    const unsigned cj  = j / clusterSize;
-    const unsigned scj = cj / numClusterPerSupercluster;
-    return cstone::detail::includeNbSymmetric(sci, scj) || (sci == scj && ci < cj) || (ci == cj && i < j);
-}
+// Gromacs-like data structures
 
 struct Sci
 {
@@ -706,6 +701,58 @@ struct CjPacked
     std::array<unsigned, jGroupSize> cj;
     std::array<ImEi, clusterPairSplit> imei;
 };
+
+// Helpers for building the GROMACS-like NB lists
+
+constexpr bool includeNb(unsigned i, unsigned j)
+{
+    const unsigned ci  = i / clusterSize;
+    const unsigned sci = ci / numClusterPerSupercluster;
+    const unsigned cj  = j / clusterSize;
+    const unsigned scj = cj / numClusterPerSupercluster;
+    return cstone::detail::includeNbSymmetric(sci, scj) || (sci == scj && ci < cj) || (ci == cj && i < j);
+}
+
+struct CjData
+{
+    Excl excl;
+    unsigned imask;
+};
+
+std::map<unsigned, std::array<CjData, clusterPairSplit>>
+clusterNeighborsOfSuperCluster(const thrust::universal_vector<unsigned>& neighbors,
+                               const thrust::universal_vector<unsigned>& neighborsCount,
+                               const unsigned ngmax,
+                               const unsigned sci)
+{
+    const unsigned long lastBody        = neighborsCount.size();
+    constexpr unsigned splitClusterSize = clusterSize / clusterPairSplit;
+    std::map<unsigned, std::array<CjData, clusterPairSplit>> superClusterNeighbors;
+    for (unsigned cii = 0; cii < numClusterPerSupercluster; ++cii)
+    {
+        const unsigned ci = sci * numClusterPerSupercluster + cii;
+        for (unsigned ii = 0; ii < clusterSize; ++ii)
+        {
+            const unsigned i   = ci * clusterSize + ii;
+            const unsigned nci = std::min(neighborsCount[i], ngmax);
+            for (unsigned nb = 0; nb < nci; ++nb)
+            {
+                const unsigned j = neighbors[i + nb * lastBody];
+                if (includeNb(i, j))
+                {
+                    const unsigned cj    = j / clusterSize;
+                    const unsigned jj    = j - cj * clusterSize;
+                    auto [it, _]         = superClusterNeighbors.emplace(cj, std::array<CjData, clusterPairSplit>({0}));
+                    const unsigned split = jj / splitClusterSize;
+                    it->second.at(split).imask |= 1 << cii;
+                    const unsigned thread = ii + (jj % splitClusterSize) * clusterSize;
+                    it->second.at(split).excl.pair[thread] |= 1 << cii;
+                }
+            }
+        }
+    }
+    return superClusterNeighbors;
+}
 
 template<class Tc, class T, class KeyType>
 std::tuple<thrust::universal_vector<Sci>, thrust::universal_vector<CjPacked>, thrust::universal_vector<Excl>>
@@ -737,35 +784,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
     const unsigned numClusters      = iceil(lastBody, clusterSize);
     for (unsigned sci = 0; sci < numSuperclusters; ++sci)
     {
-        std::map<unsigned, scdata_t> superClusterNeighbors;
-
-        for (unsigned c = 0; c < numClusterPerSupercluster; ++c)
-        {
-            for (unsigned i = sci * superClusterSize + c * clusterSize;
-                 i < sci * superClusterSize + (c + 1) * clusterSize; ++i)
-            {
-                const unsigned ci  = i / clusterSize;
-                const unsigned nci = std::min(neighborsCount[i], ngmax);
-                for (unsigned nb = 0; nb < nci; ++nb)
-                {
-                    const unsigned j  = neighbors[i + nb * lastBody];
-                    const unsigned cj = j / clusterSize;
-                    if (includeNb(i, j))
-                    {
-                        auto [it, _] =
-                            superClusterNeighbors.emplace(cj, scdata_t{std::array<unsigned, clusterPairSplit>({0}),
-                                                                       std::array<Excl, clusterPairSplit>({0})});
-                        const unsigned split = (j - cj * clusterSize) / (clusterSize / clusterPairSplit);
-                        std::get<0>(it->second).at(split) |= 1 << c;
-
-                        const unsigned exclPairIndex =
-                            (i - ci * clusterSize) +
-                            ((j - cj * clusterSize) % (clusterSize / clusterPairSplit)) * clusterSize;
-                        std::get<1>(it->second).at(split).pair[exclPairIndex] |= 1 << c;
-                    }
-                }
-            }
-        }
+        auto superClusterNeighbors = clusterNeighborsOfSuperCluster(neighbors, neighborsCount, ngmax, sci);
 
         const unsigned cjPackedBegin                = cjPacked.size();
         CjPacked next                               = {0};
@@ -777,13 +796,12 @@ buildNeighborhoodClustered(const std::size_t firstBody,
         {
             if (cj / numClusterPerSupercluster == sci) useDiagonalExcel = true;
             if (cj == numClusters - 1) useExactExcl = true;
-            auto&& [imask, wexcl] = data;
-            next.cj[groupIndex]   = cj;
+            next.cj[groupIndex] = cj;
             for (unsigned split = 0; split < clusterPairSplit; ++split)
             {
-                next.imei[split].imask |= imask[split] << (groupIndex * numClusterPerSupercluster);
+                next.imei[split].imask |= data[split].imask << (groupIndex * numClusterPerSupercluster);
                 for (unsigned e = 0; e < exclSize; ++e)
-                    nextExcl[split].pair[e] |= wexcl[split].pair[e] << (groupIndex * numClusterPerSupercluster);
+                    nextExcl[split].pair[e] |= data[split].excl.pair[e] << (groupIndex * numClusterPerSupercluster);
             }
             groupIndex = (groupIndex + 1) % jGroupSize;
             if (groupIndex == 0)
