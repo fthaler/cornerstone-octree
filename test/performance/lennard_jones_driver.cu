@@ -690,16 +690,9 @@ struct Sci
 
 struct Excl
 {
-    std::array<unsigned, exclSize> pair;
+    std::array<unsigned, exclSize> pair = {0};
 
     bool operator==(Excl const& other) const { return pair == other.pair; }
-
-    static Excl interactAll()
-    {
-        Excl res;
-        res.pair.fill(0xffffffff);
-        return res;
-    }
 };
 
 struct ImEi
@@ -710,8 +703,8 @@ struct ImEi
 
 struct CjPacked
 {
-    unsigned cj[jGroupSize];
-    ImEi imei[clusterPairSplit];
+    std::array<unsigned, jGroupSize> cj;
+    std::array<ImEi, clusterPairSplit> imei;
 };
 
 template<class Tc, class T, class KeyType>
@@ -735,7 +728,8 @@ buildNeighborhoodClustered(const std::size_t firstBody,
 
     thrust::universal_vector<Sci> sciSorted;
     thrust::universal_vector<CjPacked> cjPacked;
-    thrust::universal_vector<Excl> excl = {Excl::interactAll()};
+    thrust::universal_vector<Excl> excl(1);
+    excl.front().pair.fill(0xffffffffu);
 
     using scdata_t = std::tuple<std::array<unsigned, clusterPairSplit>, std::array<Excl, clusterPairSplit>>;
 
@@ -754,9 +748,8 @@ buildNeighborhoodClustered(const std::size_t firstBody,
                 const unsigned nci = std::min(neighborsCount[i], ngmax);
                 for (unsigned nb = 0; nb < nci; ++nb)
                 {
-                    const unsigned j   = neighbors[i + nb * lastBody];
-                    const unsigned cj  = j / clusterSize;
-                    const unsigned scj = j / superClusterSize;
+                    const unsigned j  = neighbors[i + nb * lastBody];
+                    const unsigned cj = j / clusterSize;
                     if (includeNb(i, j))
                     {
                         auto [it, _] =
