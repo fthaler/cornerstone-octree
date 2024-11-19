@@ -674,6 +674,15 @@ constexpr unsigned jGroupSize                = 32 / numClusterPerSupercluster;
 constexpr unsigned superClusterSize          = numClusterPerSupercluster * clusterSize;
 constexpr unsigned exclSize                  = clusterSize * clusterSize / clusterPairSplit;
 
+constexpr bool includeNb(unsigned i, unsigned j)
+{
+    const unsigned ci  = i / clusterSize;
+    const unsigned sci = ci / numClusterPerSupercluster;
+    const unsigned cj  = j / clusterSize;
+    const unsigned scj = cj / numClusterPerSupercluster;
+    return cstone::detail::includeNbSymmetric(sci, scj) || (sci == scj && ci < cj) || (ci == cj && i < j);
+}
+
 struct Sci
 {
     unsigned sci, cjPackedBegin, cjPackedEnd;
@@ -750,7 +759,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
                     const unsigned j   = neighbors[i + nb * lastBody];
                     const unsigned cj  = j / clusterSize;
                     const unsigned scj = j / superClusterSize;
-                    if (cstone::detail::includeNbSymmetric(sci, scj) || (sci == scj && ci < cj) || (ci == cj && i < j))
+                    if (includeNb(i, j))
                     {
                         auto [it, _] =
                             superClusterNeighbors.emplace(cj, scdata_t{std::array<unsigned, clusterPairSplit>({0}),
@@ -803,14 +812,11 @@ buildNeighborhoodClustered(const std::size_t firstBody,
                                 {
                                     for (unsigned c = 0; c < numClusterPerSupercluster; ++c)
                                     {
-                                        const unsigned ci  = sci * numClusterPerSupercluster + c;
-                                        const unsigned cj  = next.cj[jm];
-                                        const unsigned scj = cj / numClusterPerSupercluster;
-                                        nextExcl[split].pair[thread] |= cstone::detail::includeNbSymmetric(sci, scj) ||
-                                                                                (sci == scj && ci < cj) ||
-                                                                                (ci == cj && i < j)
-                                                                            ? 1 << (c + jm * numClusterPerSupercluster)
-                                                                            : 0;
+                                        const unsigned ci = sci * numClusterPerSupercluster + c;
+                                        nextExcl[split].pair[thread] |=
+                                            includeNb(ci * clusterSize + i, next.cj[jm] * clusterSize + j)
+                                                ? 1 << (c + jm * numClusterPerSupercluster)
+                                                : 0;
                                     }
                                 }
                             }
