@@ -986,10 +986,13 @@ __launch_bounds__(clusterSize* clusterSize) void computeLjClusteredKernel(cstone
                                 const Tc4 xi = xqib[i * clusterSize + block.thread_index().x];
                                 const T hi   = xi.w;
                                 T3 rv        = {T(xi.x - xj.x), T(xi.y - xj.y), T(xi.z - xj.z)};
-                                applyPBC(box, T(2) * hi, rv.x, rv.y, rv.z);
-                                const T r2 = rv.x * rv.x + rv.y * rv.y + rv.z * rv.z;
+                                const T r    = 2 * hi;
+                                rv.x -= box.lx() * std::rint(rv.x * box.ilx());
+                                rv.y -= box.ly() * std::rint(rv.y * box.ily());
+                                rv.z -= box.lz() * std::rint(rv.z * box.ilz());
+                                const T r2     = rv.x * rv.x + rv.y * rv.y + rv.z * rv.z;
                                 const T intBit = (wexcl & maskJi) ? T(1) : T(0);
-                                if ((r2 < 4 * hi * hi) * intBit)
+                                if ((r2 < r * r) * intBit)
                                 {
                                     const T rinv    = rsqrt(r2);
                                     const T r2inv   = rinv * rinv;
