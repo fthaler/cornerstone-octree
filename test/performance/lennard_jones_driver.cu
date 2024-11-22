@@ -688,6 +688,7 @@ struct Excl
     std::array<unsigned, exclSize> pair = {0};
 
     bool operator==(Excl const& other) const { return pair == other.pair; }
+    bool operator<(Excl const& other) const { return pair < other.pair; }
 };
 
 struct ImEi
@@ -825,6 +826,20 @@ buildNeighborhoodClustered(const std::size_t firstBody,
     thrust::universal_vector<Excl> excl(1);
     excl.front().pair.fill(0xffffffffu);
 
+    std::map<Excl, unsigned> exclIndexMap;
+    exclIndexMap[excl.front()] = 0;
+
+    const auto exclIndex = [&](Excl const& e)
+    {
+        const auto it = exclIndexMap.find(e);
+        if (it != exclIndexMap.end()) return it->second;
+
+        const unsigned index = excl.size();
+        excl.push_back(e);
+        exclIndexMap[e] = index;
+        return index;
+    };
+
     using scdata_t = std::tuple<std::array<unsigned, clusterPairSplit>, std::array<Excl, clusterPairSplit>>;
 
     const unsigned numSuperclusters = iceil(lastBody, superClusterSize);
@@ -855,15 +870,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
             }
             optimizeExcl(lastBody, sci, next, nextExcl);
             for (unsigned split = 0; split < clusterPairSplit; ++split)
-            {
-                unsigned e = 0;
-                for (; e < excl.size(); ++e)
-                {
-                    if (excl[e] == nextExcl[split]) break;
-                }
-                next.imei[split].exclInd = e;
-                if (e == excl.size()) excl.push_back(nextExcl[split]);
-            }
+                next.imei[split].exclInd = exclIndex(nextExcl[split]);
             cjPacked.push_back(next);
         }
         const unsigned cjPackedEnd = cjPacked.size();
