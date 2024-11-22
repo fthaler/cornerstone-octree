@@ -917,7 +917,7 @@ __launch_bounds__(clusterSize* clusterSize) void computeLjClusteredKernel(cstone
                                                                           const T* __restrict__ h,
                                                                           const T lj1,
                                                                           const T lj2,
-                                                                          const Box<Tc> box,
+                                                                          const __grid_constant__ Box<Tc> box,
                                                                           T* __restrict__ afx,
                                                                           T* __restrict__ afy,
                                                                           T* __restrict__ afz,
