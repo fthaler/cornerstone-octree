@@ -833,51 +833,31 @@ buildNeighborhoodClustered(const std::size_t firstBody,
     {
         const auto superClusterNeighbors = clusterNeighborsOfSuperCluster(neighbors, neighborsCount, ngmax, sci);
 
-        const unsigned cjPackedBegin                = cjPacked.size();
-        CjPacked next                               = {0};
-        unsigned groupIndex                         = 0;
-        std::array<Excl, clusterPairSplit> nextExcl = {0};
-        bool useExactExcl                           = sci == numSuperclusters - 1;
-        bool useDiagonalExcel                       = false;
-        for (auto&& [cj, data] : superClusterNeighbors)
+        const unsigned ncjPacked     = iceil(superClusterNeighbors.size(), jGroupSize);
+        auto it                      = superClusterNeighbors.begin();
+        const unsigned cjPackedBegin = cjPacked.size();
+        for (unsigned n = 0; n < ncjPacked; ++n)
         {
-            if (cj / numClusterPerSupercluster == sci) useDiagonalExcel = true;
-            if (cj == numClusters - 1) useExactExcl = true;
-            next.cj[groupIndex] = cj;
-            for (unsigned split = 0; split < clusterPairSplit; ++split)
+            CjPacked next                               = {0};
+            std::array<Excl, clusterPairSplit> nextExcl = {0};
+            for (unsigned jm = 0; jm < jGroupSize; ++jm, ++it)
             {
-                next.imei[split].imask |= data[split].imask << (groupIndex * numClusterPerSupercluster);
-                for (unsigned e = 0; e < exclSize; ++e)
-                    nextExcl[split].pair[e] |= data[split].excl.pair[e] << (groupIndex * numClusterPerSupercluster);
-            }
-            groupIndex = (groupIndex + 1) % jGroupSize;
-            if (groupIndex == 0)
-            {
-                optimizeExcl(lastBody, sci, next, nextExcl);
+                if (it == superClusterNeighbors.end()) break;
+
+                const auto& [cj, data] = *it;
+                next.cj[jm]            = cj;
                 for (unsigned split = 0; split < clusterPairSplit; ++split)
                 {
-                    unsigned e = 0;
-                    for (; e < excl.size(); ++e)
-                    {
-                        if (excl[e] == nextExcl[split]) break;
-                    }
-                    next.imei[split].exclInd = e;
-                    if (e == excl.size()) excl.push_back(nextExcl[split]);
+                    next.imei[split].imask |= data[split].imask << (jm * numClusterPerSupercluster);
+                    for (unsigned e = 0; e < exclSize; ++e)
+                        nextExcl[split].pair[e] |= data[split].excl.pair[e] << (jm * numClusterPerSupercluster);
                 }
-                cjPacked.push_back(next);
-                next             = {0};
-                nextExcl         = {0};
-                useExactExcl     = sci == numSuperclusters - 1;
-                useDiagonalExcel = false;
             }
-        }
-        if (groupIndex != 0)
-        {
             optimizeExcl(lastBody, sci, next, nextExcl);
             for (unsigned split = 0; split < clusterPairSplit; ++split)
             {
-                unsigned e;
-                for (e = 0; e < excl.size(); ++e)
+                unsigned e = 0;
+                for (; e < excl.size(); ++e)
                 {
                     if (excl[e] == nextExcl[split]) break;
                 }
