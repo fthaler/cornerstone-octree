@@ -115,33 +115,58 @@ __device__ inline void storeTupleJSum(std::tuple<T...>& tuple, std::tuple<T*...>
             ptrs, tuple);
 }
 
-template<int Symmetric, class T, std::enable_if_t<ClusterConfig::iSize == 8, int> = 0>
+template<int Symmetric, class T>
 __device__ inline void storeTupleJSum(std::tuple<T, T, T>& tuple, std::tuple<T*, T*, T*> const& ptrs, bool store)
 {
     const auto block = cooperative_groups::this_thread_block();
     assert(block.dim_threads().x == ClusterConfig::iSize);
     const auto warp = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
 
-    std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 1);
-    std::get<1>(tuple) += warp.shfl_up(std::get<1>(tuple), 1);
-    std::get<2>(tuple) += warp.shfl_down(std::get<2>(tuple), 1);
-
-    if (block.thread_index().x & 1) std::get<0>(tuple) = std::get<1>(tuple);
-
-    std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 2);
-    std::get<2>(tuple) += warp.shfl_up(std::get<2>(tuple), 2);
-
-    if (block.thread_index().x & 2) std::get<0>(tuple) = std::get<2>(tuple);
-
-    std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 4);
-
-    if ((block.thread_index().x < 3) & store)
+    if constexpr (ClusterConfig::iSize == 8)
     {
-        T* ptr = block.thread_index().x == 0   ? std::get<0>(ptrs)
-                 : block.thread_index().x == 1 ? std::get<1>(ptrs)
-                                               : std::get<2>(ptrs);
-        if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 1);
+        std::get<1>(tuple) += warp.shfl_up(std::get<1>(tuple), 1);
+        std::get<2>(tuple) += warp.shfl_down(std::get<2>(tuple), 1);
+
+        if (block.thread_index().x & 1) std::get<0>(tuple) = std::get<1>(tuple);
+
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 2);
+        std::get<2>(tuple) += warp.shfl_up(std::get<2>(tuple), 2);
+
+        if (block.thread_index().x & 2) std::get<0>(tuple) = std::get<2>(tuple);
+
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 4);
+
+        if ((block.thread_index().x < 3) & store)
+        {
+            T* ptr = block.thread_index().x == 0   ? std::get<0>(ptrs)
+                     : block.thread_index().x == 1 ? std::get<1>(ptrs)
+                                                   : std::get<2>(ptrs);
+            if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
+        }
     }
+    else if constexpr (ClusterConfig::iSize == 4)
+    {
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 1);
+        std::get<1>(tuple) += warp.shfl_up(std::get<1>(tuple), 1);
+        std::get<2>(tuple) += warp.shfl_down(std::get<2>(tuple), 1);
+
+        if (block.thread_index().x & 1) std::get<0>(tuple) = std::get<1>(tuple);
+
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 2);
+        std::get<2>(tuple) += warp.shfl_up(std::get<2>(tuple), 2);
+
+        if (block.thread_index().x & 2) std::get<0>(tuple) = std::get<2>(tuple);
+
+        if ((block.thread_index().x < 3) & store)
+        {
+            T* ptr = block.thread_index().x == 0   ? std::get<0>(ptrs)
+                     : block.thread_index().x == 1 ? std::get<1>(ptrs)
+                                                   : std::get<2>(ptrs);
+            if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
+        }
+    }
+    else { storeTupleJSum<Symmetric, T, T, T>(tuple, ptrs, store); }
 }
 
 template<bool Symmetric, class... T>
@@ -168,35 +193,66 @@ __device__ inline void storeTupleISum(std::tuple<T...>& tuple, std::tuple<T*...>
             ptrs, tuple);
 }
 
-template<bool Symmetric, class T, std::enable_if_t<ClusterConfig::jSize == 4 && GpuConfig::warpSize == 32, int> = 0>
+template<bool Symmetric, class T>
 __device__ inline void storeTupleISum(std::tuple<T, T, T>& tuple, std::tuple<T*, T*, T*> const& ptrs, bool store)
 {
     const auto block = cooperative_groups::this_thread_block();
     assert(block.dim_threads().x == ClusterConfig::iSize);
     const auto warp = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
 
-    std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), ClusterConfig::iSize);
-    std::get<1>(tuple) += warp.shfl_up(std::get<1>(tuple), ClusterConfig::iSize);
-    std::get<2>(tuple) += warp.shfl_down(std::get<2>(tuple), ClusterConfig::iSize);
-
-    if (block.thread_index().y & 1) std::get<0>(tuple) = std::get<1>(tuple);
-
-    std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 2 * ClusterConfig::iSize);
-    std::get<2>(tuple) += warp.shfl_up(std::get<2>(tuple), 2 * ClusterConfig::iSize);
-
-    if (block.thread_index().y & 2) std::get<0>(tuple) = std::get<2>(tuple);
-
-    if (((block.thread_index().y & 3) < 3) & store)
+    if constexpr (GpuConfig::warpSize / ClusterConfig::iSize == 4)
     {
-        T* ptr = (block.thread_index().y & 3) == 0   ? std::get<0>(ptrs)
-                 : (block.thread_index().y & 3) == 1 ? std::get<1>(ptrs)
-                                                     : std::get<2>(ptrs);
-        if constexpr (Symmetric)
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), ClusterConfig::iSize);
+        std::get<1>(tuple) += warp.shfl_up(std::get<1>(tuple), ClusterConfig::iSize);
+        std::get<2>(tuple) += warp.shfl_down(std::get<2>(tuple), ClusterConfig::iSize);
+
+        if (block.thread_index().y & 1) std::get<0>(tuple) = std::get<1>(tuple);
+
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 2 * ClusterConfig::iSize);
+        std::get<2>(tuple) += warp.shfl_up(std::get<2>(tuple), 2 * ClusterConfig::iSize);
+
+        if (block.thread_index().y & 2) std::get<0>(tuple) = std::get<2>(tuple);
+
+        if ((block.thread_index().y < 3) & store)
         {
-            if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
+            T* ptr = block.thread_index().y == 0   ? std::get<0>(ptrs)
+                     : block.thread_index().y == 1 ? std::get<1>(ptrs)
+                                                   : std::get<2>(ptrs);
+            if constexpr (Symmetric)
+            {
+                if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
+            }
+            else { *ptr = std::get<0>(tuple); }
         }
-        else { *ptr = std::get<0>(tuple); }
     }
+    else if (GpuConfig::warpSize / ClusterConfig::iSize == 8)
+    {
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), ClusterConfig::iSize);
+        std::get<1>(tuple) += warp.shfl_up(std::get<1>(tuple), ClusterConfig::iSize);
+        std::get<2>(tuple) += warp.shfl_down(std::get<2>(tuple), ClusterConfig::iSize);
+
+        if (block.thread_index().y & 1) std::get<0>(tuple) = std::get<1>(tuple);
+
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 2 * ClusterConfig::iSize);
+        std::get<2>(tuple) += warp.shfl_up(std::get<2>(tuple), 2 * ClusterConfig::iSize);
+
+        if (block.thread_index().y & 2) std::get<0>(tuple) = std::get<2>(tuple);
+
+        std::get<0>(tuple) += warp.shfl_down(std::get<0>(tuple), 4 * ClusterConfig::iSize);
+
+        if ((block.thread_index().y < 3) & store)
+        {
+            T* ptr = block.thread_index().y == 0   ? std::get<0>(ptrs)
+                     : block.thread_index().y == 1 ? std::get<1>(ptrs)
+                                                   : std::get<2>(ptrs);
+            if constexpr (Symmetric)
+            {
+                if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
+            }
+            else { *ptr = std::get<0>(tuple); }
+        }
+    }
+    else { storeTupleISum<Symmetric, T, T, T>(tuple, ptrs, store); }
 }
 
 template<unsigned warpsPerBlock, unsigned NcMax, bool Compress>
