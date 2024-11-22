@@ -851,6 +851,8 @@ buildNeighborhoodClustered(const std::size_t firstBody,
         const unsigned ncjPacked     = iceil(superClusterNeighbors.size(), jGroupSize);
         auto it                      = superClusterNeighbors.begin();
         const unsigned cjPackedBegin = cjPacked.size();
+        const unsigned cjPackendEnd  = cjPackedBegin + ncjPacked;
+        cjPacked.resize(cjPackendEnd);
         for (unsigned n = 0; n < ncjPacked; ++n)
         {
             CjPacked next                               = {0};
@@ -871,7 +873,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
             optimizeExcl(lastBody, sci, next, nextExcl);
             for (unsigned split = 0; split < clusterPairSplit; ++split)
                 next.imei[split].exclInd = exclIndex(nextExcl[split]);
-            cjPacked.push_back(next);
+            cjPacked[cjPackedBegin + n] = next;
         }
         const unsigned cjPackedEnd = cjPacked.size();
         sciSorted.push_back({sci, cjPackedBegin, cjPackedEnd});
