@@ -31,6 +31,8 @@
 
 #include <iostream>
 #include <map>
+#include <mutex>
+#include <shared_mutex>
 
 #include <cuda/annotated_ptr>
 
@@ -821,38 +823,53 @@ buildNeighborhoodClustered(const std::size_t firstBody,
                                                                 rawPtr(neighbors), rawPtr(neighborsCount));
     checkGpuErrors(cudaDeviceSynchronize());
 
-    thrust::universal_vector<Sci> sciSorted;
+    const unsigned numSuperclusters = iceil(lastBody, superClusterSize);
+    const unsigned numClusters      = iceil(lastBody, clusterSize);
+
+    thrust::universal_vector<Sci> sciSorted(numSuperclusters);
     thrust::universal_vector<CjPacked> cjPacked;
+    cjPacked.reserve(thrust::reduce(neighborsCount.begin(), neighborsCount.end(), 0u, std::plus()) / jGroupSize);
     thrust::universal_vector<Excl> excl(1);
     excl.front().pair.fill(0xffffffffu);
 
     std::map<Excl, unsigned> exclIndexMap;
     exclIndexMap[excl.front()] = 0;
 
+    std::shared_mutex exclMutex, cjPackedMutex;
+
     const auto exclIndex = [&](Excl const& e)
     {
-        const auto it = exclIndexMap.find(e);
-        if (it != exclIndexMap.end()) return it->second;
-
-        const unsigned index = excl.size();
-        excl.push_back(e);
-        exclIndexMap[e] = index;
-        return index;
+        {
+            std::shared_lock lock(exclMutex);
+            const auto it = exclIndexMap.find(e);
+            if (it != exclIndexMap.end()) return it->second;
+        }
+        {
+            std::unique_lock lock(exclMutex);
+            const auto it = exclIndexMap.find(e);
+            if (it != exclIndexMap.end()) return it->second;
+            const unsigned index = excl.size();
+            excl.push_back(e);
+            exclIndexMap[e] = index;
+            return index;
+        }
     };
 
-    using scdata_t = std::tuple<std::array<unsigned, clusterPairSplit>, std::array<Excl, clusterPairSplit>>;
-
-    const unsigned numSuperclusters = iceil(lastBody, superClusterSize);
-    const unsigned numClusters      = iceil(lastBody, clusterSize);
+#pragma omp parallel for shared(sciSorted, cjPacked, excl, exclIndexMap, exclMutex, cjPackedMutex, neighbors,          \
+                                    neighborsCount)
     for (unsigned sci = 0; sci < numSuperclusters; ++sci)
     {
         const auto superClusterNeighbors = clusterNeighborsOfSuperCluster(neighbors, neighborsCount, ngmax, sci);
 
-        const unsigned ncjPacked     = iceil(superClusterNeighbors.size(), jGroupSize);
-        auto it                      = superClusterNeighbors.begin();
-        const unsigned cjPackedBegin = cjPacked.size();
-        const unsigned cjPackendEnd  = cjPackedBegin + ncjPacked;
-        cjPacked.resize(cjPackendEnd);
+        const unsigned ncjPacked = iceil(superClusterNeighbors.size(), jGroupSize);
+        auto it                  = superClusterNeighbors.begin();
+        unsigned cjPackedBegin, cjPackedEnd;
+        {
+            std::unique_lock lock(cjPackedMutex);
+            cjPackedBegin = cjPacked.size();
+            cjPackedEnd   = cjPackedBegin + ncjPacked;
+            cjPacked.resize(cjPackedEnd);
+        }
         for (unsigned n = 0; n < ncjPacked; ++n)
         {
             CjPacked next                               = {0};
@@ -873,10 +890,13 @@ buildNeighborhoodClustered(const std::size_t firstBody,
             optimizeExcl(lastBody, sci, next, nextExcl);
             for (unsigned split = 0; split < clusterPairSplit; ++split)
                 next.imei[split].exclInd = exclIndex(nextExcl[split]);
-            cjPacked[cjPackedBegin + n] = next;
+            {
+                std::shared_lock lock(cjPackedMutex);
+                cjPacked[cjPackedBegin + n] = next;
+            }
         }
-        const unsigned cjPackedEnd = cjPacked.size();
-        sciSorted.push_back({sci, cjPackedBegin, cjPackedEnd});
+
+        sciSorted[sci] = {sci, cjPackedBegin, cjPackedEnd};
     }
     // for (auto const& sci : sciSorted)
     // printf("sci: %d, cjPackedBegin: %d, cjPackedEnd: %d\n", sci.sci, sci.cjPackedBegin, sci.cjPackedEnd);
