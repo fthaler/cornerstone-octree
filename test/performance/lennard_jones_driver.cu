@@ -824,7 +824,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
                            const Box<Tc>& box,
                            unsigned ngmax)
 {
-    thrust::universal_vector<unsigned> neighbors(ncmax * lastBody);
+    thrust::universal_vector<unsigned> neighbors(ngmax * lastBody);
     thrust::universal_vector<unsigned> neighborsCount(lastBody);
 
     buildNeighborhoodNaiveKernel<<<iceil(lastBody, 128), 128>>>(x, y, z, h, firstBody, lastBody, box, tree, ngmax,
@@ -946,7 +946,7 @@ __launch_bounds__(clusterSize* clusterSize) void computeLjClusteredKernel(cstone
 
     using T3  = std::conditional_t<std::is_same_v<T, double>, double3, float3>;
     using Tc3 = std::conditional_t<std::is_same_v<Tc, double>, double3, float3>;
-    using Tc4 = std::conditional_t<std::is_same_v<T, double>, double4, float4>;
+    using Tc4 = std::conditional_t<std::is_same_v<Tc, double>, double4, float4>;
 
     __shared__ Tc4 xqib[clusterSize * numClusterPerSupercluster];
 
