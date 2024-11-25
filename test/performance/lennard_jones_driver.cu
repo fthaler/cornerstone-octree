@@ -1283,8 +1283,9 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     int numFails = 0;
     auto isclose = [](double a, double b)
     {
-        double atol = 1e-6;
-        double rtol = 1e-5;
+        constexpr bool isDouble = std::is_same_v<T, double>;
+        constexpr double atol   = isDouble ? 1e-6 : 1e-5;
+        constexpr double rtol   = isDouble ? 1e-5 : 1e-4;
         return std::abs(a - b) <= atol + rtol * std::abs(b);
     };
 #pragma omp parallel for
