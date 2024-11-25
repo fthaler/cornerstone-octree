@@ -286,9 +286,7 @@ buildNeighborhoodBatchedDirect(std::size_t firstBody,
     thrust::device_vector<unsigned> neighborsCount(lastBody);
     thrust::device_vector<int> globalPool(poolSize);
     printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size() +
-            sizeof(int) * globalPool.size()) /
-               1.0e6);
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
 
     return {neighbors, neighborsCount, globalPool, tree};
 }
@@ -577,9 +575,7 @@ buildNeighborhoodBatched(std::size_t firstBody,
     thrust::device_vector<unsigned> neighborsCount(lastBody);
     thrust::device_vector<int> globalPool(poolSize);
     printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size() +
-            sizeof(int) * globalPool.size()) /
-               1.0e6);
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
 
     {
         CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
@@ -701,9 +697,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
     thrust::device_vector<int> globalPool(poolSize);
     printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * clusterNeighbors.size() + sizeof(unsigned) * clusterNeighborsCount.size() +
-            sizeof(int) * globalPool.size()) /
-               1.0e6);
+           (sizeof(LocalIndex) * clusterNeighbors.size() + sizeof(unsigned) * clusterNeighborsCount.size()) / 1.0e6);
 
     constexpr unsigned threads       = Compress ? 64 : 64;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;

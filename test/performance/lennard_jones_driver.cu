@@ -144,6 +144,8 @@ buildNeighborhoodNaiveDirect(std::size_t firstBody,
 {
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
     return {neighbors, neighborsCount, tree};
 }
 
@@ -250,6 +252,8 @@ buildNeighborhoodBatchedDirect(std::size_t firstBody,
                                                 TravConfig::targetSize);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
     thrust::device_vector<int> globalPool(poolSize);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
 
     return {neighbors, neighborsCount, globalPool, tree};
 }
@@ -408,6 +412,8 @@ buildNeighborhoodNaive(std::size_t firstBody,
 {
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
 
     buildNeighborhoodNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
         x, y, z, h, firstBody, lastBody, box, tree, ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
@@ -561,6 +567,8 @@ buildNeighborhoodBatched(std::size_t firstBody,
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
     thrust::device_vector<int> globalPool(poolSize);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
 
     resetTraversalCounters<<<1, 1>>>();
     buildNeighborhoodBatchedKernel<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, tree, box,
@@ -898,11 +906,9 @@ buildNeighborhoodClustered(const std::size_t firstBody,
 
         sciSorted[sci] = {sci, cjPackedBegin, cjPackedEnd};
     }
-    // for (auto const& sci : sciSorted)
-    // printf("sci: %d, cjPackedBegin: %d, cjPackedEnd: %d\n", sci.sci, sci.cjPackedBegin, sci.cjPackedEnd);
-    // for (auto const& cj : cjPacked)
-    // printf("[%5d, %5d, %5d, %5d], %08x %08x\n", cj.cj[0], cj.cj[1], cj.cj[2], cj.cj[3], cj.imei[0].imask,
-    // cj.imei[1].imask);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(Sci) * sciSorted.size() + sizeof(CjPacked) * cjPacked.size() + sizeof(Excl) * excl.size()) / 1.0e6);
+    printf("%lu %lu %lu\n", sizeof(Sci), sizeof(CjPacked), sizeof(Excl));
 
     return {sciSorted, cjPacked, excl};
 }
@@ -1099,6 +1105,8 @@ buildNeighborhoodClustered(std::size_t firstBody,
     thrust::device_vector<unsigned> clusterNeighborsCount;
     if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
     thrust::device_vector<int> globalPool(poolSize);
+    printf("Memory usage of neighborhood data: %.2f MB\n",
+           (sizeof(LocalIndex) * clusterNeighbors.size() + sizeof(unsigned) * clusterNeighborsCount.size()) / 1.0e6);
 
     constexpr unsigned threads       = Compress ? 64 : 32;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
@@ -1216,6 +1224,10 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     thrust::device_vector<T> d_afx(n, std::numeric_limits<T>::quiet_NaN());
     thrust::device_vector<T> d_afy(n, std::numeric_limits<T>::quiet_NaN());
     thrust::device_vector<T> d_afz(n, std::numeric_limits<T>::quiet_NaN());
+    printf("Memory usage of particle data: %.2f MB\n",
+           (sizeof(Tc) * (d_x.size() + d_y.size() + d_z.size()) +
+            sizeof(T) * (d_h.size() + d_afx.size() + d_afy.size() + d_afz.size())) /
+               1.0e6);
 
     thrust::device_vector<KeyType> d_prefixes             = octree.prefixes;
     thrust::device_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
