@@ -752,10 +752,10 @@ void computeDensityClustered(
         return i == j ? mj : w * mj;
     };
 
-    constexpr unsigned threads       = Compress ? 256 : 256;
+    constexpr unsigned threads       = 64;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-    numBlocks      = 1 << 11;
+    numBlocks      = iceil(lastBody, ClusterConfig::iSize * warpsPerBlock);
     findNeighborsClustered<warpsPerBlock, true, true, ncmax, Compress, Symmetric>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeDensity, rho);

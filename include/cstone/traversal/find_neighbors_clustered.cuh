@@ -686,17 +686,18 @@ template<int warpsPerBlock,
          class Th,
          class Contribution,
          class... Tr>
-__global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstBody,
-                                                       cstone::LocalIndex lastBody,
-                                                       const Tc* __restrict__ x,
-                                                       const Tc* __restrict__ y,
-                                                       const Tc* __restrict__ z,
-                                                       const Th* __restrict__ h,
-                                                       const __grid_constant__ Box<Tc> box,
-                                                       const unsigned* __restrict__ ncClustered,
-                                                       const unsigned* __restrict__ nidxClustered,
-                                                       Contribution contribution,
-                                                       Tr* __restrict__... results)
+__global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighborsClustered(
+    cstone::LocalIndex firstBody,
+    cstone::LocalIndex lastBody,
+    const Tc* __restrict__ x,
+    const Tc* __restrict__ y,
+    const Tc* __restrict__ z,
+    const Th* __restrict__ h,
+    const __grid_constant__ Box<Tc> box,
+    const unsigned* __restrict__ ncClustered,
+    const unsigned* __restrict__ nidxClustered,
+    Contribution contribution,
+    Tr* __restrict__... results)
 {
     static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
     static_assert(Symmetric == 0 || Symmetric == 1 || Symmetric == -1, "Symmetric must be 0, 1, or -1");
@@ -713,155 +714,88 @@ __global__ __maxnreg__(40) void findNeighborsClustered(cstone::LocalIndex firstB
 
     constexpr auto pbc = BoundaryType::periodic;
 
-    assert(firstBody == 0); // TODO: other cases
-    const unsigned numIClusters = iceil(lastBody - firstBody, ClusterConfig::iSize);
+    const unsigned iCluster = block.group_index().x * warpsPerBlock + block.thread_index().z;
+
+    if (iCluster > iceil(lastBody, ClusterConfig::iSize)) return;
+
+    const unsigned i = iCluster * ClusterConfig::iSize + block.thread_index().x;
 
     __shared__ unsigned nidxBuffer[warpsPerBlock][NcMax];
-    unsigned* const nidx = nidxBuffer[block.thread_index().z];
+    unsigned* const nidx               = nidxBuffer[block.thread_index().z];
+    constexpr unsigned compressedNcMax = Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
 
-    constexpr unsigned long compressedNcMax = Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
+    unsigned iClusterNeighborsCount = Compress ? compressedNcMax : imin(ncClustered[iCluster], NcMax);
 
-    unsigned iCluster          = 0;
-    const auto getNextICluster = [&]()
+#pragma unroll
+    for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
+        nidx[nb] = nidxClustered[iCluster * compressedNcMax + nb];
+
+    if constexpr (Compress)
     {
-        unsigned nextTarget;
-        if (warp.thread_rank() == 0) nextTarget = atomicAdd(&targetCounterGlob, 1);
-        return warp.shfl(nextTarget, 0);
-    };
-
-#if CSTONE_USE_CUDA_PIPELINE
-    __shared__ detail::Preloader<warpsPerBlock, BypassL1CacheOnLoads, Tc, ClusterConfig::iSize> xiPreloader,
-        yiPreloader, ziPreloader;
-    __shared__ detail::Preloader<warpsPerBlock, BypassL1CacheOnLoads, Th, ClusterConfig::iSize> hiPreloader;
-    __shared__ detail::Preloader<warpsPerBlock, BypassL1CacheOnLoads, unsigned, compressedNcMax> nidxPreloader;
-
-    auto iPipeline = cuda::make_pipeline();
-
-    unsigned nextICluster = getNextICluster();
-
-    const auto preloadNextICluster = [&]
-    {
-        iPipeline.producer_acquire();
-        xiPreloader.startLoad(&x[nextICluster * ClusterConfig::iSize], iPipeline);
-        yiPreloader.startLoad(&y[nextICluster * ClusterConfig::iSize], iPipeline);
-        ziPreloader.startLoad(&z[nextICluster * ClusterConfig::iSize], iPipeline);
-        hiPreloader.startLoad(&h[nextICluster * ClusterConfig::iSize], iPipeline);
-        const unsigned nextIClusterNeighborsCount = Compress ? compressedNcMax : imin(ncClustered[nextICluster], NcMax);
-        nidxPreloader.startLoad(&nidxClustered[nextICluster * compressedNcMax], iPipeline, nextIClusterNeighborsCount);
-        iPipeline.producer_commit();
-    };
-
-    if (nextICluster < numIClusters) preloadNextICluster();
-#endif
-
-    while (true)
-    {
-#if CSTONE_USE_CUDA_PIPELINE
-        iCluster = nextICluster;
-#else
-        iCluster = getNextICluster();
-#endif
-
-        if (iCluster >= numIClusters) return;
-
-        const unsigned i                      = iCluster * ClusterConfig::iSize + block.thread_index().x;
-        const unsigned iClusterNeighborsCount = Compress ? compressedNcMax : imin(ncClustered[iCluster], NcMax);
-
-#if CSTONE_USE_CUDA_PIPELINE
-        iPipeline.consumer_wait();
         warp.sync();
-        const Vec3<Tc> iPos = {xiPreloader[block.thread_index().x], yiPreloader[block.thread_index().x],
-                               ziPreloader[block.thread_index().x]};
-        const Th hi         = hiPreloader[block.thread_index().x];
-#pragma unroll
-        for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
-            nidx[nb] = nidxPreloader[nb];
-
-        nextICluster = getNextICluster();
-        iPipeline.consumer_release();
-        if (nextICluster < numIClusters) preloadNextICluster();
-#else
-        const Vec3<Tc> iPos = {x[i], y[i], z[i]};
-        const Th hi = h[i];
-#pragma unroll
-        for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
-            nidx[nb] = nidxClustered[iCluster * compressedNcMax + nb];
-#endif
-
-        const auto posDiff = [&](const Vec3<Tc>& jPos)
-        {
-            Vec3<Tc> ijPosDiff = {iPos[0] - jPos[0], iPos[1] - jPos[1], iPos[2] - jPos[2]};
-            if constexpr (UsePbc)
-            {
-                ijPosDiff[0] -= (box.boundaryX() == pbc) * box.lx() * std::rint(ijPosDiff[0] * box.ilx());
-                ijPosDiff[1] -= (box.boundaryY() == pbc) * box.ly() * std::rint(ijPosDiff[1] * box.ily());
-                ijPosDiff[2] -= (box.boundaryZ() == pbc) * box.lz() * std::rint(ijPosDiff[2] * box.ilz());
-            }
-            return ijPosDiff;
-        };
-
-        std::tuple<Tr...> sums;
-        detail::tupleForeach([](auto& sum) { sum = 0; }, sums);
-        const auto computeClusterInteraction = [&](const unsigned jCluster, const bool self)
-        {
-            const unsigned j = jCluster * ClusterConfig::jSize + block.thread_index().y % ClusterConfig::jSize;
-            std::tuple<Tr...> contrib;
-            detail::tupleForeach([](auto& contrib) { contrib = 0; }, contrib);
-            if (i < lastBody & j < lastBody & (!Symmetric | !self | (i <= j)))
-            {
-                const Vec3<Tc> jPos{x[j], y[j], z[j]};
-                const Vec3<Tc> ijPosDiff = posDiff(jPos);
-                const Th d2              = norm2(ijPosDiff);
-                if (d2 < 4 * hi * hi)
-                    detail::tupleForeach([](auto& lhs, const auto& rhs) { lhs = rhs; }, contrib,
-                                         contribution(i, iPos, hi, j, jPos, ijPosDiff, d2));
-            }
-            detail::tupleForeach([](auto& sum, auto const& contrib) { sum += contrib; }, sums, contrib);
-            if constexpr (Symmetric)
-            {
-                if (i == j) detail::tupleForeach([&](auto& c) { c = 0; }, contrib);
-
-                detail::storeTupleJSum<Symmetric>(contrib, std::make_tuple(&results[j]...), j < lastBody);
-            }
-        };
-
-        constexpr unsigned jClustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize / ClusterConfig::jSize;
-        constexpr unsigned overlappingJClusters =
-            ClusterConfig::iSize <= ClusterConfig::jSize ? 1 : ClusterConfig::iSize / ClusterConfig::jSize;
-#pragma unroll
-        for (unsigned overlapping = 0; overlapping < overlappingJClusters; overlapping += jClustersPerWarp)
-        {
-            const unsigned o = overlapping + block.thread_index().y / ClusterConfig::jSize;
-            const unsigned jCluster =
-                o < overlappingJClusters ? iCluster * ClusterConfig::iSize / ClusterConfig::jSize + o : ~0u;
-            computeClusterInteraction(jCluster, true);
-        }
-
-        if constexpr (Compress)
-        {
-            unsigned iClusterNeighborsCount;
-            warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>((char*)nidx, nidx,
-                                                                                iClusterNeighborsCount);
-            for (unsigned jc = 0; jc < iClusterNeighborsCount; jc += jClustersPerWarp)
-            {
-                const unsigned jcc      = jc + block.thread_index().y / ClusterConfig::jSize;
-                const unsigned jCluster = jcc < iClusterNeighborsCount ? nidx[jcc] : ~0u;
-                computeClusterInteraction(jCluster, false);
-            }
-        }
-        else
-        {
-            const unsigned iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
-            for (unsigned jc = 0; jc < iClusterNeighborsCount; jc += jClustersPerWarp)
-            {
-                const unsigned jcc      = jc + block.thread_index().y / ClusterConfig::jSize;
-                const unsigned jCluster = jcc < iClusterNeighborsCount ? nidx[jcc] : ~0u;
-                computeClusterInteraction(jCluster, false);
-            }
-        }
-
-        detail::storeTupleISum<Symmetric>(sums, std::make_tuple(&results[i]...), i < lastBody);
+        warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>((char*)nidx, nidx, iClusterNeighborsCount);
     }
+
+    const Vec3<Tc> iPos = {x[i], y[i], z[i]};
+    const Th hi         = h[i];
+
+    const auto posDiff = [&](const Vec3<Tc>& jPos)
+    {
+        Vec3<Tc> ijPosDiff = {iPos[0] - jPos[0], iPos[1] - jPos[1], iPos[2] - jPos[2]};
+        if constexpr (UsePbc)
+        {
+            ijPosDiff[0] -= (box.boundaryX() == pbc) * box.lx() * std::rint(ijPosDiff[0] * box.ilx());
+            ijPosDiff[1] -= (box.boundaryY() == pbc) * box.ly() * std::rint(ijPosDiff[1] * box.ily());
+            ijPosDiff[2] -= (box.boundaryZ() == pbc) * box.lz() * std::rint(ijPosDiff[2] * box.ilz());
+        }
+        return ijPosDiff;
+    };
+
+    std::tuple<Tr...> sums;
+    detail::tupleForeach([](auto& sum) { sum = 0; }, sums);
+    const auto computeClusterInteraction = [&](const unsigned jCluster, const bool self)
+    {
+        const unsigned j = jCluster * ClusterConfig::jSize + block.thread_index().y % ClusterConfig::jSize;
+        std::tuple<Tr...> contrib;
+        detail::tupleForeach([](auto& contrib) { contrib = 0; }, contrib);
+        if (i < lastBody & j < lastBody & (!Symmetric | !self | (i <= j)))
+        {
+            const Vec3<Tc> jPos{x[j], y[j], z[j]};
+            const Vec3<Tc> ijPosDiff = posDiff(jPos);
+            const Th d2              = norm2(ijPosDiff);
+            const Th hi2             = Th(2) * hi;
+            if (d2 < hi2 * hi2)
+                detail::tupleForeach([](auto& lhs, const auto& rhs) { lhs = rhs; }, contrib,
+                                     contribution(i, iPos, hi, j, jPos, ijPosDiff, d2));
+        }
+        detail::tupleForeach([](auto& sum, auto const& contrib) { sum += contrib; }, sums, contrib);
+        if constexpr (Symmetric)
+        {
+            if (i == j) detail::tupleForeach([&](auto& c) { c = 0; }, contrib);
+
+            detail::storeTupleJSum<Symmetric>(contrib, std::make_tuple(&results[j]...), j < lastBody);
+        }
+    };
+
+    constexpr unsigned jClustersPerWarp = GpuConfig::warpSize / ClusterConfig::iSize / ClusterConfig::jSize;
+    constexpr unsigned overlappingJClusters =
+        ClusterConfig::iSize <= ClusterConfig::jSize ? 1 : ClusterConfig::iSize / ClusterConfig::jSize;
+#pragma unroll
+    for (unsigned overlapping = 0; overlapping < overlappingJClusters; overlapping += jClustersPerWarp)
+    {
+        const unsigned o = overlapping + block.thread_index().y / ClusterConfig::jSize;
+        const unsigned jCluster =
+            o < overlappingJClusters ? iCluster * ClusterConfig::iSize / ClusterConfig::jSize + o : ~0u;
+        computeClusterInteraction(jCluster, true);
+    }
+    for (unsigned jc = 0; jc < iClusterNeighborsCount; jc += jClustersPerWarp)
+    {
+        const unsigned jcc      = jc + block.thread_index().y / ClusterConfig::jSize;
+        const unsigned jCluster = jcc < iClusterNeighborsCount ? nidx[jcc] : ~0u;
+        computeClusterInteraction(jCluster, false);
+    }
+
+    detail::storeTupleISum<Symmetric>(sums, std::make_tuple(&results[i]...), i < lastBody);
 }
 
 } // namespace cstone

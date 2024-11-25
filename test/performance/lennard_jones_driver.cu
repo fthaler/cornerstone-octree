@@ -1147,10 +1147,10 @@ void computeLjClustered(
         return std::make_tuple(ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
 
-    constexpr unsigned threads       = Compress ? 256 : 256;
+    constexpr unsigned threads       = 64;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     const dim3 blockSize     = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-    const unsigned numBlocks = 1 << 11;
+    const unsigned numBlocks = iceil(lastBody, ClusterConfig::iSize * warpsPerBlock);
     findNeighborsClustered<warpsPerBlock, true, true, ncmax, Compress, Symmetric ? -1 : 0>
         <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
                                    rawPtr(clusterNeighbors), computeLj, afx, afy, afz);
