@@ -1101,7 +1101,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     unsigned poolSize                            = TravConfig::poolSize(numBodies);
     std::size_t iClusters                        = iceil(lastBody, ClusterConfig::iSize);
     constexpr unsigned long nbStoragePerICluster = Compress ? ncmax / ClusterConfig::expectedCompressionRate : ncmax;
-    thrust::device_vector<LocalIndex> clusterNeighbors(nbStoragePerICluster * iClusters);
+    thrust::device_vector<unsigned> clusterNeighbors(nbStoragePerICluster * iClusters);
     thrust::device_vector<unsigned> clusterNeighborsCount;
     if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
     thrust::device_vector<int> globalPool(poolSize);
