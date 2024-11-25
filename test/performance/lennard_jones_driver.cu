@@ -104,7 +104,7 @@ void computeLjCPU(const std::size_t firstBody,
         T afyi      = 0;
         T afzi      = 0;
 
-        const unsigned nbs = neighborsCount[i];
+        const unsigned nbs = std::min(neighborsCount[i], ngmax);
         for (unsigned nb = 0; nb < nbs; ++nb)
         {
             const unsigned j = neighbors[i * ngmax + nb];
@@ -444,7 +444,7 @@ __global__ void __maxnreg__(40) computeLjNaiveKernel(const Tc* __restrict__ x,
     T afyi      = 0;
     T afzi      = 0;
 
-    const unsigned nbs = neighborsCount[i];
+    const unsigned nbs = imin(neighborsCount[i], ngmax);
     for (unsigned nb = 0; nb < nbs; ++nb)
     {
         const unsigned j = neighbors[i + (unsigned long)nb * lastId];

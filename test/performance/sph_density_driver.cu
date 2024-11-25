@@ -161,8 +161,8 @@ void computeDensityCPU(const std::size_t firstBody,
             const T mi   = m[i];
             const T hInv = 1.0 / hi;
 
-            unsigned nbs = findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors.data());
-            T rhoi       = mi;
+            const unsigned nbs = std::min(findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors.data()), ngmax);
+            T rhoi             = mi;
             for (unsigned nb = 0; nb < nbs; ++nb)
             {
                 unsigned j = neighbors[nb];
