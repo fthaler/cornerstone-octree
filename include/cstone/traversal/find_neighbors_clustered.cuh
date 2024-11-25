@@ -107,12 +107,7 @@ __device__ inline void storeTupleJSum(std::tuple<T...>& tuple, std::tuple<T*...>
         tupleForeach([&](auto& t) { t += warp.shfl_down(t, offset); }, tuple);
 
     if ((block.thread_index().x == 0) & store)
-        detail::tupleForeach(
-            [](auto* ptr, auto const& t)
-            {
-                if (t != 0) atomicAdd(ptr, Symmetric * t);
-            },
-            ptrs, tuple);
+        detail::tupleForeach([](auto* ptr, auto const& t) { atomicAdd(ptr, Symmetric * t); }, ptrs, tuple);
 }
 
 template<int Symmetric, class T>
@@ -142,7 +137,7 @@ __device__ inline void storeTupleJSum(std::tuple<T, T, T>& tuple, std::tuple<T*,
             T* ptr = block.thread_index().x == 0   ? std::get<0>(ptrs)
                      : block.thread_index().x == 1 ? std::get<1>(ptrs)
                                                    : std::get<2>(ptrs);
-            if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
+            atomicAdd(ptr, Symmetric * std::get<0>(tuple));
         }
     }
     else if constexpr (ClusterConfig::iSize == 4)
@@ -163,7 +158,7 @@ __device__ inline void storeTupleJSum(std::tuple<T, T, T>& tuple, std::tuple<T*,
             T* ptr = block.thread_index().x == 0   ? std::get<0>(ptrs)
                      : block.thread_index().x == 1 ? std::get<1>(ptrs)
                                                    : std::get<2>(ptrs);
-            if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
+            atomicAdd(ptr, Symmetric * std::get<0>(tuple));
         }
     }
     else { storeTupleJSum<Symmetric, T, T, T>(tuple, ptrs, store); }
@@ -184,10 +179,7 @@ __device__ inline void storeTupleISum(std::tuple<T...>& tuple, std::tuple<T*...>
         detail::tupleForeach(
             [](auto* ptr, auto const& t)
             {
-                if constexpr (Symmetric)
-                {
-                    if (t != 0) atomicAdd(ptr, t);
-                }
+                if constexpr (Symmetric) { atomicAdd(ptr, t); }
                 else { *ptr = t; }
             },
             ptrs, tuple);
@@ -218,10 +210,7 @@ __device__ inline void storeTupleISum(std::tuple<T, T, T>& tuple, std::tuple<T*,
             T* ptr = block.thread_index().y == 0   ? std::get<0>(ptrs)
                      : block.thread_index().y == 1 ? std::get<1>(ptrs)
                                                    : std::get<2>(ptrs);
-            if constexpr (Symmetric)
-            {
-                if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
-            }
+            if constexpr (Symmetric) { atomicAdd(ptr, Symmetric * std::get<0>(tuple)); }
             else { *ptr = std::get<0>(tuple); }
         }
     }
@@ -245,10 +234,7 @@ __device__ inline void storeTupleISum(std::tuple<T, T, T>& tuple, std::tuple<T*,
             T* ptr = block.thread_index().y == 0   ? std::get<0>(ptrs)
                      : block.thread_index().y == 1 ? std::get<1>(ptrs)
                                                    : std::get<2>(ptrs);
-            if constexpr (Symmetric)
-            {
-                if (std::get<0>(tuple) != 0) atomicAdd(ptr, Symmetric * std::get<0>(tuple));
-            }
+            if constexpr (Symmetric) { atomicAdd(ptr, Symmetric * std::get<0>(tuple)); }
             else { *ptr = std::get<0>(tuple); }
         }
     }
