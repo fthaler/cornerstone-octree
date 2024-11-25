@@ -673,17 +673,17 @@ template<int warpsPerBlock,
          class Contribution,
          class... Tr>
 __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighborsClustered(
-    cstone::LocalIndex firstBody,
-    cstone::LocalIndex lastBody,
-    const Tc* __restrict__ x,
-    const Tc* __restrict__ y,
-    const Tc* __restrict__ z,
-    const Th* __restrict__ h,
+    const cstone::LocalIndex firstBody,
+    const cstone::LocalIndex lastBody,
+    const Tc* const __restrict__ x,
+    const Tc* const __restrict__ y,
+    const Tc* const __restrict__ z,
+    const Th* const __restrict__ h,
     const __grid_constant__ Box<Tc> box,
-    const unsigned* __restrict__ ncClustered,
-    const unsigned* __restrict__ nidxClustered,
-    Contribution contribution,
-    Tr* __restrict__... results)
+    const unsigned* const __restrict__ ncClustered,
+    const unsigned* const __restrict__ nidxClustered,
+    const Contribution contribution,
+    Tr* const __restrict__... results)
 {
     static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
     static_assert(Symmetric == 0 || Symmetric == 1 || Symmetric == -1, "Symmetric must be 0, 1, or -1");
@@ -697,8 +697,6 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighb
     assert(block.dim_threads().z == warpsPerBlock);
     const auto warp   = cg::tiled_partition<GpuConfig::warpSize>(block);
     const auto thread = cg::this_thread();
-
-    constexpr auto pbc = BoundaryType::periodic;
 
     const unsigned iCluster = block.group_index().x * warpsPerBlock + block.thread_index().z;
 
@@ -730,9 +728,12 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighb
         Vec3<Tc> ijPosDiff = {iPos[0] - jPos[0], iPos[1] - jPos[1], iPos[2] - jPos[2]};
         if constexpr (UsePbc)
         {
-            ijPosDiff[0] -= (box.boundaryX() == pbc) * box.lx() * std::rint(ijPosDiff[0] * box.ilx());
-            ijPosDiff[1] -= (box.boundaryY() == pbc) * box.ly() * std::rint(ijPosDiff[1] * box.ily());
-            ijPosDiff[2] -= (box.boundaryZ() == pbc) * box.lz() * std::rint(ijPosDiff[2] * box.ilz());
+            ijPosDiff[0] -=
+                (box.boundaryX() == BoundaryType::periodic) * box.lx() * std::rint(ijPosDiff[0] * box.ilx());
+            ijPosDiff[1] -=
+                (box.boundaryY() == BoundaryType::periodic) * box.ly() * std::rint(ijPosDiff[1] * box.ily());
+            ijPosDiff[2] -=
+                (box.boundaryZ() == BoundaryType::periodic) * box.lz() * std::rint(ijPosDiff[2] * box.ilz());
         }
         return ijPosDiff;
     };
