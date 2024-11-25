@@ -742,7 +742,6 @@ void computeDensityClustered(
 
     if constexpr (Symmetric) checkGpuErrors(cudaMemsetAsync(rho, 0, sizeof(T) * lastBody));
 
-    resetTraversalCounters<<<1, 1>>>();
     auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, auto, T dist2)
     {
         T mj         = m[j];

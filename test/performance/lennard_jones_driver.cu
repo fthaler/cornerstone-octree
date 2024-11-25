@@ -1136,7 +1136,6 @@ void computeLjClustered(
         checkGpuErrors(cudaMemsetAsync(afz, 0, sizeof(T) * lastBody));
     }
 
-    resetTraversalCounters<<<1, 1>>>();
     auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, auto ijPosDiff, T rsq)
     {
         const T r2inv   = T(1) / rsq;

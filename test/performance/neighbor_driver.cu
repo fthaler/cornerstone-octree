@@ -347,7 +347,6 @@ void findNeighborsC(std::size_t firstBody,
     };
 
     cudaMemset(nc + firstBody, 0, numBodies * sizeof(unsigned));
-    resetTraversalCounters<<<1, 1>>>();
     t0        = std::chrono::high_resolution_clock::now();
     threads   = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
     numBlocks = iceil(lastBody, ClusterConfig::iSize * warpsPerBlock);
