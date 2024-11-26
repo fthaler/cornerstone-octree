@@ -708,7 +708,11 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighb
     unsigned* const nidx               = nidxBuffer[block.thread_index().z];
     constexpr unsigned compressedNcMax = Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
 
-    unsigned iClusterNeighborsCount = Compress ? compressedNcMax : imin(ncClustered[iCluster], NcMax);
+    unsigned iClusterNeighborsCount =
+        Compress ? (compressedNeighborsSize((const char*)&nidxClustered[iCluster * compressedNcMax]) +
+                    sizeof(unsigned) - 1) /
+                       sizeof(unsigned)
+                 : imin(ncClustered[iCluster], NcMax);
 
 #pragma unroll
     for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)

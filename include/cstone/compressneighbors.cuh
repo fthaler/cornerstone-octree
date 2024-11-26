@@ -180,7 +180,6 @@ warpCompressNeighbors(std::uint32_t neighbors[ItemsPerThread], char* output, con
     for (unsigned i = 0; i < ItemsPerThread; ++i)
         infoNibbles[i] = consecutiveOnes[i] == 0 ? nnibbles[i] : consecutiveOnes[i] + 9;
 
-    if (warp.thread_rank() == 0) *((unsigned*)output) = infoNibblesCount;
     std::uint8_t* infoNibblesBuffer = (std::uint8_t*)((unsigned*)output + 1);
 
     const auto writeNibble = [](std::uint8_t* buffer, unsigned index, std::uint8_t value, bool odd)
@@ -231,16 +230,27 @@ warpCompressNeighbors(std::uint32_t neighbors[ItemsPerThread], char* output, con
         for (unsigned j = 0; j < nnibbles[i]; ++j)
             writeNibble(dataNibblesBuffer, index + j, (diff[i] >> (4 * j)) & 0xf, true);
     }
+
+    const unsigned totalBytes =
+        (infoNibblesCount + 1) / 2 + (nibbleIndices[ItemsPerThread - 1] + 1) / 2 + sizeof(unsigned);
+    assert(infoNibblesCount < (1 << 16));
+    assert(totalBytes < (1 << 16));
+    if (warp.thread_rank() == GpuConfig::warpSize - 1) *((unsigned*)output) = totalBytes | (infoNibblesCount << 16);
+}
+
+__device__ __forceinline__ unsigned compressedNeighborsSize(const char* const input)
+{
+    return *((unsigned*)input) & 0xffff;
 }
 
 template<unsigned NumWarps, unsigned ItemsPerThread>
 __device__ __forceinline__ void
-warpDecompressNeighbors(const char* __restrict__ input, std::uint32_t* __restrict__ neighbors, unsigned& n)
+warpDecompressNeighbors(const char* const __restrict__ input, std::uint32_t* const __restrict__ neighbors, unsigned& n)
 {
     namespace cg = cooperative_groups;
     auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
 
-    const unsigned infoNibblesCount = *((unsigned*)input);
+    const unsigned infoNibblesCount = *((unsigned*)input) >> 16;
 
     if (infoNibblesCount == 0)
     {

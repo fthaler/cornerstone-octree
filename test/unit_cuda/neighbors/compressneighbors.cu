@@ -171,6 +171,8 @@ __global__ void rountrip(std::uint32_t const* __restrict__ input,
     loadWarpItems<ItemsPerThread>(input, items, n_input, ~0u);
 
     warpCompressNeighbors<1, ItemsPerThread>(items, compressed, n_input);
+    const unsigned nBytes = compressedNeighborsSize(compressed);
+    compressed[nBytes] = 0xff;
     warpDecompressNeighbors<1, ItemsPerThread>(compressed, output, *n_output);
 }
 
