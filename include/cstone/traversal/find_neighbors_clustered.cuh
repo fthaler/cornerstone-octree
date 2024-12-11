@@ -383,6 +383,48 @@ struct alignas(16) Preloader
 
 } // namespace detail
 
+template<class Tc>
+__global__ void computeClusterBoundingBoxes(cstone::LocalIndex firstBody,
+                                            cstone::LocalIndex lastBody,
+                                            const Tc* const __restrict__ x,
+                                            const Tc* const __restrict__ y,
+                                            const Tc* const __restrict__ z,
+                                            util::tuple<Vec3<Tc>, Vec3<Tc>>* const __restrict__ bboxes)
+{
+    static_assert(GpuConfig::warpSize % ClusterConfig::jSize == 0);
+
+    namespace cg     = cooperative_groups;
+    const auto block = cg::this_thread_block();
+    const auto warp  = cg::tiled_partition<GpuConfig::warpSize>(block);
+
+    const unsigned i = block.thread_index().x + block.group_dim().x * block.group_index().x;
+
+    const Tc xi = x[std::min(i, lastBody - 1)];
+    const Tc yi = y[std::min(i, lastBody - 1)];
+    const Tc zi = z[std::min(i, lastBody - 1)];
+
+    Vec3<Tc> bboxMin{xi, yi, zi};
+    Vec3<Tc> bboxMax{xi, yi, zi};
+
+#pragma unroll
+    for (unsigned offset = ClusterConfig::jSize / 2; offset >= 1; offset /= 2)
+    {
+        // TODO: fewer shuffles
+        bboxMin = {std::min(warp.shfl_down(bboxMin[0], offset), bboxMin[0]),
+                   std::min(warp.shfl_down(bboxMin[1], offset), bboxMin[1]),
+                   std::min(warp.shfl_down(bboxMin[2], offset), bboxMin[2])};
+        bboxMax = {std::max(warp.shfl_down(bboxMax[0], offset), bboxMax[0]),
+                   std::max(warp.shfl_down(bboxMax[1], offset), bboxMax[1]),
+                   std::max(warp.shfl_down(bboxMax[2], offset), bboxMax[2])};
+    }
+
+    Vec3<Tc> center = (bboxMax + bboxMin) * Tc(0.5);
+    Vec3<Tc> size   = (bboxMax - bboxMin) * Tc(0.5);
+
+    // TODO: coalesced stores
+    if (i % ClusterConfig::jSize == 0 && i < lastBody) bboxes[i / ClusterConfig::jSize] = {center, size};
+}
+
 template<unsigned warpsPerBlock,
          bool UsePbc               = true,
          bool BypassL1CacheOnLoads = true,
@@ -392,18 +434,19 @@ template<unsigned warpsPerBlock,
          class Tc,
          class Th,
          class KeyType>
-__global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
-                             8) void findClusterNeighbors(cstone::LocalIndex firstBody,
-                                                          cstone::LocalIndex lastBody,
-                                                          const Tc* __restrict__ x,
-                                                          const Tc* __restrict__ y,
-                                                          const Tc* __restrict__ z,
-                                                          const Th* __restrict__ h,
-                                                          OctreeNsView<Tc, KeyType> tree,
-                                                          const __grid_constant__ Box<Tc> box,
-                                                          unsigned* __restrict__ ncClustered,
-                                                          unsigned* __restrict__ nidxClustered,
-                                                          int* globalPool)
+__global__
+    __maxnreg__(72) void findClusterNeighbors(const cstone::LocalIndex firstBody,
+                                              const cstone::LocalIndex lastBody,
+                                              const Tc* const __restrict__ x,
+                                              const Tc* const __restrict__ y,
+                                              const Tc* const __restrict__ z,
+                                              const Th* const __restrict__ h,
+                                              const util::tuple<Vec3<Tc>, Vec3<Tc>>* const __restrict__ jClusterBboxes,
+                                              OctreeNsView<Tc, KeyType> tree,
+                                              const __grid_constant__ Box<Tc> box,
+                                              unsigned* const __restrict__ ncClustered,
+                                              unsigned* const __restrict__ nidxClustered,
+                                              int* const globalPool)
 {
     static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
     namespace cg = cooperative_groups;
@@ -456,88 +499,61 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
         const Vec3<Tc> targetCenter = (bbMax + bbMin) * Tc(0.5);
         const Vec3<Tc> targetSize   = (bbMax - bbMin) * Tc(0.5);
 
+        // TODO: combine with warpMin above!
+        Vec3<Tc> iClusterBbMin = {iPos[0] - 2 * hi, iPos[1] - 2 * hi, iPos[2] - 2 * hi};
+        Vec3<Tc> iClusterBbMax = {iPos[0] + 2 * hi, iPos[1] + 2 * hi, iPos[2] + 2 * hi};
+#pragma unroll
+        for (unsigned offset = ClusterConfig::iSize / 2; offset >= 1; offset /= 2)
+        {
+            iClusterBbMin[0] = std::min(warp.shfl_down(iClusterBbMin[0], offset), iClusterBbMin[0]);
+            iClusterBbMin[1] = std::min(warp.shfl_down(iClusterBbMin[1], offset), iClusterBbMin[1]);
+            iClusterBbMin[2] = std::min(warp.shfl_down(iClusterBbMin[2], offset), iClusterBbMin[2]);
+            iClusterBbMax[0] = std::max(warp.shfl_down(iClusterBbMax[0], offset), iClusterBbMax[0]);
+            iClusterBbMax[1] = std::max(warp.shfl_down(iClusterBbMax[1], offset), iClusterBbMax[1]);
+            iClusterBbMax[2] = std::max(warp.shfl_down(iClusterBbMax[2], offset), iClusterBbMax[2]);
+        }
+
+        const Vec3<Tc> iClusterCenter = (iClusterBbMax + iClusterBbMin) * Tc(0.5);
+        const Vec3<Tc> iClusterSize   = (iClusterBbMax - iClusterBbMin) * Tc(0.5);
+
         const auto distSq = [&](const Vec3<Tc>& jPos)
         { return distanceSq<UsePbc>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box); };
 
         unsigned nc = 0;
 
-        const auto checkNeighborhood = [&](const unsigned laneJCluster, const unsigned numLanesValid)
+        const auto checkNeighborhood = [&](const unsigned jCluster, const unsigned numLanesValid)
         {
             assert(numLanesValid > 0);
-#if CSTONE_USE_CUDA_PIPELINE
-            const auto thread = cg::this_thread();
-            auto jPipeline    = cuda::make_pipeline();
 
-            unsigned nextJCluster = warp.shfl(laneJCluster, 0);
-            unsigned jCluster;
+            const unsigned prevJCluster = warp.shfl_up(jCluster, 1);
+            const bool validJCluster    = warp.thread_rank() < numLanesValid & jCluster < numJClusters &
+                                       (warp.thread_rank() == 0 | prevJCluster != jCluster);
 
-            const auto preloadNextJCluster = [&]
+            const auto [jClusterCenter, jClusterSize] =
+                validJCluster
+                    ? jClusterBboxes[jCluster]
+                    : util::tuple<Vec3<Tc>, Vec3<Tc>>({std::numeric_limits<Tc>::max(), std::numeric_limits<Tc>::max(),
+                                                       std::numeric_limits<Tc>::max()},
+                                                      {Tc(0), Tc(0), Tc(0)});
+
+            for (unsigned c = 0; c < GpuConfig::warpSize / ClusterConfig::iSize; ++c)
             {
-                jPipeline.producer_acquire();
-                if (nextJCluster < numJClusters)
-                {
-                    xjPreloader.startLoad(&x[nextJCluster * ClusterConfig::jSize], jPipeline);
-                    yjPreloader.startLoad(&y[nextJCluster * ClusterConfig::jSize], jPipeline);
-                    zjPreloader.startLoad(&z[nextJCluster * ClusterConfig::jSize], jPipeline);
-                }
-                jPipeline.producer_commit();
-            };
-            preloadNextJCluster();
-#endif
+                const auto iClusterC = target * (GpuConfig::warpSize / ClusterConfig::iSize) + c;
+                if (iClusterC >= numIClusters) break;
+                const auto iClusterCenterC = warp.shfl(iClusterCenter, c * ClusterConfig::iSize);
+                const auto iClusterSizeC   = warp.shfl(iClusterSize, c * ClusterConfig::iSize);
+                const unsigned ncC         = warp.shfl(nc, c * ClusterConfig::iSize);
+                const bool isNeighbor =
+                    (validJCluster & iClusterC * ClusterConfig::iSize / ClusterConfig::jSize != jCluster &
+                     jCluster * ClusterConfig::jSize / ClusterConfig::iSize != iClusterC &
+                     (!Symmetric ||
+                      detail::includeNbSymmetric(iClusterC, jCluster * ClusterConfig::jSize / ClusterConfig::iSize))) &&
+                    norm2(minDistance(iClusterCenterC, iClusterSizeC, jClusterCenter, jClusterSize, box)) == 0;
 
-            for (unsigned n = 0; n < numLanesValid; ++n)
-            {
-#if CSTONE_USE_CUDA_PIPELINE
-                jCluster = nextJCluster;
-
-                Vec3<Tc> jPos[ClusterConfig::jSize];
-
-                jPipeline.consumer_wait();
-                warp.sync();
-#pragma unroll
-                for (unsigned jc = 0; jc < ClusterConfig::jSize; ++jc)
-                    jPos[jc] = {xjPreloader[jc], yjPreloader[jc], zjPreloader[jc]};
-
-                nextJCluster = warp.shfl(laneJCluster, imin(n + 1, numLanesValid - 1));
-                jPipeline.consumer_release();
-
-                if (nextJCluster != jCluster) preloadNextJCluster();
-#else
-                const unsigned jCluster = warp.shfl(laneJCluster, n);
-#endif
-
-                if (jCluster >= numJClusters) continue;
-
-                bool isNeighbor = false;
-                if (iCluster < numIClusters & iCluster * ClusterConfig::iSize / ClusterConfig::jSize != jCluster &
-                    jCluster * ClusterConfig::jSize / ClusterConfig::iSize != iCluster &
-                    (!Symmetric |
-                     detail::includeNbSymmetric(iCluster, jCluster * ClusterConfig::jSize / ClusterConfig::iSize)))
-                {
-#pragma unroll
-                    for (unsigned jc = 0; jc < ClusterConfig::jSize; ++jc)
-                    {
-#if CSTONE_USE_CUDA_PIPELINE
-                        const Th d2 = distSq(jPos[jc]);
-#else
-                        const unsigned j = imin(jCluster * ClusterConfig::jSize + jc, lastBody - 1);
-                        const Vec3<Tc> jPos = {x[j], y[j], z[j]};
-                        const Th d2 = distSq(jPos);
-#endif
-                        isNeighbor |= d2 < 4 * hi * hi;
-                    }
-                }
-
-                using mask_t        = decltype(warp.ballot(false));
-                mask_t iClusterMask = ((mask_t(1) << ClusterConfig::iSize) - 1)
-                                      << (ClusterConfig::iSize * block.thread_index().y);
-                bool newNeighbor = warp.ballot(isNeighbor) & iClusterMask;
-                if (newNeighbor)
-                {
-                    if (nc < NcMax && block.thread_index().x == 0)
-                        nidx[block.thread_index().z][block.thread_index().y][nc] = jCluster;
-                    ++nc;
-                }
+                const unsigned nbIndex = exclusiveScanBool(isNeighbor);
+                if (isNeighbor & ncC + nbIndex < NcMax) nidx[block.thread_index().z][c][ncC + nbIndex] = jCluster;
+                const unsigned newNbs = warp.shfl(nbIndex + isNeighbor, GpuConfig::warpSize - 1);
+                if (block.thread_index().y == c) nc += newNbs;
             }
         };
 
@@ -650,9 +666,55 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock,
 
         for (unsigned c = 0; c < GpuConfig::warpSize / ClusterConfig::iSize; ++c)
         {
-            const unsigned ncc = warp.shfl(nc, c * ClusterConfig::iSize);
-            const unsigned ic  = warp.shfl(iCluster, c * ClusterConfig::iSize);
+            unsigned ncc      = warp.shfl(nc, c * ClusterConfig::iSize);
+            const unsigned ic = warp.shfl(iCluster, c * ClusterConfig::iSize);
             if (ic >= numIClusters) continue;
+
+            const unsigned i    = imin(ic * ClusterConfig::iSize + block.thread_index().x, lastBody - 1);
+            const Vec3<Tc> iPos = {x[i], y[i], z[i]};
+            const Th hi         = h[i];
+
+            const auto posDiff = [&](const Vec3<Tc>& jPos)
+            {
+                Vec3<Tc> ijPosDiff = {iPos[0] - jPos[0], iPos[1] - jPos[1], iPos[2] - jPos[2]};
+                if constexpr (UsePbc)
+                {
+                    ijPosDiff[0] -=
+                        (box.boundaryX() == BoundaryType::periodic) * box.lx() * std::rint(ijPosDiff[0] * box.ilx());
+                    ijPosDiff[1] -=
+                        (box.boundaryY() == BoundaryType::periodic) * box.ly() * std::rint(ijPosDiff[1] * box.ily());
+                    ijPosDiff[2] -=
+                        (box.boundaryZ() == BoundaryType::periodic) * box.lz() * std::rint(ijPosDiff[2] * box.ilz());
+                }
+                return ijPosDiff;
+            };
+
+            constexpr unsigned jBlocksPerWarp = GpuConfig::warpSize / ClusterConfig::iSize / ClusterConfig::jSize;
+            const auto subwarp                = cg::tiled_partition<ClusterConfig::iSize * ClusterConfig::jSize>(warp);
+            unsigned prunedNcc                = 0;
+            for (unsigned n = 0; n < imin(ncc, NcMax); n += jBlocksPerWarp)
+            {
+                const unsigned nb       = n + block.thread_index().y / ClusterConfig::jSize;
+                const unsigned jCluster = nb < imin(ncc, NcMax) ? nidx[block.thread_index().z][c][nb] : ~0u;
+                const unsigned j    = jCluster * ClusterConfig::jSize + block.thread_index().y % ClusterConfig::jSize;
+                const Vec3<Tc> jPos = j < lastBody
+                                          ? Vec3<Tc>{x[j], y[j], z[j]}
+                                          : Vec3<Tc>{std::numeric_limits<Tc>::max(), std::numeric_limits<Tc>::max(),
+                                                     std::numeric_limits<Tc>::max()};
+                const Vec3<Tc> ijPosDiff = posDiff(jPos);
+                const Th d2              = norm2(ijPosDiff);
+                const Th hi2             = Th(2) * hi;
+                const bool keep          = subwarp.any(d2 < hi2 * hi2);
+                const unsigned offset    = exclusiveScanBool(keep & subwarp.thread_rank() == 0);
+
+                if (subwarp.thread_rank() == 0 & keep) nidx[block.thread_index().z][c][prunedNcc + offset] = jCluster;
+
+                prunedNcc +=
+                    warp.shfl(offset + keep, (GpuConfig::warpSize - 1) / (ClusterConfig::iSize * ClusterConfig::jSize) *
+                                                 (ClusterConfig::iSize * ClusterConfig::jSize));
+            }
+
+            ncc = prunedNcc;
 
             constexpr unsigned long nbStoragePerICluster =
                 Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
@@ -695,14 +757,14 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighb
     static_assert(warpsPerBlock > 0 && ClusterConfig::iSize * ClusterConfig::jSize <= GpuConfig::warpSize);
     static_assert(GpuConfig::warpSize % (ClusterConfig::iSize * ClusterConfig::jSize) == 0);
     assert(block.dim_threads().z == warpsPerBlock);
-    const auto warp   = cg::tiled_partition<GpuConfig::warpSize>(block);
-    const auto thread = cg::this_thread();
+    const auto warp = cg::tiled_partition<GpuConfig::warpSize>(block);
 
-    const unsigned iCluster = block.group_index().x * warpsPerBlock + block.thread_index().z;
+    const unsigned iCluster     = block.group_index().x * warpsPerBlock + block.thread_index().z;
+    const unsigned numIClusters = iceil(lastBody, ClusterConfig::iSize);
 
-    if (iCluster > iceil(lastBody, ClusterConfig::iSize)) return;
+    if (iCluster >= numIClusters) return;
 
-    const unsigned i = iCluster * ClusterConfig::iSize + block.thread_index().x;
+    const unsigned i = imin(iCluster * ClusterConfig::iSize + block.thread_index().x, lastBody - 1);
 
     __shared__ unsigned nidxBuffer[warpsPerBlock][NcMax];
     unsigned* const nidx               = nidxBuffer[block.thread_index().z];

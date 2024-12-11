@@ -50,7 +50,7 @@
 
 using namespace cstone;
 
-constexpr unsigned ncmax = 256;
+constexpr unsigned ncmax = 256 + 64;
 
 template<class Tc, class Th, class KeyType>
 std::tuple<std::vector<LocalIndex>, std::vector<unsigned>> buildNeighborhoodCPU(std::size_t firstBody,
@@ -1100,13 +1100,18 @@ buildNeighborhoodClustered(std::size_t firstBody,
     unsigned numBlocks                           = TravConfig::numBlocks(numBodies);
     unsigned poolSize                            = TravConfig::poolSize(numBodies);
     std::size_t iClusters                        = iceil(lastBody, ClusterConfig::iSize);
+    std::size_t jClusters                        = iceil(lastBody, ClusterConfig::jSize);
     constexpr unsigned long nbStoragePerICluster = Compress ? ncmax / ClusterConfig::expectedCompressionRate : ncmax;
     thrust::device_vector<unsigned> clusterNeighbors(nbStoragePerICluster * iClusters);
     thrust::device_vector<unsigned> clusterNeighborsCount;
+    thrust::device_vector<util::tuple<Vec3<Tc>, Vec3<Tc>>> jClusterBboxes(jClusters);
     if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
     thrust::device_vector<int> globalPool(poolSize);
     printf("Memory usage of neighborhood data: %.2f MB\n",
            (sizeof(LocalIndex) * clusterNeighbors.size() + sizeof(unsigned) * clusterNeighborsCount.size()) / 1.0e6);
+
+    computeClusterBoundingBoxes<<<iceil(lastBody, 128), 128>>>(firstBody, lastBody, x, y, z, rawPtr(jClusterBboxes));
+    checkGpuErrors(cudaGetLastError());
 
     constexpr unsigned threads       = Compress ? 64 : 32;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
@@ -1114,8 +1119,8 @@ buildNeighborhoodClustered(std::size_t firstBody,
 
     resetTraversalCounters<<<1, 1>>>();
     findClusterNeighbors<warpsPerBlock, true, true, ncmax, Compress, Symmetric>
-        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
-                                   rawPtr(clusterNeighbors), rawPtr(globalPool));
+        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, rawPtr(jClusterBboxes), tree, box,
+                                   rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), rawPtr(globalPool));
     checkGpuErrors(cudaGetLastError());
 
     return {clusterNeighbors, clusterNeighborsCount};

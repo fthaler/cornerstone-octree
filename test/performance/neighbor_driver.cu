@@ -47,7 +47,7 @@
 
 using namespace cstone;
 
-constexpr unsigned ncmax = 192;
+constexpr unsigned ncmax = 256;
 
 //! @brief depth-first traversal based neighbor search
 template<class T, class KeyType>
@@ -256,26 +256,33 @@ void findNeighborsC(std::size_t firstBody,
                     unsigned* nidx,
                     unsigned ngmax)
 {
-    unsigned numBodies = lastBody - firstBody;
-    unsigned numBlocks = TravConfig::numBlocks(numBodies);
-    unsigned poolSize  = TravConfig::poolSize(numBodies);
+    unsigned numBodies          = lastBody - firstBody;
+    unsigned numBlocks          = TravConfig::numBlocks(numBodies);
+    unsigned poolSize           = TravConfig::poolSize(numBodies);
+    const unsigned numIClusters = iceil(lastBody, ClusterConfig::iSize);
+    const unsigned numJClusters = iceil(lastBody, ClusterConfig::jSize);
     static thrust::universal_vector<unsigned> clusterNeighbors, clusterNeighborsCount;
     static thrust::universal_vector<int> globalPool;
-    clusterNeighbors.resize(iceil(lastBody, ClusterConfig::iSize) * ncmax);
-    clusterNeighborsCount.resize(iceil(lastBody, ClusterConfig::iSize));
+    static thrust::device_vector<util::tuple<Vec3<Tc>, Vec3<Tc>>> jClusterBboxes;
+    clusterNeighbors.resize(numIClusters * ncmax);
+    clusterNeighborsCount.resize(numIClusters);
     if constexpr (symmetric) thrust::fill(clusterNeighborsCount.begin(), clusterNeighborsCount.end(), 0);
     globalPool.resize(poolSize);
+    jClusterBboxes.resize(numJClusters);
+
+    computeClusterBoundingBoxes<<<iceil(lastBody, 128), 128>>>(firstBody, lastBody, x, y, z, rawPtr(jClusterBboxes));
+    checkGpuErrors(cudaGetLastError());
 
     // TODO: own traversal config for cluster kernels
-    static_assert(TravConfig::numThreads == 128);
-    constexpr unsigned warpsPerBlock = 4;
-    dim3 threads = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
+    constexpr unsigned threads       = 128;
+    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
+    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
 
     resetTraversalCounters<<<1, 1>>>();
     auto t0 = std::chrono::high_resolution_clock::now();
     findClusterNeighbors<warpsPerBlock, true, bypassL1CacheOnLoads, ncmax, compress, symmetric>
-        <<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, tree, box, rawPtr(clusterNeighborsCount),
-                                 rawPtr(clusterNeighbors), rawPtr(globalPool));
+        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, rawPtr(jClusterBboxes), tree, box,
+                                   rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), rawPtr(globalPool));
     checkGpuErrors(cudaGetLastError());
     kernelSuccess("findClusterNeighbors");
     auto t1   = std::chrono::high_resolution_clock::now();
@@ -348,11 +355,11 @@ void findNeighborsC(std::size_t firstBody,
 
     cudaMemset(nc + firstBody, 0, numBodies * sizeof(unsigned));
     t0        = std::chrono::high_resolution_clock::now();
-    threads   = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-    numBlocks = iceil(lastBody, ClusterConfig::iSize * warpsPerBlock);
+    blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
+    numBlocks = iceil(lastBody - 1, ClusterConfig::iSize * warpsPerBlock) + 1;
     findNeighborsClustered<warpsPerBlock, true, bypassL1CacheOnLoads, ncmax, compress, symmetric>
-        <<<numBlocks, threads>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
-                                 rawPtr(clusterNeighbors), countNeighbors, nc);
+        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
+                                   rawPtr(clusterNeighbors), countNeighbors, nc);
     checkGpuErrors(cudaGetLastError());
     kernelSuccess("findClusterNeighbors");
     t1 = std::chrono::high_resolution_clock::now();
