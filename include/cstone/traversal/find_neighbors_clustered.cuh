@@ -334,26 +334,50 @@ __global__ void computeClusterBoundingBoxes(cstone::LocalIndex firstBody,
     const Tc yi = y[std::min(i, lastBody - 1)];
     const Tc zi = z[std::min(i, lastBody - 1)];
 
-    Vec3<Tc> bboxMin{xi, yi, zi};
-    Vec3<Tc> bboxMax{xi, yi, zi};
+    if constexpr (ClusterConfig::jSize <= 3)
+    {
+        util::array<Tc, 3> bboxMin{xi, yi, zi};
+        util::array<Tc, 3> bboxMax{xi, yi, zi};
+
+        const Tc vMin =
+            reduceArray<ClusterConfig::jSize, false>(bboxMin, [](auto a, auto b) { return std::min(a, b); });
+        const Tc vMax =
+            reduceArray<ClusterConfig::jSize, false>(bboxMax, [](auto a, auto b) { return std::max(a, b); });
+
+        const Tc center = (vMax + vMin) * Tc(0.5);
+        const Tc size   = (vMax - vMin) * Tc(0.5);
+
+        const unsigned idx = warp.thread_rank() % ClusterConfig::jSize;
+        if (idx < 3)
+        {
+            auto* box     = &bboxes[i / ClusterConfig::jSize];
+            Tc* centerPtr = (Tc*)box + idx;
+            Tc* sizePtr   = centerPtr + 3;
+            *centerPtr    = center;
+            *sizePtr      = size;
+        }
+    }
+    else
+    {
+        Vec3<Tc> bboxMin{xi, yi, zi};
+        Vec3<Tc> bboxMax{xi, yi, zi};
 
 #pragma unroll
-    for (unsigned offset = ClusterConfig::jSize / 2; offset >= 1; offset /= 2)
-    {
-        // TODO: fewer shuffles
-        bboxMin = {std::min(warp.shfl_down(bboxMin[0], offset), bboxMin[0]),
-                   std::min(warp.shfl_down(bboxMin[1], offset), bboxMin[1]),
-                   std::min(warp.shfl_down(bboxMin[2], offset), bboxMin[2])};
-        bboxMax = {std::max(warp.shfl_down(bboxMax[0], offset), bboxMax[0]),
-                   std::max(warp.shfl_down(bboxMax[1], offset), bboxMax[1]),
-                   std::max(warp.shfl_down(bboxMax[2], offset), bboxMax[2])};
+        for (unsigned offset = ClusterConfig::jSize / 2; offset >= 1; offset /= 2)
+        {
+            bboxMin = {std::min(warp.shfl_down(bboxMin[0], offset), bboxMin[0]),
+                       std::min(warp.shfl_down(bboxMin[1], offset), bboxMin[1]),
+                       std::min(warp.shfl_down(bboxMin[2], offset), bboxMin[2])};
+            bboxMax = {std::max(warp.shfl_down(bboxMax[0], offset), bboxMax[0]),
+                       std::max(warp.shfl_down(bboxMax[1], offset), bboxMax[1]),
+                       std::max(warp.shfl_down(bboxMax[2], offset), bboxMax[2])};
+        }
+
+        Vec3<Tc> center = (bboxMax + bboxMin) * Tc(0.5);
+        Vec3<Tc> size   = (bboxMax - bboxMin) * Tc(0.5);
+
+        if (i % ClusterConfig::jSize == 0 && i < lastBody) bboxes[i / ClusterConfig::jSize] = {center, size};
     }
-
-    Vec3<Tc> center = (bboxMax + bboxMin) * Tc(0.5);
-    Vec3<Tc> size   = (bboxMax - bboxMin) * Tc(0.5);
-
-    // TODO: coalesced stores
-    if (i % ClusterConfig::jSize == 0 && i < lastBody) bboxes[i / ClusterConfig::jSize] = {center, size};
 }
 
 template<unsigned warpsPerBlock,
