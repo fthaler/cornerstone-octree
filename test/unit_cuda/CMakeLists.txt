@@ -13,6 +13,7 @@ if(CMAKE_CUDA_COMPILER OR CMAKE_HIP_COMPILER)
             domain/domaindecomp_gpu.cu
             halos/gather_halos_gpu.cu
             neighbors/compressneighbors.cu
+            neighbors/reducearray.cu
             primitives/clz.cu
             primitives/primitives_gpu.cu
             primitives/warpscan.cu
