@@ -43,8 +43,6 @@
 #include "cstone/primitives/warpscan.cuh"
 #include "cstone/traversal/find_neighbors.cuh"
 
-#define CSTONE_USE_CUDA_PIPELINE 1
-
 namespace cstone
 {
 
@@ -474,11 +472,6 @@ __global__
     const Vec3<Tc>* __restrict__ centers             = tree.centers;
     const Vec3<Tc>* __restrict__ sizes               = tree.sizes;
 
-#if CSTONE_USE_CUDA_PIPELINE
-    __shared__ detail::Preloader<warpsPerBlock, BypassL1CacheOnLoads, Tc, ClusterConfig::jSize> xjPreloader,
-        yjPreloader, zjPreloader;
-#endif
-
     while (true)
     {
         unsigned target;
@@ -852,5 +845,3 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighb
 }
 
 } // namespace cstone
-
-#undef CSTONE_USE_CUDA_PIPELINE
