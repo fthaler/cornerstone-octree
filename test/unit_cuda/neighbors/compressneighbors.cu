@@ -159,7 +159,7 @@ TEST(CompressNeighborsGpu, warpStreamCompact)
     }
 }
 
-template<unsigned ItemsPerThread>
+template<unsigned ItemsPerThread, bool UseSharedMem = false>
 __global__ void rountrip(std::uint32_t const* __restrict__ input,
                          std::uint32_t* __restrict__ output,
                          unsigned n_input,
@@ -172,8 +172,11 @@ __global__ void rountrip(std::uint32_t const* __restrict__ input,
 
     warpCompressNeighbors<1, ItemsPerThread>(items, compressed, n_input);
     const unsigned nBytes = compressedNeighborsSize(compressed);
-    compressed[nBytes] = 0xff;
-    warpDecompressNeighbors<1, ItemsPerThread>(compressed, output, *n_output);
+    compressed[nBytes]    = 0xff;
+    if constexpr (UseSharedMem)
+        warpDecompressNeighborsShared<1, ItemsPerThread>(compressed, output, *n_output);
+    else
+        warpDecompressNeighbors<1, ItemsPerThread>(compressed, output, *n_output);
 }
 
 TEST(CompressNeighborsGpu, roundtrip)
@@ -185,6 +188,20 @@ TEST(CompressNeighborsGpu, roundtrip)
 
     rountrip<2><<<1, 32, sizeof(std::uint32_t) * nbs.size()>>>(rawPtr(nbs), rawPtr(roundtripped), nbs.size(),
                                                                rawPtr(output_nb_count));
+
+    ASSERT_EQ(output_nb_count[0], nbs.size());
+    EXPECT_EQ(roundtripped, nbs);
+}
+
+TEST(CompressNeighborsGpu, roundtripShared)
+{
+    thrust::device_vector<std::uint32_t> nbs = {300, 301, 302, 100, 101, 200, 400, 402, 403,
+                                                404, 405, 406, 407, 408, 409, 410, 411};
+    thrust::device_vector<std::uint32_t> roundtripped(nbs.size());
+    thrust::device_vector<unsigned> output_nb_count(1);
+
+    rountrip<2, true><<<1, 32, sizeof(std::uint32_t) * nbs.size()>>>(rawPtr(nbs), rawPtr(roundtripped), nbs.size(),
+                                                                     rawPtr(output_nb_count));
 
     ASSERT_EQ(output_nb_count[0], nbs.size());
     EXPECT_EQ(roundtripped, nbs);

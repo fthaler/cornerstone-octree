@@ -737,7 +737,8 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighb
     if constexpr (Compress)
     {
         warp.sync();
-        warpDecompressNeighbors<warpsPerBlock, NcMax / GpuConfig::warpSize>((char*)nidx, nidx, iClusterNeighborsCount);
+        warpDecompressNeighborsShared<warpsPerBlock, NcMax / GpuConfig::warpSize>((char*)nidx, nidx,
+                                                                                  iClusterNeighborsCount);
     }
 
     const Vec3<Tc> iPos = {x[i], y[i], z[i]};

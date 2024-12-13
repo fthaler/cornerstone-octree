@@ -335,4 +335,113 @@ warpDecompressNeighbors(const char* const __restrict__ input, std::uint32_t* con
         neighbors[ItemsPerThread * warp.thread_rank() + i] = neighborItems[i];
 }
 
+namespace detail
+{
+
+struct ThreadData
+{
+    std::uint8_t info, nnibbles, ones, item;
+};
+
+} // namespace detail
+
+template<unsigned NumWarps, unsigned ItemsPerThread>
+__device__ __forceinline__ void warpDecompressNeighborsShared(const char* const __restrict__ input,
+                                                              std::uint32_t* const __restrict__ neighbors,
+                                                              unsigned& n)
+{
+    namespace cg = cooperative_groups;
+    auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
+
+    const unsigned infoNibblesCount = *((unsigned*)input) >> 16;
+
+    if (infoNibblesCount == 0)
+    {
+        n = 0;
+        return;
+    }
+
+    const std::uint8_t* infoNibblesBuffer = (const std::uint8_t*)((unsigned*)input + 1);
+    const std::uint8_t* dataNibblesBuffer = infoNibblesBuffer + (infoNibblesCount + 1) / 2;
+
+    const auto readNibble = [](const std::uint8_t* buffer, unsigned index)
+    {
+        const std::uint8_t byte = buffer[index / 2];
+        return (byte >> ((index % 2) * 4)) & 0xf;
+    };
+
+    __shared__ detail::ThreadData warpDataBuffer[NumWarps][ItemsPerThread][GpuConfig::warpSize];
+    detail::ThreadData(*warpData)[GpuConfig::warpSize] = warpDataBuffer[warp.meta_group_rank()];
+
+#pragma unroll
+    for (unsigned i = 0; i < ItemsPerThread; ++i)
+    {
+        const unsigned index                 = ItemsPerThread * warp.thread_rank() + i;
+        warpData[i][warp.thread_rank()].info = index < infoNibblesCount ? readNibble(infoNibblesBuffer, index) : 0;
+    }
+
+    unsigned dataIndices[ItemsPerThread], neighborIndices[ItemsPerThread];
+#pragma unroll
+    for (unsigned i = 0; i < ItemsPerThread; ++i)
+    {
+        warpData[i][warp.thread_rank()].nnibbles =
+            warpData[i][warp.thread_rank()].info >= 9 ? 0 : warpData[i][warp.thread_rank()].info;
+        warpData[i][warp.thread_rank()].ones =
+            warpData[i][warp.thread_rank()].info >= 9 ? warpData[i][warp.thread_rank()].info - 9 : 0;
+        const unsigned index                 = ItemsPerThread * warp.thread_rank() + i;
+        warpData[i][warp.thread_rank()].item = index >= infoNibblesCount ? 0
+                                               : warpData[i][warp.thread_rank()].ones > 0
+                                                   ? warpData[i][warp.thread_rank()].ones
+                                                   : 1;
+        dataIndices[i]                       = warpData[i][warp.thread_rank()].nnibbles;
+        neighborIndices[i]                   = warpData[i][warp.thread_rank()].item;
+    }
+    detail::warpInclusiveSum<NumWarps, ItemsPerThread>(dataIndices);
+    detail::warpInclusiveSum<NumWarps, ItemsPerThread>(neighborIndices);
+    n = warp.shfl(neighborIndices[ItemsPerThread - 1], GpuConfig::warpSize - 1);
+    assert(n <= ItemsPerThread * GpuConfig::warpSize);
+
+#pragma unroll
+    for (unsigned i = 0; i < ItemsPerThread; ++i)
+    {
+        dataIndices[i] -= warpData[i][warp.thread_rank()].nnibbles;
+        neighborIndices[i] -= warpData[i][warp.thread_rank()].item;
+    }
+
+    std::uint32_t data[ItemsPerThread];
+#pragma unroll
+    for (unsigned i = 0; i < ItemsPerThread; ++i)
+    {
+        if (!warpData[i][warp.thread_rank()].ones)
+        {
+            data[i] = 0;
+            for (unsigned j = 0; j < warpData[i][warp.thread_rank()].nnibbles; ++j)
+                data[i] |= readNibble(dataNibblesBuffer, dataIndices[i] + j) << (4 * j);
+        }
+    }
+    warp.sync();
+
+#pragma unroll
+    for (unsigned i = 0; i < ItemsPerThread; ++i)
+    {
+        const unsigned neighborIndex = neighborIndices[i];
+        if (warpData[i][warp.thread_rank()].ones)
+        {
+            for (unsigned j = 0; j < warpData[i][warp.thread_rank()].ones; ++j)
+                neighbors[neighborIndex + j] = 1;
+        }
+        else { neighbors[neighborIndex] = data[i]; }
+    }
+
+    warp.sync();
+    std::uint32_t neighborItems[ItemsPerThread];
+#pragma unroll
+    for (unsigned i = 0; i < ItemsPerThread; ++i)
+        neighborItems[i] = neighbors[ItemsPerThread * warp.thread_rank() + i];
+    detail::warpInclusiveSum<NumWarps, ItemsPerThread>(neighborItems);
+#pragma unroll
+    for (unsigned i = 0; i < ItemsPerThread; ++i)
+        neighbors[ItemsPerThread * warp.thread_rank() + i] = neighborItems[i];
+}
+
 } // namespace cstone
