@@ -443,28 +443,32 @@ __global__
         const Vec3<Tc> iPos = {x[i], y[i], z[i]};
         const Th hi         = h[i];
 
-        Vec3<Tc> bbMin = {warpMin(iPos[0] - 2 * hi), warpMin(iPos[1] - 2 * hi), warpMin(iPos[2] - 2 * hi)};
-        Vec3<Tc> bbMax = {warpMax(iPos[0] + 2 * hi), warpMax(iPos[1] + 2 * hi), warpMax(iPos[2] + 2 * hi)};
+        Vec3<Tc> bbMin = {iPos[0] - 2 * hi, iPos[1] - 2 * hi, iPos[2] - 2 * hi};
+        Vec3<Tc> bbMax = {iPos[0] + 2 * hi, iPos[1] + 2 * hi, iPos[2] + 2 * hi};
+        Vec3<Tc> iClusterCenter, iClusterSize;
+        if constexpr (ClusterConfig::iSize == 1)
+        {
+            iClusterCenter = (bbMax + bbMin) * Tc(0.5);
+            iClusterSize   = (bbMax - bbMin) * Tc(0.5);
+        }
+#pragma unroll
+        for (unsigned n = 1, s = 0; n < GpuConfig::warpSize; n *= 2, ++s)
+        {
+            bbMin[0] = std::min(warp.shfl_xor(bbMin[0], 1 << s), bbMin[0]);
+            bbMin[1] = std::min(warp.shfl_xor(bbMin[1], 1 << s), bbMin[1]);
+            bbMin[2] = std::min(warp.shfl_xor(bbMin[2], 1 << s), bbMin[2]);
+            bbMax[0] = std::max(warp.shfl_xor(bbMax[0], 1 << s), bbMax[0]);
+            bbMax[1] = std::max(warp.shfl_xor(bbMax[1], 1 << s), bbMax[1]);
+            bbMax[2] = std::max(warp.shfl_xor(bbMax[2], 1 << s), bbMax[2]);
+            if (n == ClusterConfig::iSize / 2)
+            {
+                iClusterCenter = (bbMax + bbMin) * Tc(0.5);
+                iClusterSize   = (bbMax - bbMin) * Tc(0.5);
+            }
+        }
 
         const Vec3<Tc> targetCenter = (bbMax + bbMin) * Tc(0.5);
         const Vec3<Tc> targetSize   = (bbMax - bbMin) * Tc(0.5);
-
-        // TODO: combine with warpMin above!
-        Vec3<Tc> iClusterBbMin = {iPos[0] - 2 * hi, iPos[1] - 2 * hi, iPos[2] - 2 * hi};
-        Vec3<Tc> iClusterBbMax = {iPos[0] + 2 * hi, iPos[1] + 2 * hi, iPos[2] + 2 * hi};
-#pragma unroll
-        for (unsigned offset = ClusterConfig::iSize / 2; offset >= 1; offset /= 2)
-        {
-            iClusterBbMin[0] = std::min(warp.shfl_down(iClusterBbMin[0], offset), iClusterBbMin[0]);
-            iClusterBbMin[1] = std::min(warp.shfl_down(iClusterBbMin[1], offset), iClusterBbMin[1]);
-            iClusterBbMin[2] = std::min(warp.shfl_down(iClusterBbMin[2], offset), iClusterBbMin[2]);
-            iClusterBbMax[0] = std::max(warp.shfl_down(iClusterBbMax[0], offset), iClusterBbMax[0]);
-            iClusterBbMax[1] = std::max(warp.shfl_down(iClusterBbMax[1], offset), iClusterBbMax[1]);
-            iClusterBbMax[2] = std::max(warp.shfl_down(iClusterBbMax[2], offset), iClusterBbMax[2]);
-        }
-
-        const Vec3<Tc> iClusterCenter = (iClusterBbMax + iClusterBbMin) * Tc(0.5);
-        const Vec3<Tc> iClusterSize   = (iClusterBbMax - iClusterBbMin) * Tc(0.5);
 
         const auto distSq = [&](const Vec3<Tc>& jPos)
         { return distanceSq<UsePbc>(jPos[0], jPos[1], jPos[2], iPos[0], iPos[1], iPos[2], box); };
