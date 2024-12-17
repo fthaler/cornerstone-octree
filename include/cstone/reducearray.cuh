@@ -29,6 +29,8 @@
  * @author Felix Thaler <thaler@cscs.ch>
  */
 
+#include <tuple>
+
 #include <cooperative_groups.h>
 
 #include "cstone/util/array.hpp"
