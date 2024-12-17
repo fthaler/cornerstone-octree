@@ -44,9 +44,8 @@
 namespace cstone
 {
 
-template<unsigned NumWarps>
 __device__ __forceinline__ void
-warpCompressNeighbors2(const std::uint32_t* __restrict__ neighbors, char* __restrict__ output, const unsigned n)
+warpCompressNeighbors(const std::uint32_t* __restrict__ neighbors, char* __restrict__ output, const unsigned n)
 {
     // TODO: add a buffer size limit, currently we just overflow
 
@@ -126,14 +125,13 @@ warpCompressNeighbors2(const std::uint32_t* __restrict__ neighbors, char* __rest
     if (warp.thread_rank() == 0) *((unsigned*)output) = totalBytes | (n << 16);
 }
 
-__device__ __forceinline__ unsigned compressedNeighborsSize2(const char* const input)
+__device__ __forceinline__ unsigned compressedNeighborsSize(const char* const input)
 {
     return *((const unsigned*)input) & 0xffff;
 }
 
-template<unsigned NumWarps>
 __device__ __forceinline__ void
-warpDecompressNeighbors2(const char* const __restrict__ input, std::uint32_t* const __restrict__ neighbors, unsigned& n)
+warpDecompressNeighbors(const char* const __restrict__ input, std::uint32_t* const __restrict__ neighbors, unsigned& n)
 {
     namespace cg = cooperative_groups;
     auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());

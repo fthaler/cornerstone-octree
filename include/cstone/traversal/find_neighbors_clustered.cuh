@@ -249,7 +249,7 @@ __device__ inline void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
         }
         const unsigned uniqueNeighbors = warp.shfl(totalUnique, GpuConfig::warpSize - 1);
         assert(uniqueNeighbors < NcMax);
-        warpCompressNeighbors2<warpsPerBlock>(iClusterNidx, (char*)targetIClusterNidx, uniqueNeighbors);
+        warpCompressNeighbors(iClusterNidx, (char*)targetIClusterNidx, uniqueNeighbors);
     }
     else
     {
@@ -745,8 +745,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighb
 
     if constexpr (Compress)
     {
-        warpDecompressNeighbors2<warpsPerBlock>((const char*)&nidxClustered[iCluster * compressedNcMax], nidx,
-                                                iClusterNeighborsCount);
+        warpDecompressNeighbors((const char*)&nidxClustered[iCluster * compressedNcMax], nidx, iClusterNeighborsCount);
     }
     else
     {
