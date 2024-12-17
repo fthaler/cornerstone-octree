@@ -776,6 +776,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
 
     const double r                  = 2 * h[0];
     const double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * n;
+    std::cout << "Number of particles: " << n << std::endl;
     std::cout << "Expected average number of neighbors: " << expected_neighbors << std::endl;
 
     int ngmax = 256;
