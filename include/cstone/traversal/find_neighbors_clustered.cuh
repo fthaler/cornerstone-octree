@@ -262,8 +262,8 @@ __device__ __forceinline__ void deduplicateAndStoreNeighbors(unsigned* iClusterN
 
 constexpr __forceinline__ bool includeNbSymmetric(unsigned i, unsigned j)
 {
-    constexpr unsigned block_size = 32;
-    const bool s                  = (i / block_size) % 2 == (j / block_size) % 2;
+    constexpr unsigned blockSize = 32;
+    const bool s                 = (i / blockSize) % 2 == (j / blockSize) % 2;
     return i < j ? s : !s;
 }
 
