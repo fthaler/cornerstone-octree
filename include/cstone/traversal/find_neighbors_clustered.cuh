@@ -101,7 +101,7 @@ __device__ __forceinline__ void tupleForeach(F&& f, Tuple&& tuple, Tuples&&... t
 }
 
 template<class T0, class... T>
-__device__ __forceinline__ T0 dynamicTupleIndex(std::tuple<T0, T...> const& tuple, std::size_t index)
+__device__ __forceinline__ T0 dynamicTupleGet(std::tuple<T0, T...> const& tuple, std::size_t index)
 {
     T0 res;
     std::size_t i = 0;
@@ -127,7 +127,7 @@ storeTupleJSum(std::tuple<T0, T...>& tuple, std::tuple<T0*, T*...> const& ptrs, 
         const T0 res = reduceTuple<ClusterConfig::iSize, false>(tuple, std::plus<T0>());
         if ((block.thread_index().x <= sizeof...(T)) & store)
         {
-            T0* ptr = dynamicTupleIndex(ptrs, block.thread_index().x);
+            T0* ptr = dynamicTupleGet(ptrs, block.thread_index().x);
             atomicAdd(ptr, Symmetric * res);
         }
     }
@@ -155,7 +155,7 @@ storeTupleISum(std::tuple<T0, T...>& tuple, std::tuple<T0*, T*...> const& ptrs, 
         const T0 res = reduceTuple<GpuConfig::warpSize / ClusterConfig::iSize, true>(tuple, std::plus<T0>());
         if ((block.thread_index().y <= sizeof...(T)) & store)
         {
-            T0* ptr = dynamicTupleIndex(ptrs, block.thread_index().y);
+            T0* ptr = dynamicTupleGet(ptrs, block.thread_index().y);
             if constexpr (Symmetric)
                 atomicAdd(ptr, res);
             else
