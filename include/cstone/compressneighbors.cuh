@@ -50,7 +50,7 @@ warpCompressNeighbors(const std::uint32_t* __restrict__ neighbors, char* __restr
     // TODO: add a buffer size limit, currently we just overflow
 
     namespace cg = cooperative_groups;
-    auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
+    const auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
 
     if (n == 0)
     {
@@ -70,16 +70,6 @@ warpCompressNeighbors(const std::uint32_t* __restrict__ neighbors, char* __restr
             byte |= (value << ((index % 2) * 4));
             data[index / 2] = byte;
         }
-    };
-
-    auto const print = [&](unsigned value)
-    {
-        for (unsigned t = 0; t < GpuConfig::warpSize; ++t)
-        {
-            unsigned v = warp.shfl(value, t);
-            if (warp.thread_rank() == 0) printf("%u ", v);
-        }
-        if (warp.thread_rank() == 0) printf("\n");
     };
 
     unsigned dataSize = 0;
@@ -134,7 +124,7 @@ __device__ __forceinline__ void
 warpDecompressNeighbors(const char* const __restrict__ input, std::uint32_t* const __restrict__ neighbors, unsigned& n)
 {
     namespace cg = cooperative_groups;
-    auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
+    const auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
 
     n = *((unsigned*)input) >> 16;
 
@@ -145,7 +135,7 @@ warpDecompressNeighbors(const char* const __restrict__ input, std::uint32_t* con
 
     const auto readDataNibble = [data](unsigned index)
     {
-        const std::uint8_t byte = data[index / 2];
+        const unsigned byte = data[index / 2];
         return (byte >> ((index % 2) * 4)) & 0xf;
     };
 
