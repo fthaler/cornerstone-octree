@@ -66,4 +66,12 @@ constexpr __device__ __forceinline__ T reduceArray(util::array<T, ArraySize> in,
     return in[0];
 }
 
+template<unsigned ReductionSize, bool Interleave, class T, class... Ts, class Op>
+constexpr __device__ __forceinline__ T reduceTuple(std::tuple<T, Ts...> const& in, Op const& op)
+{
+    static_assert(std::conjunction_v<std::is_same<T, Ts>...>);
+    auto inArray = std::apply([](auto const&... args) { return util::array<T, sizeof...(Ts) + 1>{args...}; }, in);
+    return reduceArray<ReductionSize, Interleave>(inArray, op);
+}
+
 } // namespace cstone

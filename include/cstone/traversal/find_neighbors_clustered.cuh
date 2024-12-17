@@ -101,14 +101,6 @@ __device__ inline void tupleForeach(F&& f, Tuple&& tuple, Tuples&&... tuples)
 }
 
 template<class T0, class... T>
-__device__ inline util::array<T0, sizeof...(T) + 1> tupleToArray(std::tuple<T0, T...> const& tuple)
-{
-    util::array<T0, sizeof...(T) + 1> res;
-    tupleForeach([](auto const& src, auto& dst) { dst = src; }, tuple, res);
-    return res;
-}
-
-template<class T0, class... T>
 __device__ inline T0 dynamicTupleIndex(std::tuple<T0, T...> const& tuple, std::size_t index)
 {
     T0 res;
@@ -131,7 +123,7 @@ __device__ inline void storeTupleJSum(std::tuple<T0, T...>& tuple, std::tuple<T0
 
     if constexpr (std::conjunction_v<std::is_same<T0, T>...> && sizeof...(T) < ClusterConfig::iSize)
     {
-        const T0 res = reduceArray<ClusterConfig::iSize, false>(tupleToArray(tuple), std::plus<T0>());
+        const T0 res = reduceTuple<ClusterConfig::iSize, false>(tuple, std::plus<T0>());
         if ((block.thread_index().x <= sizeof...(T)) & store)
         {
             T0* ptr = dynamicTupleIndex(ptrs, block.thread_index().x);
@@ -158,8 +150,7 @@ __device__ inline void storeTupleISum(std::tuple<T0, T...>& tuple, std::tuple<T0
 
     if constexpr (std::conjunction_v<std::is_same<T0, T>...> && sizeof...(T) < ClusterConfig::jSize)
     {
-        const T0 res =
-            reduceArray<GpuConfig::warpSize / ClusterConfig::iSize, true>(tupleToArray(tuple), std::plus<T0>());
+        const T0 res = reduceTuple<GpuConfig::warpSize / ClusterConfig::iSize, true>(tuple, std::plus<T0>());
         if ((block.thread_index().y <= sizeof...(T)) & store)
         {
             T0* ptr = dynamicTupleIndex(ptrs, block.thread_index().y);
