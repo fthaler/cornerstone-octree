@@ -108,6 +108,20 @@ __device__ inline util::array<T0, sizeof...(T) + 1> tupleToArray(std::tuple<T0, 
     return res;
 }
 
+template<class T0, class... T>
+__device__ inline T0 dynamicTupleIndex(std::tuple<T0, T...> const& tuple, std::size_t index)
+{
+    T0 res;
+    std::size_t i = 0;
+    tupleForeach(
+        [&](auto const& src)
+        {
+            if (i++ == index) res = src;
+        },
+        tuple);
+    return res;
+}
+
 template<int Symmetric, class T0, class... T>
 __device__ inline void storeTupleJSum(std::tuple<T0, T...>& tuple, std::tuple<T0*, T*...> const& ptrs, bool store)
 {
@@ -120,7 +134,7 @@ __device__ inline void storeTupleJSum(std::tuple<T0, T...>& tuple, std::tuple<T0
         const T0 res = reduceArray<ClusterConfig::iSize, false>(tupleToArray(tuple), std::plus<T0>());
         if ((block.thread_index().x <= sizeof...(T)) & store)
         {
-            T0* ptr = tupleToArray(ptrs)[block.thread_index().x];
+            T0* ptr = dynamicTupleIndex(ptrs, block.thread_index().x);
             atomicAdd(ptr, Symmetric * res);
         }
     }
@@ -148,7 +162,7 @@ __device__ inline void storeTupleISum(std::tuple<T0, T...>& tuple, std::tuple<T0
             reduceArray<GpuConfig::warpSize / ClusterConfig::iSize, true>(tupleToArray(tuple), std::plus<T0>());
         if ((block.thread_index().y <= sizeof...(T)) & store)
         {
-            T0* ptr = tupleToArray(ptrs)[block.thread_index().y];
+            T0* ptr = dynamicTupleIndex(ptrs, block.thread_index().y);
             if constexpr (Symmetric)
                 atomicAdd(ptr, res);
             else
