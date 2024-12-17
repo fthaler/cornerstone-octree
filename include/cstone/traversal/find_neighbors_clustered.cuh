@@ -179,7 +179,7 @@ storeTupleISum(std::tuple<T0, T...>& tuple, std::tuple<T0*, T*...> const& ptrs, 
     }
 }
 
-template<unsigned warpsPerBlock, unsigned NcMax, bool Compress>
+template<unsigned warpsPerBlock, unsigned NcMax, unsigned NcMaxExtra, bool Compress>
 __device__ __forceinline__ void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
                                                              const unsigned iClusterNc,
                                                              unsigned* targetIClusterNidx,
@@ -189,7 +189,7 @@ __device__ __forceinline__ void deduplicateAndStoreNeighbors(unsigned* iClusterN
     const auto block = cg::this_thread_block();
     const auto warp  = cg::tiled_partition<GpuConfig::warpSize>(block);
 
-    constexpr unsigned itemsPerWarp = NcMax / GpuConfig::warpSize;
+    constexpr unsigned itemsPerWarp = (NcMax + NcMaxExtra) / GpuConfig::warpSize;
     unsigned items[itemsPerWarp];
 #pragma unroll
     for (unsigned i = 0; i < itemsPerWarp; ++i)
@@ -341,6 +341,7 @@ template<unsigned warpsPerBlock,
          unsigned NcMax            = 256,
          bool Compress             = false,
          bool Symmetric            = false,
+         unsigned NcMaxExtra       = (NcMax / 4 + GpuConfig::warpSize - 1) / GpuConfig::warpSize * GpuConfig::warpSize,
          class Tc,
          class Th,
          class KeyType>
@@ -359,6 +360,7 @@ __global__
                                               int* const globalPool)
 {
     static_assert(NcMax % GpuConfig::warpSize == 0, "NcMax must be divisible by warp size");
+    static_assert((NcMax + NcMaxExtra) % GpuConfig::warpSize == 0, "NcMax + NcMaxExtra must be divisible by warp size");
     namespace cg = cooperative_groups;
 
     const auto grid  = cg::this_grid();
@@ -371,7 +373,7 @@ __global__
     const auto warp = cg::tiled_partition<GpuConfig::warpSize>(block);
 
     volatile __shared__ int sharedPool[GpuConfig::warpSize * warpsPerBlock];
-    __shared__ unsigned nidx[warpsPerBlock][GpuConfig::warpSize / ClusterConfig::iSize][NcMax];
+    __shared__ unsigned nidx[warpsPerBlock][GpuConfig::warpSize / ClusterConfig::iSize][NcMax + NcMaxExtra];
 
     assert(firstBody == 0); // TODO: other cases
     const unsigned numTargets   = iceil(lastBody, GpuConfig::warpSize);
@@ -460,7 +462,8 @@ __global__
                     norm2(minDistance(iClusterCenterC, iClusterSizeC, jClusterCenter, jClusterSize, box)) == 0;
 
                 const unsigned nbIndex = exclusiveScanBool(isNeighbor);
-                if (isNeighbor & ncC + nbIndex < NcMax) nidx[block.thread_index().z][c][ncC + nbIndex] = jCluster;
+                if (isNeighbor & ncC + nbIndex < NcMax + NcMaxExtra)
+                    nidx[block.thread_index().z][c][ncC + nbIndex] = jCluster;
                 const unsigned newNbs = warp.shfl(nbIndex + isNeighbor, GpuConfig::warpSize - 1);
                 if (block.thread_index().y == c) nc += newNbs;
             }
@@ -606,10 +609,11 @@ __global__
             const GpuConfig::ThreadMask jBlockMask =
                 threadMask << (threadsPerInteraction * (warp.thread_rank() / threadsPerInteraction));
             unsigned prunedNcc = 0;
-            for (unsigned n = 0; n < imin(ncc, NcMax); n += jBlocksPerWarp)
+            for (unsigned n = 0; n < imin(ncc, NcMax + NcMaxExtra); n += jBlocksPerWarp)
             {
-                const unsigned nb       = n + block.thread_index().y / ClusterConfig::jSize;
-                const unsigned jCluster = nb < imin(ncc, NcMax) ? nidx[block.thread_index().z][c][nb] : ~0u;
+                const unsigned nb = n + block.thread_index().y / ClusterConfig::jSize;
+                const unsigned jCluster =
+                    nb < imin(ncc, NcMax + NcMaxExtra) ? nidx[block.thread_index().z][c][nb] : ~0u;
                 const unsigned j    = jCluster * ClusterConfig::jSize + block.thread_index().y % ClusterConfig::jSize;
                 const Vec3<Tc> jPos = j < lastBody
                                           ? Vec3<Tc>{x[j], y[j], z[j]}
@@ -633,7 +637,7 @@ __global__
 
             constexpr unsigned long nbStoragePerICluster =
                 Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
-            detail::deduplicateAndStoreNeighbors<warpsPerBlock, NcMax, Compress>(
+            detail::deduplicateAndStoreNeighbors<warpsPerBlock, NcMax, NcMaxExtra, Compress>(
                 nidx[block.thread_index().z][c], ncc, &nidxClustered[ic * nbStoragePerICluster], &ncClustered[ic]);
         }
     }

@@ -46,7 +46,7 @@
 
 using namespace cstone;
 
-constexpr unsigned ncmax = 256 + 64;
+constexpr unsigned ncmax = 256;
 
 /* smoothing kernel evaluation functionality borrowed from SPH-EXA */
 
