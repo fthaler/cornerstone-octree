@@ -58,50 +58,50 @@ namespace detail
 {
 
 template<std::size_t I, class... Ts>
-__device__ inline auto& tupleGetOrScalar(std::tuple<Ts...>& t)
+__device__ __forceinline__ auto& tupleGetOrScalar(std::tuple<Ts...>& t)
 {
     return std::get<I>(t);
 }
 
 template<std::size_t I, class... Ts>
-__device__ inline auto const& tupleGetOrScalar(std::tuple<Ts...> const& t)
+__device__ __forceinline__ auto const& tupleGetOrScalar(std::tuple<Ts...> const& t)
 {
     return std::get<I>(t);
 }
 
 template<std::size_t I, class T, std::size_t N>
-__device__ inline T& tupleGetOrScalar(util::array<T, N>& a)
+__device__ __forceinline__ T& tupleGetOrScalar(util::array<T, N>& a)
 {
     return a[I];
 }
 
 template<std::size_t I, class T>
-__device__ inline T const& tupleGetOrScalar(T const& t)
+__device__ __forceinline__ T const& tupleGetOrScalar(T const& t)
 {
     return t;
 }
 
 template<std::size_t I, class F, class... Tuples>
-__device__ inline void tupleForeachElement(F&& f, Tuples&&... tuples)
+__device__ __forceinline__ void tupleForeachElement(F&& f, Tuples&&... tuples)
 {
     f(tupleGetOrScalar<I>(std::forward<Tuples>(tuples))...);
 }
 
 template<std::size_t... Is, class F, class... Tuples>
-__device__ inline void tupleForeachImpl(std::index_sequence<Is...>, F&& f, Tuples&&... tuples)
+__device__ __forceinline__ void tupleForeachImpl(std::index_sequence<Is...>, F&& f, Tuples&&... tuples)
 {
     (..., (tupleForeachElement<Is>(std::forward<F>(f), std::forward<Tuples>(tuples)...)));
 }
 
 template<class F, class Tuple, class... Tuples>
-__device__ inline void tupleForeach(F&& f, Tuple&& tuple, Tuples&&... tuples)
+__device__ __forceinline__ void tupleForeach(F&& f, Tuple&& tuple, Tuples&&... tuples)
 {
     tupleForeachImpl(std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>(), std::forward<F>(f),
                      std::forward<Tuple>(tuple), std::forward<Tuples>(tuples)...);
 }
 
 template<class T0, class... T>
-__device__ inline T0 dynamicTupleIndex(std::tuple<T0, T...> const& tuple, std::size_t index)
+__device__ __forceinline__ T0 dynamicTupleIndex(std::tuple<T0, T...> const& tuple, std::size_t index)
 {
     T0 res;
     std::size_t i = 0;
@@ -115,7 +115,8 @@ __device__ inline T0 dynamicTupleIndex(std::tuple<T0, T...> const& tuple, std::s
 }
 
 template<int Symmetric, class T0, class... T>
-__device__ inline void storeTupleJSum(std::tuple<T0, T...>& tuple, std::tuple<T0*, T*...> const& ptrs, bool store)
+__device__ __forceinline__ void
+storeTupleJSum(std::tuple<T0, T...>& tuple, std::tuple<T0*, T*...> const& ptrs, bool store)
 {
     const auto block = cooperative_groups::this_thread_block();
     assert(block.dim_threads().x == ClusterConfig::iSize);
@@ -142,7 +143,8 @@ __device__ inline void storeTupleJSum(std::tuple<T0, T...>& tuple, std::tuple<T0
 }
 
 template<bool Symmetric, class T0, class... T>
-__device__ inline void storeTupleISum(std::tuple<T0, T...>& tuple, std::tuple<T0*, T*...> const& ptrs, bool store)
+__device__ __forceinline__ void
+storeTupleISum(std::tuple<T0, T...>& tuple, std::tuple<T0*, T*...> const& ptrs, bool store)
 {
     const auto block = cooperative_groups::this_thread_block();
     assert(block.dim_threads().x == ClusterConfig::iSize);
@@ -178,10 +180,10 @@ __device__ inline void storeTupleISum(std::tuple<T0, T...>& tuple, std::tuple<T0
 }
 
 template<unsigned warpsPerBlock, unsigned NcMax, bool Compress>
-__device__ inline void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
-                                                    const unsigned iClusterNc,
-                                                    unsigned* targetIClusterNidx,
-                                                    unsigned* targetIClusterNc)
+__device__ __forceinline__ void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
+                                                             const unsigned iClusterNc,
+                                                             unsigned* targetIClusterNidx,
+                                                             unsigned* targetIClusterNc)
 {
     namespace cg     = cooperative_groups;
     const auto block = cg::this_thread_block();
@@ -258,7 +260,7 @@ __device__ inline void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
     }
 }
 
-constexpr inline bool includeNbSymmetric(unsigned i, unsigned j)
+constexpr __forceinline__ bool includeNbSymmetric(unsigned i, unsigned j)
 {
     constexpr unsigned block_size = 32;
     const bool s                  = (i / block_size) % 2 == (j / block_size) % 2;
@@ -270,7 +272,7 @@ struct alignas(16) Preloader
 {
     T buffer[warpsPerBlock][N];
 
-    inline __device__ void
+    __forceinline__ __device__ void
     startLoad(const T* __restrict__ ptr, cuda::pipeline<cuda::thread_scope_thread>& pipeline, unsigned n = N)
     {
         namespace cg  = cooperative_groups;
@@ -305,7 +307,7 @@ struct alignas(16) Preloader
         }
     }
 
-    inline __device__ T& operator[](unsigned index)
+    __forceinline__ __device__ T& operator[](unsigned index)
     {
         namespace cg = cooperative_groups;
         auto block   = cg::this_thread_block();
