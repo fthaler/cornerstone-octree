@@ -267,55 +267,6 @@ constexpr __forceinline__ bool includeNbSymmetric(unsigned i, unsigned j)
     return i < j ? s : !s;
 }
 
-template<unsigned warpsPerBlock, bool BypassL1CacheOnLoads, class T, unsigned N>
-struct alignas(16) Preloader
-{
-    T buffer[warpsPerBlock][N];
-
-    __forceinline__ __device__ void
-    startLoad(const T* __restrict__ ptr, cuda::pipeline<cuda::thread_scope_thread>& pipeline, unsigned n = N)
-    {
-        namespace cg  = cooperative_groups;
-        auto block    = cg::this_thread_block();
-        auto warp     = cg::tiled_partition<GpuConfig::warpSize>(block);
-        auto thread   = cg::this_thread();
-        T* warpBuffer = buffer[warp.meta_group_rank()];
-        if constexpr (BypassL1CacheOnLoads && (sizeof(T) * N) % 16 == 0)
-        {
-            constexpr unsigned numTPer16Bytes = 16 / sizeof(T);
-#pragma unroll
-            for (unsigned i = warp.thread_rank(); i < N / numTPer16Bytes; i += GpuConfig::warpSize)
-            {
-                if (i < (n + numTPer16Bytes - 1) / numTPer16Bytes)
-                {
-                    cuda::memcpy_async(thread, &warpBuffer[i * numTPer16Bytes], &ptr[i * numTPer16Bytes],
-                                       cuda::aligned_size_t<16>(16), pipeline);
-                }
-            }
-        }
-        else
-        {
-#pragma unroll
-            for (unsigned i = warp.thread_rank(); i < N; i += GpuConfig::warpSize)
-            {
-                if (i < n)
-                {
-                    cuda::memcpy_async(thread, &warpBuffer[i], &ptr[i], cuda::aligned_size_t<sizeof(T)>(sizeof(T)),
-                                       pipeline);
-                }
-            }
-        }
-    }
-
-    __forceinline__ __device__ T& operator[](unsigned index)
-    {
-        namespace cg = cooperative_groups;
-        auto block   = cg::this_thread_block();
-        auto warp    = cg::tiled_partition<GpuConfig::warpSize>(block);
-        return buffer[warp.meta_group_rank()][index];
-    }
-};
-
 } // namespace detail
 
 template<class Tc>
