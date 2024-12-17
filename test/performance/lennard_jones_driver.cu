@@ -908,7 +908,7 @@ buildNeighborhoodClustered(const std::size_t firstBody,
     }
     printf("Memory usage of neighborhood data: %.2f MB\n",
            (sizeof(Sci) * sciSorted.size() + sizeof(CjPacked) * cjPacked.size() + sizeof(Excl) * excl.size()) / 1.0e6);
-    printf("%lu %lu %lu\n", sizeof(Sci), sizeof(CjPacked), sizeof(Excl));
+    printf("ncsci: %lu, ncjPacked: %lu, nexcl: %lu\n", sciSorted.size(), cjPacked.size(), excl.size());
 
     return {sciSorted, cjPacked, excl};
 }
