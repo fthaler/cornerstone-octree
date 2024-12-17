@@ -1108,7 +1108,7 @@ buildNeighborhoodClustered(std::size_t firstBody,
     if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
     thrust::device_vector<int> globalPool(poolSize);
     printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * clusterNeighbors.size() + sizeof(unsigned) * clusterNeighborsCount.size()) / 1.0e6);
+           (sizeof(unsigned) * clusterNeighbors.size() + sizeof(unsigned) * clusterNeighborsCount.size()) / 1.0e6);
 
     computeClusterBoundingBoxes<<<iceil(lastBody, 128), 128>>>(firstBody, lastBody, x, y, z, rawPtr(jClusterBboxes));
     checkGpuErrors(cudaGetLastError());
