@@ -1162,7 +1162,7 @@ void computeLjClustered(
         return std::make_tuple(ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
     };
 
-    constexpr unsigned threads       = 64;
+    constexpr unsigned threads       = 128;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     const dim3 blockSize     = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
     const unsigned numBlocks = iceil(lastBody, ClusterConfig::iSize * warpsPerBlock);

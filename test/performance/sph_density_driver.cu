@@ -752,7 +752,7 @@ void computeDensityClustered(
         return i == j ? mj : w * mj;
     };
 
-    constexpr unsigned threads       = 256;
+    constexpr unsigned threads       = 128;
     constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
     dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
     numBlocks      = iceil(lastBody, ClusterConfig::iSize * warpsPerBlock);
