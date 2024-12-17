@@ -49,7 +49,7 @@ namespace cstone
 
 struct ClusterConfig
 {
-    static constexpr unsigned iSize                   = 8;
+    static constexpr unsigned iSize                   = 4;
     static constexpr unsigned jSize                   = 4;
     static constexpr unsigned expectedCompressionRate = 10;
 };
