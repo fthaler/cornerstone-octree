@@ -316,23 +316,32 @@ warpDecompressNeighbors(const char* const __restrict__ input, std::uint32_t* con
     for (unsigned i = 0; i < ItemsPerThread; ++i)
     {
         const unsigned neighborIndex = neighborIndices[i];
-        if (ones[i])
+        if (neighborIndex < n)
         {
-            for (unsigned j = 0; j < ones[i]; ++j)
-                neighbors[neighborIndex + j] = 1;
+            if (ones[i])
+            {
+                for (unsigned j = 0; j < ones[i]; ++j)
+                    neighbors[neighborIndex + j] = 1;
+            }
+            else { neighbors[neighborIndex] = data[i]; }
         }
-        else { neighbors[neighborIndex] = data[i]; }
     }
 
     warp.sync();
     std::uint32_t neighborItems[ItemsPerThread];
 #pragma unroll
     for (unsigned i = 0; i < ItemsPerThread; ++i)
-        neighborItems[i] = neighbors[ItemsPerThread * warp.thread_rank() + i];
+    {
+        const unsigned nb = ItemsPerThread * warp.thread_rank() + i;
+        neighborItems[i]  = nb < n ? neighbors[nb] : 0;
+    }
     detail::warpInclusiveSum<NumWarps, ItemsPerThread>(neighborItems);
 #pragma unroll
     for (unsigned i = 0; i < ItemsPerThread; ++i)
-        neighbors[ItemsPerThread * warp.thread_rank() + i] = neighborItems[i];
+    {
+        const unsigned nb = ItemsPerThread * warp.thread_rank() + i;
+        if (nb < n) neighbors[nb] = neighborItems[i];
+    }
 }
 
 namespace detail
@@ -425,23 +434,32 @@ __device__ __forceinline__ void warpDecompressNeighborsShared(const char* const 
     for (unsigned i = 0; i < ItemsPerThread; ++i)
     {
         const unsigned neighborIndex = neighborIndices[i];
-        if (warpData[i][warp.thread_rank()].ones)
+        if (neighborIndex < n)
         {
-            for (unsigned j = 0; j < warpData[i][warp.thread_rank()].ones; ++j)
-                neighbors[neighborIndex + j] = 1;
+            if (warpData[i][warp.thread_rank()].ones)
+            {
+                for (unsigned j = 0; j < warpData[i][warp.thread_rank()].ones; ++j)
+                    neighbors[neighborIndex + j] = 1;
+            }
+            else { neighbors[neighborIndex] = data[i]; }
         }
-        else { neighbors[neighborIndex] = data[i]; }
     }
 
     warp.sync();
     std::uint32_t neighborItems[ItemsPerThread];
 #pragma unroll
     for (unsigned i = 0; i < ItemsPerThread; ++i)
-        neighborItems[i] = neighbors[ItemsPerThread * warp.thread_rank() + i];
+    {
+        const unsigned nb = ItemsPerThread * warp.thread_rank() + i;
+        neighborItems[i]  = nb < n ? neighbors[nb] : 0;
+    }
     detail::warpInclusiveSum<NumWarps, ItemsPerThread>(neighborItems);
 #pragma unroll
     for (unsigned i = 0; i < ItemsPerThread; ++i)
-        neighbors[ItemsPerThread * warp.thread_rank() + i] = neighborItems[i];
+    {
+        const unsigned nb = ItemsPerThread * warp.thread_rank() + i;
+        if (nb < n) neighbors[nb] = neighborItems[i];
+    }
 }
 
 } // namespace cstone
