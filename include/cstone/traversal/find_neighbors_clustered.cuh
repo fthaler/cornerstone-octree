@@ -249,11 +249,7 @@ __device__ inline void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
         }
         const unsigned uniqueNeighbors = warp.shfl(totalUnique, GpuConfig::warpSize - 1);
         assert(uniqueNeighbors < NcMax);
-#pragma unroll
-        for (unsigned i = 0; i < itemsPerWarp; ++i)
-            items[i] = iClusterNidx[itemsPerWarp * warp.thread_rank() + i];
-
-        warpCompressNeighbors<warpsPerBlock, itemsPerWarp>(items, (char*)targetIClusterNidx, uniqueNeighbors);
+        warpCompressNeighbors2<warpsPerBlock>(iClusterNidx, (char*)targetIClusterNidx, uniqueNeighbors);
     }
     else
     {
@@ -745,21 +741,19 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighb
     unsigned* const nidx               = nidxBuffer[block.thread_index().z];
     constexpr unsigned compressedNcMax = Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
 
-    unsigned iClusterNeighborsCount =
-        Compress ? (compressedNeighborsSize((const char*)&nidxClustered[iCluster * compressedNcMax]) +
-                    sizeof(unsigned) - 1) /
-                       sizeof(unsigned)
-                 : imin(ncClustered[iCluster], NcMax);
-
-#pragma unroll
-    for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
-        nidx[nb] = nidxClustered[iCluster * compressedNcMax + nb];
+    unsigned iClusterNeighborsCount;
 
     if constexpr (Compress)
     {
-        warp.sync();
-        warpDecompressNeighborsShared<warpsPerBlock, NcMax / GpuConfig::warpSize>((char*)nidx, nidx,
-                                                                                  iClusterNeighborsCount);
+        warpDecompressNeighbors2<warpsPerBlock>((const char*)&nidxClustered[iCluster * compressedNcMax], nidx,
+                                                iClusterNeighborsCount);
+    }
+    else
+    {
+        iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
+#pragma unroll
+        for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
+            nidx[nb] = nidxClustered[iCluster * compressedNcMax + nb];
     }
 
     const Vec3<Tc> iPos = {x[i], y[i], z[i]};
