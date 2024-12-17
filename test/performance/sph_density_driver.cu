@@ -869,7 +869,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
         cudaStreamSetAttribute(0, cudaStreamAttributeAccessPolicyWindow, &streamAttr);
     }
 
-    std::array<float, 5> times;
+    std::array<float, 11> times;
     std::array<cudaEvent_t, times.size() + 1> events;
     for (auto& event : events)
         cudaEventCreate(&event);
