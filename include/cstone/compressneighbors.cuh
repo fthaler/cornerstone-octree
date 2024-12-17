@@ -49,8 +49,8 @@ warpCompressNeighbors(const std::uint32_t* __restrict__ neighbors, char* __restr
 {
     // TODO: add a buffer size limit, currently we just overflow
 
-    namespace cg = cooperative_groups;
-    const auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
+    namespace cg    = cooperative_groups;
+    const auto warp = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
 
     if (n == 0)
     {
@@ -123,8 +123,8 @@ __device__ __forceinline__ unsigned compressedNeighborsSize(const char* const in
 __device__ __forceinline__ void
 warpDecompressNeighbors(const char* const __restrict__ input, std::uint32_t* const __restrict__ neighbors, unsigned& n)
 {
-    namespace cg = cooperative_groups;
-    const auto warp    = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
+    namespace cg    = cooperative_groups;
+    const auto warp = cg::tiled_partition<GpuConfig::warpSize>(cg::this_thread_block());
 
     n = *((unsigned*)input) >> 16;
 
