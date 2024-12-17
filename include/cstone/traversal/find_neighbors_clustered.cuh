@@ -274,7 +274,7 @@ __device__ inline void deduplicateAndStoreNeighbors(unsigned* iClusterNidx,
 constexpr inline bool includeNbSymmetric(unsigned i, unsigned j)
 {
     constexpr unsigned block_size = 32;
-    const bool s = (i / block_size) % 2 == (j / block_size) % 2;
+    const bool s                  = (i / block_size) % 2 == (j / block_size) % 2;
     return i < j ? s : !s;
 }
 
@@ -658,9 +658,14 @@ __global__
                 return ijPosDiff;
             };
 
-            constexpr unsigned jBlocksPerWarp = GpuConfig::warpSize / ClusterConfig::iSize / ClusterConfig::jSize;
-            const auto subwarp                = cg::tiled_partition<ClusterConfig::iSize * ClusterConfig::jSize>(warp);
-            unsigned prunedNcc                = 0;
+            constexpr unsigned threadsPerInteraction = ClusterConfig::iSize * ClusterConfig::jSize;
+            constexpr unsigned jBlocksPerWarp        = GpuConfig::warpSize / threadsPerInteraction;
+            const GpuConfig::ThreadMask threadMask   = threadsPerInteraction == GpuConfig::warpSize
+                                                           ? ~GpuConfig::ThreadMask(0)
+                                                           : (GpuConfig::ThreadMask(1) << threadsPerInteraction) - 1;
+            const GpuConfig::ThreadMask jBlockMask =
+                threadMask << (threadsPerInteraction * (warp.thread_rank() / threadsPerInteraction));
+            unsigned prunedNcc = 0;
             for (unsigned n = 0; n < imin(ncc, NcMax); n += jBlocksPerWarp)
             {
                 const unsigned nb       = n + block.thread_index().y / ClusterConfig::jSize;
@@ -673,10 +678,11 @@ __global__
                 const Vec3<Tc> ijPosDiff = posDiff(jPos);
                 const Th d2              = norm2(ijPosDiff);
                 const Th hi2             = Th(2) * hi;
-                const bool keep          = subwarp.any(d2 < hi2 * hi2);
-                const unsigned offset    = exclusiveScanBool(keep & subwarp.thread_rank() == 0);
+                const bool keep          = warp.ballot(d2 < hi2 * hi2) & jBlockMask;
+                const unsigned offset    = exclusiveScanBool(keep & (warp.thread_rank() % threadsPerInteraction == 0));
 
-                if (subwarp.thread_rank() == 0 & keep) nidx[block.thread_index().z][c][prunedNcc + offset] = jCluster;
+                if ((warp.thread_rank() % threadsPerInteraction == 0) & keep)
+                    nidx[block.thread_index().z][c][prunedNcc + offset] = jCluster;
 
                 prunedNcc +=
                     warp.shfl(offset + keep, (GpuConfig::warpSize - 1) / (ClusterConfig::iSize * ClusterConfig::jSize) *
