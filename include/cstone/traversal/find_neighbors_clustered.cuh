@@ -353,7 +353,7 @@ __global__
                                               const Tc* const __restrict__ z,
                                               const Th* const __restrict__ h,
                                               const util::tuple<Vec3<Tc>, Vec3<Tc>>* const __restrict__ jClusterBboxes,
-                                              OctreeNsView<Tc, KeyType> tree,
+                                              const __grid_constant__ OctreeNsView<Tc, KeyType> tree,
                                               const __grid_constant__ Box<Tc> box,
                                               unsigned* const __restrict__ ncClustered,
                                               unsigned* const __restrict__ nidxClustered,
