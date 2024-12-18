@@ -269,6 +269,11 @@ constexpr __forceinline__ bool includeNbSymmetric(unsigned i, unsigned j)
 
 } // namespace detail
 
+template<unsigned NcMax, bool Compress, bool Symmetric>
+using nbStoragePerICluster =
+    std::integral_constant<std::size_t,
+                           (Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax) / (Symmetric ? 2 : 1)>;
+
 template<class Tc>
 __global__ void computeClusterBoundingBoxes(cstone::LocalIndex firstBody,
                                             cstone::LocalIndex lastBody,
@@ -635,10 +640,9 @@ __global__
 
             ncc = prunedNcc;
 
-            constexpr unsigned long nbStoragePerICluster =
-                Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
             detail::deduplicateAndStoreNeighbors<warpsPerBlock, NcMax, NcMaxExtra, Compress>(
-                nidx[block.thread_index().z][c], ncc, &nidxClustered[ic * nbStoragePerICluster], &ncClustered[ic]);
+                nidx[block.thread_index().z][c], ncc,
+                &nidxClustered[ic * nbStoragePerICluster<NcMax, Compress, Symmetric>::value], &ncClustered[ic]);
         }
     }
 }
@@ -686,21 +690,22 @@ __global__ __launch_bounds__(GpuConfig::warpSize* warpsPerBlock) void findNeighb
     const unsigned i = imin(iCluster * ClusterConfig::iSize + block.thread_index().x, lastBody - 1);
 
     __shared__ unsigned nidxBuffer[warpsPerBlock][NcMax];
-    unsigned* const nidx               = nidxBuffer[block.thread_index().z];
-    constexpr unsigned compressedNcMax = Compress ? NcMax / ClusterConfig::expectedCompressionRate : NcMax;
+    unsigned* const nidx = nidxBuffer[block.thread_index().z];
 
     unsigned iClusterNeighborsCount;
 
     if constexpr (Compress)
     {
-        warpDecompressNeighbors((const char*)&nidxClustered[iCluster * compressedNcMax], nidx, iClusterNeighborsCount);
+        warpDecompressNeighbors(
+            (const char*)&nidxClustered[iCluster * nbStoragePerICluster<NcMax, Compress, Symmetric>::value], nidx,
+            iClusterNeighborsCount);
     }
     else
     {
         iClusterNeighborsCount = imin(ncClustered[iCluster], NcMax);
 #pragma unroll
         for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
-            nidx[nb] = nidxClustered[iCluster * compressedNcMax + nb];
+            nidx[nb] = nidxClustered[iCluster * nbStoragePerICluster<NcMax, Compress, Symmetric>::value + nb];
     }
 
     const Vec3<Tc> iPos = {x[i], y[i], z[i]};

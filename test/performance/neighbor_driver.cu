@@ -264,7 +264,7 @@ void findNeighborsC(std::size_t firstBody,
     static thrust::universal_vector<unsigned> clusterNeighbors, clusterNeighborsCount;
     static thrust::universal_vector<int> globalPool;
     static thrust::device_vector<util::tuple<Vec3<Tc>, Vec3<Tc>>> jClusterBboxes;
-    clusterNeighbors.resize(numIClusters * ncmax);
+    clusterNeighbors.resize(numIClusters * nbStoragePerICluster<ncmax, compress, symmetric>::value);
     clusterNeighborsCount.resize(numIClusters);
     if constexpr (symmetric) thrust::fill(clusterNeighborsCount.begin(), clusterNeighborsCount.end(), 0);
     globalPool.resize(poolSize);

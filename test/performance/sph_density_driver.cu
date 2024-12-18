@@ -687,13 +687,13 @@ buildNeighborhoodClustered(std::size_t firstBody,
                            const Box<Tc>& box,
                            unsigned ngmax)
 {
-    unsigned numBodies                           = lastBody - firstBody;
-    unsigned numBlocks                           = TravConfig::numBlocks(numBodies);
-    unsigned poolSize                            = TravConfig::poolSize(numBodies);
-    const std::size_t iClusters                  = iceil(lastBody, ClusterConfig::iSize);
-    const std::size_t jClusters                  = iceil(lastBody, ClusterConfig::jSize);
-    constexpr unsigned long nbStoragePerICluster = Compress ? ncmax / ClusterConfig::expectedCompressionRate : ncmax;
-    thrust::device_vector<LocalIndex> clusterNeighbors(nbStoragePerICluster * iClusters);
+    unsigned numBodies          = lastBody - firstBody;
+    unsigned numBlocks          = TravConfig::numBlocks(numBodies);
+    unsigned poolSize           = TravConfig::poolSize(numBodies);
+    const std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
+    const std::size_t jClusters = iceil(lastBody, ClusterConfig::jSize);
+    thrust::device_vector<LocalIndex> clusterNeighbors(nbStoragePerICluster<ncmax, Compress, Symmetric>::value *
+                                                       iClusters);
     thrust::device_vector<unsigned> clusterNeighborsCount;
     thrust::device_vector<util::tuple<Vec3<Tc>, Vec3<Tc>>> jClusterBboxes(jClusters);
     if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
