@@ -150,7 +150,8 @@ storeTupleISum(std::tuple<T0, T...>& tuple, std::tuple<T0*, T*...> const& ptrs, 
     assert(block.dim_threads().x == ClusterConfig::iSize);
     const auto warp = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
 
-    if constexpr (std::conjunction_v<std::is_same<T0, T>...> && sizeof...(T) < ClusterConfig::jSize)
+    if constexpr (std::conjunction_v<std::is_same<T0, T>...> &&
+                  sizeof...(T) < GpuConfig::warpSize / ClusterConfig::iSize)
     {
         const T0 res = reduceTuple<GpuConfig::warpSize / ClusterConfig::iSize, true>(tuple, std::plus<T0>());
         if ((block.thread_index().y <= sizeof...(T)) & store)
