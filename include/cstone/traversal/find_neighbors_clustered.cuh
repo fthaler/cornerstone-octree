@@ -295,7 +295,7 @@ __global__ void computeClusterBoundingBoxes(cstone::LocalIndex firstBody,
     const Tc yi = y[std::min(i, lastBody - 1)];
     const Tc zi = z[std::min(i, lastBody - 1)];
 
-    if constexpr (ClusterConfig::jSize <= 3)
+    if constexpr (ClusterConfig::jSize >= 3)
     {
         util::array<Tc, 3> bboxMin{xi, yi, zi};
         util::array<Tc, 3> bboxMax{xi, yi, zi};
