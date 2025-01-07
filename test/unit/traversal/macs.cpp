@@ -155,8 +155,8 @@ static void markMacVector()
     octree.resize(nNodes(leaves));
     updateInternalTree<KeyType>(leaves, octree.data());
 
-    std::vector<LocalIndex> layout(octree.numLeafNodes + 1);
-    std::exclusive_scan(counts.begin(), counts.end() + 1, layout.begin(), LocalIndex(0));
+    std::vector<LocalIndex> layout(octree.numLeafNodes + 1, 0);
+    std::inclusive_scan(counts.begin(), counts.end(), layout.begin() + 1);
 
     auto toInternal = leafToInternal(octree);
 
@@ -171,7 +171,8 @@ static void markMacVector()
     TreeNodeIndex focusIdxStart = 4;
     TreeNodeIndex focusIdxEnd   = 22;
 
-    markMacs(octree.data(), centers.data(), box, leaves[focusIdxStart], leaves[focusIdxEnd], markings.data());
+    markMacs(octree.prefixes.data(), octree.childOffsets.data(), centers.data(), box, leaves.data() + focusIdxStart,
+             focusIdxEnd - focusIdxStart, false, markings.data());
 
     std::vector<char> reference =
         markVecMacAll2All<KeyType>(leaves.data(), octree.prefixes, centers.data(), focusIdxStart, focusIdxEnd, box);
@@ -183,6 +184,36 @@ TEST(Macs, markMacVector)
 {
     markMacVector<unsigned>();
     markMacVector<uint64_t>();
+}
+
+TEST(Macs, limitSource4x4)
+{
+    using KeyType = uint64_t;
+    using T       = double;
+
+    Box<T> box(0, 1);
+    float invTheta = sqrt(3.) / 2;
+
+    std::vector<KeyType> leaves = makeUniformNLevelTree<KeyType>(64, 1);
+    OctreeData<KeyType, CpuTag> fullTree;
+    fullTree.resize(nNodes(leaves));
+    OctreeView<KeyType> ov = fullTree.data();
+    updateInternalTree<KeyType>(leaves, ov);
+
+    std::vector<SourceCenterType<T>> centers(ov.numNodes);
+    geoMacSpheres<KeyType>({ov.prefixes, size_t(ov.numNodes)}, centers.data(), invTheta, box);
+
+    std::vector<char> macs(ov.numNodes, 0);
+    markMacs(ov.prefixes, ov.childOffsets, centers.data(), box, leaves.data() + 0, 32, true, macs.data());
+
+    std::vector<char> macRef{1, 0, 0, 0, 0, 1, 1, 1, 1};
+    macRef.resize(ov.numNodes);
+    EXPECT_EQ(macRef, macs);
+
+    std::fill(macs.begin(), macs.end(), 0);
+    markMacs(ov.prefixes, ov.childOffsets, centers.data(), box, leaves.data() + 0, 32, false, macs.data());
+    int numMacs = std::accumulate(macs.begin(), macs.end(), 0);
+    EXPECT_EQ(numMacs, 5 + 16);
 }
 
 } // namespace cstone

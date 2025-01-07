@@ -37,7 +37,7 @@
 #include "gtest/gtest.h"
 
 #include "cstone/compressneighbors.cuh"
-#include "cstone/cuda/cuda_utils.cuh"
+#include "cstone/cuda/thrust_util.cuh"
 
 using namespace cstone;
 

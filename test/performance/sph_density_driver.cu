@@ -35,7 +35,7 @@
 
 #include <thrust/device_vector.h>
 
-#include "cstone/cuda/cuda_utils.cuh"
+#include "cstone/cuda/thrust_util.cuh"
 #include "cstone/primitives/math.hpp"
 #include "cstone/findneighbors.hpp"
 
@@ -278,9 +278,8 @@ buildNeighborhoodBatchedDirect(std::size_t firstBody,
                                const Box<Tc>& box,
                                unsigned ngmax)
 {
-    unsigned numBodies = lastBody - firstBody;
-    unsigned numBlocks = TravConfig::numBlocks(numBodies);
-    unsigned poolSize  = TravConfig::poolSize(numBodies);
+    unsigned numBlocks = TravConfig::numBlocks();
+    unsigned poolSize  = TravConfig::poolSize();
     thrust::device_vector<LocalIndex> neighbors(ngmax * numBlocks * (TravConfig::numThreads / GpuConfig::warpSize) *
                                                 TravConfig::targetSize);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
@@ -388,8 +387,7 @@ void computeDensityBatchedDirect(const std::size_t firstBody,
                                             OctreeNsView<Tc, KeyType>>& neighborhood)
 {
     auto& [neighbors, neighborsCount, globalPool, tree] = neighborhood;
-    unsigned numBodies                                  = lastBody - firstBody;
-    unsigned numBlocks                                  = TravConfig::numBlocks(numBodies);
+    unsigned numBlocks                                  = TravConfig::numBlocks();
     resetTraversalCounters<<<1, 1>>>();
     computeDensityBatchedDirectKernel<<<numBlocks, TravConfig::numThreads>>>(
         firstBody, lastBody, x, y, z, h, m, box, tree, wh, rho, rawPtr(neighborsCount), rawPtr(neighbors), ngmax,
@@ -568,9 +566,8 @@ buildNeighborhoodBatched(std::size_t firstBody,
                          const Box<Tc>& box,
                          unsigned ngmax)
 {
-    unsigned numBodies = lastBody - firstBody;
-    unsigned numBlocks = TravConfig::numBlocks(numBodies);
-    unsigned poolSize  = TravConfig::poolSize(numBodies);
+    unsigned numBlocks = TravConfig::numBlocks();
+    unsigned poolSize  = TravConfig::poolSize();
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
     thrust::device_vector<int> globalPool(poolSize);
@@ -667,8 +664,7 @@ void computeDensityBatched(
     const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
 {
     auto& [neighbors, neighborsCount] = neighborhood;
-    unsigned numBodies                = lastBody - firstBody;
-    unsigned numBlocks                = TravConfig::numBlocks(numBodies);
+    unsigned numBlocks                = TravConfig::numBlocks();
     resetTraversalCounters<<<1, 1>>>();
     computeDensityBatchedKernel<<<numBlocks, TravConfig::numThreads>>>(
         firstBody, lastBody, x, y, z, h, m, box, wh, rho, rawPtr(neighborsCount), rawPtr(neighbors), ngmax);
@@ -687,9 +683,8 @@ buildNeighborhoodClustered(std::size_t firstBody,
                            const Box<Tc>& box,
                            unsigned ngmax)
 {
-    unsigned numBodies          = lastBody - firstBody;
-    unsigned numBlocks          = TravConfig::numBlocks(numBodies);
-    unsigned poolSize           = TravConfig::poolSize(numBodies);
+    unsigned numBlocks          = TravConfig::numBlocks();
+    unsigned poolSize           = TravConfig::poolSize();
     const std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
     const std::size_t jClusters = iceil(lastBody, ClusterConfig::jSize);
     thrust::device_vector<LocalIndex> clusterNeighbors(nbStoragePerICluster<ncmax, Compress, Symmetric>::value *
@@ -738,8 +733,7 @@ void computeDensityClustered(
     const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
 {
     auto& [clusterNeighbors, clusterNeighborsCount] = neighborhood;
-    unsigned numBodies                              = lastBody - firstBody;
-    unsigned numBlocks                              = TravConfig::numBlocks(numBodies);
+    unsigned numBlocks                              = TravConfig::numBlocks();
 
     if constexpr (Symmetric) checkGpuErrors(cudaMemsetAsync(rho, 0, sizeof(T) * lastBody));
 
@@ -801,10 +795,12 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     gsl::span<const KeyType> nodeKeys(octree.prefixes.data(), octree.numNodes);
     nodeFpCenters<KeyType>(nodeKeys, centers.data(), sizes.data(), box);
 
-    OctreeNsView<Tc, KeyType> nsView{octree.prefixes.data(),
+    OctreeNsView<Tc, KeyType> nsView{octree.numLeafNodes,
+                                     octree.prefixes.data(),
                                      octree.childOffsets.data(),
                                      octree.internalToLeaf.data(),
                                      octree.levelRange.data(),
+                                     nullptr,
                                      layout.data(),
                                      centers.data(),
                                      sizes.data()};
@@ -840,9 +836,9 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
             sizeof(LocalIndex) * d_layout.size() + sizeof(Vec3<Tc>) * (d_centers.size() + d_sizes.size())) /
                1.0e6);
 
-    OctreeNsView<Tc, KeyType> nsViewGpu{rawPtr(d_prefixes),   rawPtr(d_childOffsets), rawPtr(d_internalToLeaf),
-                                        rawPtr(d_levelRange), rawPtr(d_layout),       rawPtr(d_centers),
-                                        rawPtr(d_sizes)};
+    OctreeNsView<Tc, KeyType> nsViewGpu{octree.numLeafNodes,      rawPtr(d_prefixes),   rawPtr(d_childOffsets),
+                                        rawPtr(d_internalToLeaf), rawPtr(d_levelRange), nullptr,
+                                        rawPtr(d_layout),         rawPtr(d_centers),    rawPtr(d_sizes)};
 
     thrust::device_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
     const auto* deviceKeys = (const KeyType*)(rawPtr(d_codes));

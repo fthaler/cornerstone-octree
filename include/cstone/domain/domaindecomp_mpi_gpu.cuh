@@ -94,15 +94,16 @@ void exchangeParticlesGpu(int epoch,
                           const LocalIndex* ordering,
                           Arrays... arrays)
 {
-    using TransferType        = uint64_t;
-    constexpr int alignment   = 128;
-    constexpr int headerBytes = round_up(sizeof(uint64_t), alignment);
+    using TransferType          = uint64_t;
+    constexpr int alignment     = 128;
+    constexpr int headerBytes   = round_up(sizeof(uint64_t), alignment);
+    const float allocGrowthRate = 1.05;
     static_assert(alignment % sizeof(TransferType) == 0);
     bool record  = receiveLog.empty();
     int domExTag = static_cast<int>(P2pTags::domainExchange) + epoch;
 
     size_t totalSendBytes    = computeTotalSendBytes<alignment>(sends, thisRank, headerBytes, arrays...);
-    const size_t oldSendSize = reallocateBytes(sendScratchBuffer, totalSendBytes);
+    const size_t oldSendSize = reallocateBytes(sendScratchBuffer, totalSendBytes, allocGrowthRate);
     char* const sendBuffer   = reinterpret_cast<char*>(rawPtr(sendScratchBuffer));
 
     // Not used if GPU-direct is ON
@@ -138,7 +139,7 @@ void exchangeParticlesGpu(int epoch,
         MPI_Get_count(&status, MpiType<TransferType>{}, &receiveCountTransfer);
 
         size_t receiveCountBytes = receiveCountTransfer * sizeof(TransferType);
-        reallocateBytes(receiveScratchBuffer, receiveCountBytes);
+        reallocateBytes(receiveScratchBuffer, receiveCountBytes, allocGrowthRate);
         char* receiveBuffer = reinterpret_cast<char*>(rawPtr(receiveScratchBuffer));
         mpiRecvGpuDirect(reinterpret_cast<TransferType*>(receiveBuffer), receiveCountTransfer, receiveRank, domExTag,
                          &status);
@@ -151,7 +152,7 @@ void exchangeParticlesGpu(int epoch,
         if (record) { receiveLog.addExchange(receiveRank, receiveStart); }
         else { receiveLocation = receiveLog.lookup(receiveRank); }
 
-        auto packTuple     = packBufferPtrs<alignment>(receiveBuffer, receiveCount, (arrays + receiveLocation)...);
+        auto packTuple = util::packBufferPtrs<alignment>(receiveBuffer, receiveCount, (arrays + receiveLocation)...);
         auto scatterRanges = [receiveCount](auto arrayPair)
         {
             checkGpuErrors(cudaMemcpy(arrayPair[0], arrayPair[1],
@@ -170,8 +171,8 @@ void exchangeParticlesGpu(int epoch,
         MPI_Waitall(int(sendRequests.size()), sendRequests.data(), status);
     }
 
-    reallocateDevice(sendScratchBuffer, oldSendSize, 1.01);
-    reallocateDevice(receiveScratchBuffer, oldRecvSize, 1.01);
+    reallocate(sendScratchBuffer, oldSendSize, 1.01);
+    reallocate(receiveScratchBuffer, oldRecvSize, 1.01);
 
     // If this process is going to send messages with rank/tag combinations
     // already sent in this function, this can lead to messages being mixed up

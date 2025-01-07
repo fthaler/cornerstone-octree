@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "cstone/focus/source_center.hpp"
 #include "cstone/tree/definitions.h"
 
 namespace cstone
@@ -74,6 +75,11 @@ extern void upsweepCentersGpu(int numLevels,
 template<class KeyType, class T>
 extern void computeGeoCentersGpu(
     const KeyType* prefixes, TreeNodeIndex numNodes, Vec3<T>* centers, Vec3<T>* sizes, const Box<T>& box);
+
+//! @brief set @p centers to geometric node centers with Mac radius l * invTheta
+template<class KeyType, class T>
+extern void geoMacSpheresGpu(
+    const KeyType* prefixes, TreeNodeIndex numNodes, SourceCenterType<T>* centers, float invTheta, const Box<T>& box);
 
 template<class KeyType, class T>
 extern void

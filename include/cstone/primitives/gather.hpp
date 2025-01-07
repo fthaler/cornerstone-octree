@@ -70,8 +70,8 @@ void sort_by_key(InoutIterator keyBegin, InoutIterator keyEnd, OutputIterator va
         keyIndexPairs[i] = std::make_tuple(keyBegin[i], valueBegin[i]);
 
     // sort, comparing only the first tuple element
-    std::sort(begin(keyIndexPairs), end(keyIndexPairs),
-              [compare](const auto& t1, const auto& t2) { return compare(std::get<0>(t1), std::get<0>(t2)); });
+    std::stable_sort(begin(keyIndexPairs), end(keyIndexPairs),
+                     [compare](const auto& t1, const auto& t2) { return compare(std::get<0>(t1), std::get<0>(t2)); });
 
 // extract the resulting ordering and store back the sorted keys
 #pragma omp parallel for schedule(static)
@@ -129,6 +129,17 @@ void scatter(gsl::span<const IndexType> ordering, const ValueType* source, Value
     }
 }
 
+//! @brief gather from @p src and scatter into @p dst
+template<class IndexType, class VType>
+void gatherScatter(gsl::span<const IndexType> gmap, gsl::span<const IndexType> smap, const VType* src, VType* dst)
+{
+#pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < gmap.size(); ++i)
+    {
+        dst[smap[i]] = src[gmap[i]];
+    }
+}
+
 template<class IndexType, class BufferType>
 class SfcSorter
 {
@@ -141,17 +152,62 @@ public:
     SfcSorter(const SfcSorter&) = delete;
 
     const IndexType* getMap() const { return ordering(); }
+    std::size_t size() const { return mapSize_; }
 
     template<class KeyType>
     void setMapFromCodes(KeyType* first, KeyType* last)
     {
         mapSize_ = std::size_t(last - first);
-        reallocateBytes(buffer_, mapSize_ * sizeof(IndexType));
+        reallocateBytes(buffer_, mapSize_ * sizeof(IndexType), 1.0);
         std::iota(ordering(), ordering() + mapSize_, 0);
         sort_by_key(first, last, ordering());
     }
 
+    template<class KeyType>
+    void updateMap(KeyType* first, KeyType* last)
+    {
+        assert(last - first == mapSize_);
+        sort_by_key(first, last, ordering());
+    }
+
     auto gatherFunc() const { return gatherCpu; }
+
+    /*! @brief extend ordering map to the left or right
+     *
+     * @param[in] shifts    number of shifts
+     * @param[-]  scratch   scratch space for temporary usage
+     *
+     * Negative shift values extends the ordering map to the left, positive value to the right
+     * Examples: map = [1, 0, 3, 2] -> extendMap(-1) -> map = [0, 2, 1, 4, 3]
+     *           map = [1, 0, 3, 2] -> extendMap(1) -> map = [1, 0, 3, 2, 4]
+     *
+     * This is used to extend the key-buffer passed to setMapFromCodes with additional keys, without
+     * having to restore the original unsorted key-sequence.
+     */
+    template<class Vector>
+    void extendMap(std::make_signed_t<IndexType> shifts, Vector& scratch)
+    {
+        if (shifts == 0) { return; }
+
+        auto newMapSize = mapSize_ + std::abs(shifts);
+        reallocateBytes(scratch, newMapSize * sizeof(IndexType), 1.0);
+        auto* tempMap = reinterpret_cast<IndexType*>(scratch.data());
+
+        if (shifts < 0)
+        {
+            std::iota(tempMap, tempMap - shifts, IndexType(0));
+            std::transform(ordering(), ordering() + mapSize_, tempMap - shifts,
+                           [shifts](auto x) { return x - shifts; });
+        }
+        else if (shifts > 0)
+        {
+            omp_copy(ordering(), ordering() + mapSize_, tempMap);
+            std::iota(tempMap + mapSize_, tempMap + newMapSize, mapSize_);
+        }
+        reallocateBytes(buffer_, newMapSize * sizeof(IndexType), 1.0);
+        omp_copy(tempMap, tempMap + newMapSize, ordering());
+        mapSize_ = newMapSize;
+    }
 
 private:
     IndexType* ordering() { return reinterpret_cast<IndexType*>(buffer_.data()); }

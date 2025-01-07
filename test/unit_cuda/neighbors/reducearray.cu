@@ -36,7 +36,7 @@
 
 #include "gtest/gtest.h"
 
-#include "cstone/cuda/cuda_utils.cuh"
+#include "cstone/cuda/thrust_util.cuh"
 #include "cstone/reducearray.cuh"
 
 using namespace cstone;

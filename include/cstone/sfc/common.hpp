@@ -196,6 +196,14 @@ HOST_DEVICE_FUN constexpr KeyType encodePlaceholderBit(KeyType code, int prefixL
     return placeHolderMask | ret;
 }
 
+template<class KeyType>
+HOST_DEVICE_FUN constexpr KeyType encodePlaceholderBit2K(KeyType k1, KeyType k2)
+{
+    //! prefixLength is 3 * treeLevel(endKey - startKey)
+    unsigned prefixLength = countLeadingZeros(k2 - k1 - 1) - unusedBits<KeyType>{};
+    return encodePlaceholderBit(k1, prefixLength);
+}
+
 //! @brief returns the number of key-bits in the input @p code
 template<class KeyType>
 HOST_DEVICE_FUN constexpr unsigned decodePrefixLength(KeyType code)
@@ -219,6 +227,28 @@ HOST_DEVICE_FUN constexpr KeyType decodePlaceholderBit(KeyType code)
     KeyType ret             = code ^ placeHolderMask;
 
     return ret << (3 * maxTreeLevel<KeyType>{} - prefixLength);
+}
+
+//! @brief Mask key to set special status. Does not support WS-prefix keys.
+template<class KeyType>
+KeyType maskKey(KeyType key)
+{
+    if (key == 0 || key == nodeRange<KeyType>(0)) { return key; }
+    return key | nodeRange<KeyType>(0);
+}
+
+//! @brief Inverse of maskKey
+template<class KeyType>
+KeyType unmaskKey(KeyType key)
+{
+    if (key == nodeRange<KeyType>(0)) { return key; }
+    return key & (nodeRange<KeyType>(0) - 1);
+}
+
+template<class KeyType>
+bool isMasked(KeyType key)
+{
+    return key > nodeRange<KeyType>(0);
 }
 
 /*! @brief extract the n-th octal digit from an SFC key, starting from the most significant

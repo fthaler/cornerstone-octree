@@ -87,6 +87,15 @@ inline HOST_DEVICE_FUN int mergeCountAndMacOp(TreeNodeIndex nodeIdx,
     return 1; // default: do nothing
 }
 
+//! @brief refine nodes based on Mac only
+template<class KeyType>
+inline HOST_DEVICE_FUN int macRefineOp(KeyType nodeKey, char mac)
+{
+    unsigned level = decodePrefixLength(nodeKey) / 3;
+    if (level < maxTreeLevel<KeyType>{} && mac) { return 8; }
+    return 1;
+}
+
 /*! @brief Overrides a 0-value of nodeOps[nodeIdx] if @p nodeIdx is the left-most descendant of a non-zero ancestor
  *
  * @tparam KeyType
@@ -255,6 +264,38 @@ ResolutionStatus enforceKeys(gsl::span<const KeyType> mandatoryKeys,
         status = std::max(enforceKeySingle(key, nodeKeys, childOffsets, parents, nodeOps), status);
     }
     return status;
+}
+
+/*! @brief count particles inside specified ranges of a cornerstone leaf tree
+ *
+ * @tparam KeyType             32- or 64-bit unsigned integer
+ * @param[in]  leaves          global octree leaves, cornerstone SFC key sequence
+ * @param[in]  counts          global particle counts of @p leaves, length = length(leaves) - 1
+ * @param[in]  leavesFocus     focused octree leaves (LET), cornerstone SFC key sequence
+ * @param[in]  leavesFocusIdx  list of cell indices of @p leavesFocus to extract counts for
+ * @param[out] countsFocus     output counts for @p leavesFocus, length = length(leavesFocus) - 1
+ */
+template<class KeyType>
+void rangeCount(gsl::span<const KeyType> leaves,
+                gsl::span<const unsigned> counts,
+                gsl::span<const KeyType> leavesFocus,
+                gsl::span<const TreeNodeIndex> leavesFocusIdx,
+                gsl::span<unsigned> countsFocus)
+{
+#pragma omp parallel for
+    for (size_t i = 0; i < leavesFocusIdx.size(); ++i)
+    {
+        TreeNodeIndex leafIdx = leavesFocusIdx[i];
+        KeyType startKey      = leavesFocus[leafIdx];
+        KeyType endKey        = leavesFocus[leafIdx + 1];
+
+        size_t startIdx = findNodeBelow(leaves.data(), leaves.size(), startKey);
+        size_t endIdx   = findNodeAbove(leaves.data(), leaves.size(), endKey);
+        assert(startKey == leaves[startIdx] && endKey == leaves[endIdx]);
+
+        uint64_t globCount   = std::accumulate(counts.begin() + startIdx, counts.begin() + endIdx, uint64_t(0));
+        countsFocus[leafIdx] = std::min(uint64_t(std::numeric_limits<unsigned>::max()), globCount);
+    }
 }
 
 } // namespace cstone

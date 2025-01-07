@@ -28,7 +28,8 @@
  * @author Sebastian Keller <sebastian.f.keller@gmail.com>
  */
 
-#include <cub/cub.cuh>
+#include "cstone/cuda/cub.hpp"
+#include <thrust/execution_policy.h>
 
 #include "cstone/cuda/errorcheck.cuh"
 #include "cstone/focus/rebalance.hpp"
@@ -75,27 +76,47 @@ void rebalanceDecisionEssentialGpu(const KeyType* prefixes,
         prefixes, childOffsets, parents, counts, macs, focusStart, focusEnd, bucketSize, nodeOps, numNodes);
 }
 
-template void rebalanceDecisionEssentialGpu(const uint32_t* prefixes,
-                                            const TreeNodeIndex* childOffsets,
-                                            const TreeNodeIndex* parents,
-                                            const unsigned* counts,
-                                            const char* macs,
-                                            uint32_t focusStart,
-                                            uint32_t focusEnd,
-                                            unsigned bucketSize,
-                                            TreeNodeIndex* nodeOps,
-                                            TreeNodeIndex numNodes);
+#define REBA_DEC_ESS_GPU(KeyType)                                                                                      \
+    template void rebalanceDecisionEssentialGpu(const KeyType* prefixes, const TreeNodeIndex* childOffsets,            \
+                                                const TreeNodeIndex* parents, const unsigned* counts,                  \
+                                                const char* macs, KeyType focusStart, KeyType focusEnd,                \
+                                                unsigned bucketSize, TreeNodeIndex* nodeOps, TreeNodeIndex numNodes)
+REBA_DEC_ESS_GPU(uint32_t);
+REBA_DEC_ESS_GPU(uint64_t);
 
-template void rebalanceDecisionEssentialGpu(const uint64_t* prefixes,
-                                            const TreeNodeIndex* childOffsets,
-                                            const TreeNodeIndex* parents,
-                                            const unsigned* counts,
-                                            const char* macs,
-                                            uint64_t focusStart,
-                                            uint64_t focusEnd,
-                                            unsigned bucketSize,
-                                            TreeNodeIndex* nodeOps,
-                                            TreeNodeIndex numNodes);
+template<class KeyType>
+__global__ void macRefineDecisionKernel(const KeyType* prefixes,
+                                        const char* macs,
+                                        const TreeNodeIndex* l2i,
+                                        TreeNodeIndex numLeafNodes,
+                                        int2 focus,
+                                        TreeNodeIndex* nodeOps)
+{
+    unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= numLeafNodes) { return; }
+
+    if (i < focus.x || i >= focus.y) { nodeOps[i] = macRefineOp(prefixes[l2i[i]], macs[l2i[i]]); }
+    else { nodeOps[i] = 1; }
+}
+
+template<class KeyType>
+void macRefineDecisionGpu(const KeyType* prefixes,
+                          const char* macs,
+                          const TreeNodeIndex* l2i,
+                          TreeNodeIndex numLeafNodes,
+                          TreeIndexPair focus,
+                          TreeNodeIndex* nodeOps)
+{
+    constexpr unsigned numThreads = 256;
+    macRefineDecisionKernel<<<iceil(numLeafNodes, numThreads), numThreads>>>(prefixes, macs, l2i, numLeafNodes,
+                                                                             {focus.start(), focus.end()}, nodeOps);
+}
+
+#define MAC_REF_DEC_GPU(KeyType)                                                                                       \
+    template void macRefineDecisionGpu(const KeyType* prefixes, const char* macs, const TreeNodeIndex* l2i,            \
+                                       TreeNodeIndex numLeafNodes, TreeIndexPair focus, TreeNodeIndex* nodeOps)
+MAC_REF_DEC_GPU(uint32_t);
+MAC_REF_DEC_GPU(uint64_t);
 
 __device__ int nodeOpSum;
 __global__ void resetNodeOpSum() { nodeOpSum = 0; }
@@ -139,7 +160,7 @@ bool protectAncestorsGpu(const KeyType* prefixes,
     protectAncestorsKernel<<<iceil(numNodes, numThreads), numThreads>>>(prefixes, parents, nodeOps, numNodes);
 
     int numNodesModify;
-    checkGpuErrors(cudaMemcpyFromSymbol(&numNodesModify, nodeOpSum, sizeof(int)));
+    checkGpuErrors(cudaMemcpyFromSymbol(&numNodesModify, GPU_SYMBOL(nodeOpSum), sizeof(int)));
 
     return numNodesModify == 0;
 }
@@ -171,25 +192,65 @@ ResolutionStatus enforceKeysGpu(const KeyType* forcedKeys,
                                 TreeNodeIndex* nodeOps)
 {
     resetEnforceKeyStatus<<<1, 1>>>();
-    enforceKeysKernel<<<numForcedKeys, 1>>>(forcedKeys, nodeKeys, childOffsets, parents, nodeOps);
+    if (numForcedKeys)
+    {
+        enforceKeysKernel<<<numForcedKeys, 1>>>(forcedKeys, nodeKeys, childOffsets, parents, nodeOps);
+    }
 
     int status;
-    checkGpuErrors(cudaMemcpyFromSymbol(&status, enforceKeyStatus_device, sizeof(ResolutionStatus)));
+    checkGpuErrors(cudaMemcpyFromSymbol(&status, GPU_SYMBOL(enforceKeyStatus_device), sizeof(ResolutionStatus)));
     return static_cast<ResolutionStatus>(status);
 }
 
-template ResolutionStatus enforceKeysGpu(const uint32_t* forcedKeys,
-                                         TreeNodeIndex numForcedKeys,
-                                         const uint32_t* nodeKeys,
-                                         const TreeNodeIndex* childOffsets,
-                                         const TreeNodeIndex* parents,
-                                         TreeNodeIndex* nodeOps);
+#define ENFORCE_KEYS_GPU(KeyType)                                                                                      \
+    template ResolutionStatus enforceKeysGpu(const KeyType* forcedKeys, TreeNodeIndex numForcedKeys,                   \
+                                             const KeyType* nodeKeys, const TreeNodeIndex* childOffsets,               \
+                                             const TreeNodeIndex* parents, TreeNodeIndex* nodeOps)
+ENFORCE_KEYS_GPU(uint32_t);
+ENFORCE_KEYS_GPU(uint64_t);
 
-template ResolutionStatus enforceKeysGpu(const uint64_t* forcedKeys,
-                                         TreeNodeIndex numForcedKeys,
-                                         const uint64_t* nodeKeys,
-                                         const TreeNodeIndex* childOffsets,
-                                         const TreeNodeIndex* parents,
-                                         TreeNodeIndex* nodeOps);
+template<class KeyType>
+__global__ void rangeCountKernel(const KeyType* leaves,
+                                 TreeNodeIndex numLeaves,
+                                 const unsigned* counts,
+                                 const KeyType* leavesFocus,
+                                 const TreeNodeIndex* leavesFocusIdx,
+                                 TreeNodeIndex leavesFocusIdxSize,
+                                 unsigned* countsFocus)
+{
+    unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= leavesFocusIdxSize) { return; }
+
+    TreeNodeIndex leafIdx = leavesFocusIdx[i];
+    KeyType startKey      = leavesFocus[leafIdx];
+    KeyType endKey        = leavesFocus[leafIdx + 1];
+
+    size_t startIdx = findNodeBelow(leaves, numLeaves, startKey);
+    size_t endIdx   = findNodeAbove(leaves, numLeaves, endKey);
+
+    uint64_t globCount   = thrust::reduce(thrust::seq, counts + startIdx, counts + endIdx, uint64_t(0));
+    countsFocus[leafIdx] = stl::min(uint64_t(0xFFFFFFFF), globCount);
+}
+
+template<class KeyType>
+void rangeCountGpu(gsl::span<const KeyType> leaves,
+                   gsl::span<const unsigned> counts,
+                   gsl::span<const KeyType> leavesFocus,
+                   gsl::span<const TreeNodeIndex> leavesFocusIdx,
+                   gsl::span<unsigned> countsFocus)
+{
+    constexpr unsigned numThreads = 64;
+    unsigned numBlocks            = iceil(leavesFocusIdx.size(), numThreads);
+    if (numBlocks == 0) { return; }
+    rangeCountKernel<<<numBlocks, numThreads>>>(leaves.data(), leaves.size(), counts.data(), leavesFocus.data(),
+                                                leavesFocusIdx.data(), leavesFocusIdx.size(), countsFocus.data());
+}
+
+#define RANGE_COUNT_GPU(KeyType)                                                                                       \
+    template void rangeCountGpu(gsl::span<const KeyType> leaves, gsl::span<const unsigned> counts,                     \
+                                gsl::span<const KeyType> leavesFocus, gsl::span<const TreeNodeIndex> leavesFocusIdx,   \
+                                gsl::span<unsigned> countsFocus)
+RANGE_COUNT_GPU(uint32_t);
+RANGE_COUNT_GPU(uint64_t);
 
 } // namespace cstone

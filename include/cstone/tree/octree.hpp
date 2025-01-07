@@ -44,9 +44,10 @@
 
 #include "cstone/cuda/annotation.hpp"
 #include "cstone/cuda/cuda_utils.hpp"
+#include "cstone/cuda/device_vector.h"
 #include "cstone/primitives/gather.hpp"
 #include "cstone/sfc/sfc.hpp"
-#include "cstone/tree/accel_switch.hpp"
+#include "cstone/primitives/accel_switch.hpp"
 #include "cstone/tree/csarray.hpp"
 #include "cstone/util/gsl-lite.hpp"
 
@@ -295,42 +296,24 @@ struct OctreeView
 template<class T, class KeyType>
 struct OctreeNsView
 {
+    TreeNodeIndex numLeafNodes;
     //! @brief see OctreeData
     const KeyType* prefixes;
     const TreeNodeIndex* childOffsets;
     const TreeNodeIndex* internalToLeaf;
     const TreeNodeIndex* levelRange;
+    const KeyType* leaves;
 
     //! @brief index of first particle for each leaf node
     const LocalIndex* layout;
     //! @brief geometrical node centers and sizes
     const Vec3<T>* centers;
     const Vec3<T>* sizes;
-};
 
-/*! @brief Contains a view to octree data as well as associated node properties
- *
- * This container is used in both CPU and GPU contexts
- */
-template<class T, class KeyType>
-struct OctreeProperties
-{
-    OctreeNsView<T, KeyType> nsView() const
-    {
-        return {tree.prefixes, tree.childOffsets, tree.internalToLeaf, tree.levelRange, layout, centers, sizes};
-    }
-
-    //! @brief data view of the fully linked octree
-    OctreeView<const KeyType> tree;
-
-    //! @brief geometrical node centers and sizes of the fully linked tree
-    const Vec3<T>* centers;
-    const Vec3<T>* sizes;
-
-    //! @brief cornerstone leaf cell array
-    const KeyType* leaves;
-    //! @brief index of first particle for each leaf node
-    const LocalIndex* layout;
+    /*! @ brief Factor to enlarge target bounding boxes to compensate for slightly outdated trees
+     *          Default for fully converged trees: 1.0, >1.0 otherwise
+     */
+    float searchExtFactor{1.0};
 };
 
 template<class KeyType, class Accelerator>
@@ -338,8 +321,7 @@ class OctreeData
 {
     //! @brief A vector template that resides on the hardware specified as Accelerator
     template<class ValueType>
-    using AccVector =
-        typename AccelSwitchType<Accelerator, std::vector, thrust::device_vector>::template type<ValueType>;
+    using AccVector = typename AccelSwitchType<Accelerator, std::vector, DeviceVector>::template type<ValueType>;
 
 public:
     void resize(TreeNodeIndex numCsLeafNodes)
@@ -631,6 +613,7 @@ struct SumCombination
 template<class CountType>
 struct NodeCount
 {
+    HOST_DEVICE_FUN
     CountType operator()(TreeNodeIndex /*nodeIdx*/, TreeNodeIndex c, const CountType* Q)
     {
         uint64_t sum = Q[c];
@@ -638,7 +621,7 @@ struct NodeCount
         {
             sum += Q[c + octant];
         }
-        return stl::min(uint64_t(std::numeric_limits<CountType>::max()), sum);
+        return stl::min(uint64_t(0xFFFFFFFF), sum);
     }
 };
 

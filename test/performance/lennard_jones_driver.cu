@@ -39,7 +39,7 @@
 #include <thrust/device_vector.h>
 #include <thrust/universal_vector.h>
 
-#include "cstone/cuda/cuda_utils.cuh"
+#include "cstone/cuda/thrust_util.cuh"
 #include "cstone/primitives/math.hpp"
 #include "cstone/findneighbors.hpp"
 
@@ -246,8 +246,8 @@ buildNeighborhoodBatchedDirect(std::size_t firstBody,
                                unsigned ngmax)
 {
     unsigned numBodies = lastBody - firstBody;
-    unsigned numBlocks = TravConfig::numBlocks(numBodies);
-    unsigned poolSize  = TravConfig::poolSize(numBodies);
+    unsigned numBlocks = TravConfig::numBlocks();
+    unsigned poolSize  = TravConfig::poolSize();
     thrust::device_vector<LocalIndex> neighbors(ngmax * numBlocks * (TravConfig::numThreads / GpuConfig::warpSize) *
                                                 TravConfig::targetSize);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
@@ -371,7 +371,7 @@ void computeLjBatchedDirect(const std::size_t firstBody,
 {
     auto& [neighbors, neighborsCount, globalPool, tree] = neighborhood;
     unsigned numBodies                                  = lastBody - firstBody;
-    unsigned numBlocks                                  = TravConfig::numBlocks(numBodies);
+    unsigned numBlocks                                  = TravConfig::numBlocks();
     resetTraversalCounters<<<1, 1>>>();
     computeLjBatchedDirectKernel<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box,
                                                                         tree, afx, afy, afz, rawPtr(neighborsCount),
@@ -562,8 +562,8 @@ buildNeighborhoodBatched(std::size_t firstBody,
                          unsigned ngmax)
 {
     unsigned numBodies = lastBody - firstBody;
-    unsigned numBlocks = TravConfig::numBlocks(numBodies);
-    unsigned poolSize  = TravConfig::poolSize(numBodies);
+    unsigned numBlocks = TravConfig::numBlocks();
+    unsigned poolSize  = TravConfig::poolSize();
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
     thrust::device_vector<unsigned> neighborsCount(lastBody);
     thrust::device_vector<int> globalPool(poolSize);
@@ -1097,8 +1097,8 @@ buildNeighborhoodClustered(std::size_t firstBody,
                            unsigned ngmax)
 {
     unsigned numBodies    = lastBody - firstBody;
-    unsigned numBlocks    = TravConfig::numBlocks(numBodies);
-    unsigned poolSize     = TravConfig::poolSize(numBodies);
+    unsigned numBlocks    = TravConfig::numBlocks();
+    unsigned poolSize     = TravConfig::poolSize();
     std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
     std::size_t jClusters = iceil(lastBody, ClusterConfig::jSize);
     thrust::device_vector<unsigned> clusterNeighbors(nbStoragePerICluster<ncmax, Compress, Symmetric>::value *
@@ -1207,10 +1207,12 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     gsl::span<const KeyType> nodeKeys(octree.prefixes.data(), octree.numNodes);
     nodeFpCenters<KeyType>(nodeKeys, centers.data(), sizes.data(), box);
 
-    OctreeNsView<Tc, KeyType> nsView{octree.prefixes.data(),
+    OctreeNsView<Tc, KeyType> nsView{octree.numLeafNodes,
+                                     octree.prefixes.data(),
                                      octree.childOffsets.data(),
                                      octree.internalToLeaf.data(),
                                      octree.levelRange.data(),
+                                     nullptr,
                                      layout.data(),
                                      centers.data(),
                                      sizes.data()};
@@ -1242,9 +1244,9 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     thrust::device_vector<Vec3<Tc>> d_centers             = centers;
     thrust::device_vector<Vec3<Tc>> d_sizes               = sizes;
 
-    OctreeNsView<Tc, KeyType> nsViewGpu{rawPtr(d_prefixes),   rawPtr(d_childOffsets), rawPtr(d_internalToLeaf),
-                                        rawPtr(d_levelRange), rawPtr(d_layout),       rawPtr(d_centers),
-                                        rawPtr(d_sizes)};
+    OctreeNsView<Tc, KeyType> nsViewGpu{octree.numLeafNodes,      rawPtr(d_prefixes),   rawPtr(d_childOffsets),
+                                        rawPtr(d_internalToLeaf), rawPtr(d_levelRange), nullptr,
+                                        rawPtr(d_layout),         rawPtr(d_centers),    rawPtr(d_sizes)};
 
     thrust::device_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
     const auto* deviceKeys = (const KeyType*)(rawPtr(d_codes));
