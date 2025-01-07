@@ -245,7 +245,6 @@ buildNeighborhoodBatchedDirect(std::size_t firstBody,
                                const Box<Tc>& box,
                                unsigned ngmax)
 {
-    unsigned numBodies = lastBody - firstBody;
     unsigned numBlocks = TravConfig::numBlocks();
     unsigned poolSize  = TravConfig::poolSize();
     thrust::device_vector<LocalIndex> neighbors(ngmax * numBlocks * (TravConfig::numThreads / GpuConfig::warpSize) *
@@ -370,7 +369,6 @@ void computeLjBatchedDirect(const std::size_t firstBody,
                                        OctreeNsView<Tc, KeyType>>& neighborhood)
 {
     auto& [neighbors, neighborsCount, globalPool, tree] = neighborhood;
-    unsigned numBodies                                  = lastBody - firstBody;
     unsigned numBlocks                                  = TravConfig::numBlocks();
     resetTraversalCounters<<<1, 1>>>();
     computeLjBatchedDirectKernel<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box,
@@ -561,7 +559,6 @@ buildNeighborhoodBatched(std::size_t firstBody,
                          const Box<Tc>& box,
                          unsigned ngmax)
 {
-    unsigned numBodies = lastBody - firstBody;
     unsigned numBlocks = TravConfig::numBlocks();
     unsigned poolSize  = TravConfig::poolSize();
     thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
@@ -1096,7 +1093,6 @@ buildNeighborhoodClustered(std::size_t firstBody,
                            const Box<Tc>& box,
                            unsigned ngmax)
 {
-    unsigned numBodies    = lastBody - firstBody;
     unsigned numBlocks    = TravConfig::numBlocks();
     unsigned poolSize     = TravConfig::poolSize();
     std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
