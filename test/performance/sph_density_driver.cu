@@ -36,8 +36,9 @@
 #include <thrust/device_vector.h>
 
 #include "cstone/cuda/thrust_util.cuh"
-#include "cstone/primitives/math.hpp"
 #include "cstone/findneighbors.hpp"
+#include "cstone/primitives/math.hpp"
+#include "cstone/traversal/ijloop/cpu.hpp"
 
 #include "cstone/traversal/find_neighbors.cuh"
 #include "cstone/traversal/find_neighbors_clustered.cuh"
@@ -147,35 +148,18 @@ void computeDensityCPU(const std::size_t firstBody,
                        const T* wh,
                        T* rho)
 {
-#pragma omp parallel
-    {
-        std::vector<unsigned> neighbors(ngmax);
-
-#pragma omp for
-        for (std::size_t i = firstBody; i < lastBody; ++i)
-        {
-            const Tc xi  = x[i];
-            const Tc yi  = y[i];
-            const Tc zi  = z[i];
-            const T hi   = h[i];
-            const T mi   = m[i];
-            const T hInv = 1.0 / hi;
-
-            const unsigned nbs = std::min(findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors.data()), ngmax);
-            T rhoi             = mi;
-            for (unsigned nb = 0; nb < nbs; ++nb)
-            {
-                unsigned j = neighbors[nb];
-                T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
-                T vloc     = dist * hInv;
-                T w        = table_lookup<true>(wh, vloc);
-
-                rhoi += w * m[j];
-            }
-
-            rho[i] = rhoi;
-        }
-    }
+    ijloop::CpuDirectNeighborhood{ngmax}
+        .build(tree, box, firstBody, lastBody, x, y, z, h)
+        .ijLoop(std::make_tuple(m), std::make_tuple(rho),
+                [wh](auto iData, auto jData, T distSq)
+                {
+                    const auto [i, xi, yi, zi, hi, _]  = iData;
+                    const auto [j, xj, yj, zj, hj, mj] = jData;
+                    const T dist                       = std::sqrt(distSq);
+                    const T vloc                       = dist * (T(1) / hi);
+                    const T w                          = i == j ? T(1) : table_lookup(wh, vloc);
+                    return std::make_tuple(w * mj);
+                });
 }
 
 template<class Tc, class T, class KeyType>
