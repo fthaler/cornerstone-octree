@@ -30,6 +30,7 @@
  */
 
 #include <numeric>
+#include <string>
 #include <vector>
 #include "gtest/gtest.h"
 
@@ -41,6 +42,29 @@ using namespace util;
 
 template<class T>
 using AllocatorType = DefaultInitAdaptor<T, AlignedAllocator<T, 64>>;
+
+TEST(Utils, TupleMap)
+{
+    auto testee = std::tuple(42, std::string("hello"));
+
+    EXPECT_EQ(tupleMap([](auto) { return 0; }, testee), std::tuple(0, 0));
+    EXPECT_EQ(tupleMap([](auto x) { return x + x; }, testee), std::tuple(84, "hellohello"));
+
+    auto testee2 = std::tuple(-42, std::string(" world"));
+    EXPECT_EQ(tupleMap([](auto x, auto y) { return x + y; }, testee, testee2), std::tuple(0, "hello world"));
+
+    EXPECT_EQ(tupleMap(
+                  [](auto& x, auto& y)
+                  {
+                      auto oldX = x;
+                      std::swap(x, y);
+                      return oldX;
+                  },
+                  testee, testee2),
+              std::tuple(42, std::string("hello")));
+    EXPECT_EQ(testee, std::tuple(-42, std::string(" world")));
+    EXPECT_EQ(testee2, std::tuple(42, std::string("hello")));
+}
 
 TEST(Utils, ForEachTuple)
 {
