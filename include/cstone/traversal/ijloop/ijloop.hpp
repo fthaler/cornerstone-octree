@@ -71,7 +71,8 @@ inline constexpr void updateResult(std::tuple<Ts...>& result, std::tuple<Ts...> 
 }
 
 template<class... Ts>
-inline void storeParticleData(std::tuple<Ts*...> const& output, LocalIndex index, std::tuple<Ts...> const& value)
+inline constexpr void
+storeParticleData(std::tuple<Ts*...> const& output, LocalIndex index, std::tuple<Ts...> const& value)
 {
     util::for_each_tuple([index](auto* ptr, auto const& v) { ptr[index] = v; }, output, value);
 }
