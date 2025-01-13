@@ -40,6 +40,7 @@
 #include "cstone/primitives/math.hpp"
 #include "cstone/traversal/ijloop/cpu.hpp"
 #include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
+#include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
 #include "cstone/traversal/find_neighbors.cuh"
 #include "cstone/traversal/find_neighbors_clustered.cuh"
 
@@ -287,112 +288,34 @@ void computeDensityBatchedDirect(const std::size_t firstBody,
 }
 
 template<class Tc, class T, class KeyType>
-__global__ void buildNeighborhoodNaiveKernel(const Tc* x,
-                                             const Tc* y,
-                                             const Tc* z,
-                                             const T* h,
-                                             LocalIndex firstId,
-                                             LocalIndex lastId,
-                                             const Box<Tc> box,
-                                             const OctreeNsView<Tc, KeyType> treeView,
-                                             unsigned ngmax,
-                                             LocalIndex* neighbors,
-                                             unsigned* neighborsCount)
+auto buildNeighborhoodNaive(std::size_t firstBody,
+                            std::size_t lastBody,
+                            const Tc* x,
+                            const Tc* y,
+                            const Tc* z,
+                            const T* h,
+                            OctreeNsView<Tc, KeyType> tree,
+                            const Box<Tc>& box,
+                            unsigned ngmax)
 {
-    cstone::LocalIndex tid = blockDim.x * blockIdx.x + threadIdx.x;
-    cstone::LocalIndex id  = firstId + tid;
-    if (id >= lastId) { return; }
-
-    neighborsCount[id] = findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors + tid, lastId);
-}
-
-template<class Tc, class T, class KeyType>
-std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
-buildNeighborhoodNaive(std::size_t firstBody,
-                       std::size_t lastBody,
-                       const Tc* x,
-                       const Tc* y,
-                       const Tc* z,
-                       const T* h,
-                       OctreeNsView<Tc, KeyType> tree,
-                       const Box<Tc>& box,
-                       unsigned ngmax)
-{
-    thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
-    thrust::device_vector<unsigned> neighborsCount(lastBody);
-    printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
-
-    {
-        CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
-        buildNeighborhoodNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
-            x, y, z, h, firstBody, lastBody, box, tree, ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
-        checkGpuErrors(cudaGetLastError());
-    }
-
-    return {neighbors, neighborsCount};
+    return ijloop::GpuFullNbListNeighborhood{ngmax}.build(tree, box, firstBody, lastBody, x, y, z, h);
 }
 
 template<class Tc, class T>
-__global__ void computeDensityNaiveKernel(const Tc* x,
-                                          const Tc* y,
-                                          const Tc* z,
-                                          const T* h,
-                                          const T* m,
-                                          const T* wh,
-                                          const LocalIndex firstId,
-                                          const LocalIndex lastId,
-                                          const Box<Tc> box,
-                                          const unsigned* neighbors,
-                                          const unsigned* neighborsCount,
-                                          const unsigned ngmax,
-                                          T* rho)
+void computeDensityNaive(const std::size_t firstBody,
+                         const std::size_t lastBody,
+                         const Tc* x,
+                         const Tc* y,
+                         const Tc* z,
+                         const T* h,
+                         const T* m,
+                         const Box<Tc>& box,
+                         const unsigned ngmax,
+                         const T* wh,
+                         T* rho,
+                         ijloop::detail::GpuFullNbListNeighborhoodImpl<Tc, T>& neighborhood)
 {
-    cstone::LocalIndex tid = blockDim.x * blockIdx.x + threadIdx.x;
-    cstone::LocalIndex i   = firstId + tid;
-    if (i >= lastId) { return; }
-
-    const Tc xi  = x[i];
-    const Tc yi  = y[i];
-    const Tc zi  = z[i];
-    const T hi   = h[i];
-    const T mi   = m[i];
-    const T hInv = 1.0 / hi;
-
-    unsigned nbs = imin(neighborsCount[i], ngmax);
-    T rhoi       = mi;
-    for (unsigned nb = 0; nb < nbs; ++nb)
-    {
-        unsigned j = neighbors[i + (unsigned long)nb * lastId];
-        T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
-        T vloc     = dist * hInv;
-        T w        = table_lookup(wh, vloc);
-
-        rhoi += w * m[j];
-    }
-
-    rho[i] = rhoi;
-}
-
-template<class Tc, class T>
-void computeDensityNaive(
-    const std::size_t firstBody,
-    const std::size_t lastBody,
-    const Tc* x,
-    const Tc* y,
-    const Tc* z,
-    const T* h,
-    const T* m,
-    const Box<Tc>& box,
-    const unsigned ngmax,
-    const T* wh,
-    T* rho,
-    const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
-{
-    auto& [neighbors, neighborsCount] = neighborhood;
-    computeDensityNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
-        x, y, z, h, m, wh, firstBody, lastBody, box, rawPtr(neighbors), rawPtr(neighborsCount), ngmax, rho);
-    checkGpuErrors(cudaGetLastError());
+    neighborhood.ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh});
 }
 
 template<class Tc, class Th, class KeyType>
