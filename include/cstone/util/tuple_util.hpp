@@ -46,7 +46,7 @@ template<std::size_t... Is, class F, class... Tuples>
 inline constexpr auto tupleMapImpl(std::index_sequence<Is...>, F&& f, Tuples&&... tuples)
 {
     return std::make_tuple([&f](auto i, auto&&... ts) -> decltype(auto)
-                           { return std::invoke(std::forward<F>(f), std::get<i>(std::forward<decltype(ts)>(ts))...); }(
+                           { return f(std::get<i>(std::forward<decltype(ts)>(ts))...); }(
                                std::integral_constant<std::size_t, Is>(), std::forward<Tuples>(tuples)...)...);
 }
 } // namespace detail
@@ -67,7 +67,7 @@ inline constexpr void for_each_tuple(F&& f, Tuples&&... tuples)
     tupleMap(
         [&f](auto&&... args)
         {
-            std::invoke(std::forward<F>(f), std::forward<decltype(args)>(args)...);
+            f(std::forward<decltype(args)>(args)...);
             return 0;
         },
         std::forward<Tuples>(tuples)...);
