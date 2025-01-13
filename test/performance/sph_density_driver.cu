@@ -39,7 +39,7 @@
 #include "cstone/findneighbors.hpp"
 #include "cstone/primitives/math.hpp"
 #include "cstone/traversal/ijloop/cpu.hpp"
-
+#include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
 #include "cstone/traversal/find_neighbors.cuh"
 #include "cstone/traversal/find_neighbors_clustered.cuh"
 
@@ -256,109 +256,17 @@ void computeDensityNaiveDirect(
 }
 
 template<class Tc, class T, class KeyType>
-std::tuple<thrust::device_vector<LocalIndex>,
-           thrust::device_vector<unsigned>,
-           thrust::device_vector<int>,
-           OctreeNsView<Tc, KeyType>>
-buildNeighborhoodBatchedDirect(std::size_t firstBody,
-                               std::size_t lastBody,
-                               const Tc* x,
-                               const Tc* y,
-                               const Tc* z,
-                               const T* h,
-                               OctreeNsView<Tc, KeyType> tree,
-                               const Box<Tc>& box,
-                               unsigned ngmax)
+auto buildNeighborhoodBatchedDirect(std::size_t firstBody,
+                                    std::size_t lastBody,
+                                    const Tc* x,
+                                    const Tc* y,
+                                    const Tc* z,
+                                    const T* h,
+                                    OctreeNsView<Tc, KeyType> tree,
+                                    const Box<Tc>& box,
+                                    unsigned ngmax)
 {
-    unsigned numBlocks = TravConfig::numBlocks();
-    unsigned poolSize  = TravConfig::poolSize();
-    thrust::device_vector<LocalIndex> neighbors(ngmax * numBlocks * (TravConfig::numThreads / GpuConfig::warpSize) *
-                                                TravConfig::targetSize);
-    thrust::device_vector<unsigned> neighborsCount(lastBody);
-    thrust::device_vector<int> globalPool(poolSize);
-    printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
-
-    return {neighbors, neighborsCount, globalPool, tree};
-}
-
-template<class Tc, class T, class KeyType>
-__global__
-__launch_bounds__(TravConfig::numThreads) void computeDensityBatchedDirectKernel(cstone::LocalIndex firstBody,
-                                                                                 cstone::LocalIndex lastBody,
-                                                                                 const Tc* __restrict__ x,
-                                                                                 const Tc* __restrict__ y,
-                                                                                 const Tc* __restrict__ z,
-                                                                                 const T* __restrict__ h,
-                                                                                 const T* __restrict__ m,
-                                                                                 const Box<Tc> box,
-                                                                                 const OctreeNsView<Tc, KeyType> tree,
-                                                                                 const T* __restrict__ wh,
-                                                                                 T* __restrict__ rho,
-                                                                                 unsigned* __restrict__ neighborsCount,
-                                                                                 unsigned* __restrict__ neighbors,
-                                                                                 const unsigned ngmax,
-                                                                                 int* __restrict__ globalPool)
-{
-    const unsigned laneIdx     = threadIdx.x & (GpuConfig::warpSize - 1);
-    const unsigned numTargets  = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
-    const unsigned warpIdxGrid = (blockDim.x * blockIdx.x + threadIdx.x) >> GpuConfig::warpSizeLog2;
-    int targetIdx              = 0;
-
-    unsigned* warpNidx = neighbors + warpIdxGrid * TravConfig::targetSize * ngmax;
-
-    while (true)
-    {
-        // first thread in warp grabs next target
-        if (laneIdx == 0) { targetIdx = atomicAdd(&targetCounterGlob, 1); }
-        targetIdx = shflSync(targetIdx, 0);
-
-        if (targetIdx >= numTargets) break;
-
-        const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
-        const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
-
-        unsigned nc_i[TravConfig::nwt] = {0};
-
-        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
-        {
-            if (nc_i[warpTarget] < ngmax)
-                warpNidx[nc_i[warpTarget] * TravConfig::targetSize + warpTarget * GpuConfig::warpSize + laneIdx] = j;
-            ++nc_i[warpTarget];
-        };
-
-        traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
-
-        for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
-        {
-            const cstone::LocalIndex i = bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx;
-            const unsigned* nidx       = warpNidx + warpTarget * GpuConfig::warpSize + laneIdx;
-            if (i < bodyEnd)
-            {
-                const Tc xi  = x[i];
-                const Tc yi  = y[i];
-                const Tc zi  = z[i];
-                const T hi   = h[i];
-                const T mi   = m[i];
-                const T hInv = 1.0 / hi;
-
-                unsigned nbs = imin(nc_i[warpTarget], ngmax);
-                T rhoi       = mi;
-                for (unsigned nb = 0; nb < nbs; ++nb)
-                {
-                    unsigned j = nidx[nb * TravConfig::targetSize];
-                    T dist     = distancePBC(box, hi, xi, yi, zi, x[j], y[j], z[j]);
-                    T vloc     = dist * hInv;
-                    T w        = table_lookup(wh, vloc);
-
-                    rhoi += w * m[j];
-                }
-
-                rho[i] = rhoi;
-            }
-        }
-    }
-    cuda::discard_memory(warpNidx, TravConfig::targetSize * ngmax * sizeof(unsigned));
+    return ijloop::GpuAlwaysTraverseNeighborhood{ngmax}.build(tree, box, firstBody, lastBody, x, y, z, h);
 }
 
 template<class Tc, class T, class KeyType>
@@ -373,18 +281,9 @@ void computeDensityBatchedDirect(const std::size_t firstBody,
                                  const unsigned ngmax,
                                  const T* wh,
                                  T* rho,
-                                 std::tuple<thrust::device_vector<LocalIndex>,
-                                            thrust::device_vector<unsigned>,
-                                            thrust::device_vector<int>,
-                                            OctreeNsView<Tc, KeyType>>& neighborhood)
+                                 ijloop::detail::GpuAlwaysTraverseNeighborhoodImpl<Tc, KeyType, T>& neighborhood)
 {
-    auto& [neighbors, neighborsCount, globalPool, tree] = neighborhood;
-    unsigned numBlocks                                  = TravConfig::numBlocks();
-    resetTraversalCounters<<<1, 1>>>();
-    computeDensityBatchedDirectKernel<<<numBlocks, TravConfig::numThreads>>>(
-        firstBody, lastBody, x, y, z, h, m, box, tree, wh, rho, rawPtr(neighborsCount), rawPtr(neighbors), ngmax,
-        rawPtr(globalPool));
-    checkGpuErrors(cudaGetLastError());
+    neighborhood.ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh});
 }
 
 template<class Tc, class T, class KeyType>
