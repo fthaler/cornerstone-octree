@@ -47,16 +47,16 @@ namespace detail
 
 template<bool UsePbc, class Tc, class Th, class KeyType, class In, class Out, class Interaction>
 __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeighborhoodKernel(
-    const OctreeNsView<Tc, KeyType> tree, // TODO: __grid_constant__?
-    const Box<Tc> box,                    // TODO: __grid_constant__?
+    const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
+    const Box<Tc> __grid_constant__ box,
     const LocalIndex firstBody,
     const LocalIndex lastBody,
     const Tc* __restrict__ x,
     const Tc* __restrict__ y,
     const Tc* __restrict__ z,
     const Th* __restrict__ h,
-    const In input,
-    const Out output,
+    const In __grid_constant__ input,
+    const Out __grid_constant__ output,
     const Interaction interaction,
     const unsigned ngmax,
     LocalIndex* __restrict__ neighbors,

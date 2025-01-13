@@ -46,17 +46,18 @@ namespace detail
 {
 
 template<int MaxThreads, class Tc, class Th, class KeyType>
-__global__ __launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodBuild(const OctreeNsView<Tc, KeyType> tree,
-                                                                             const Box<Tc> box,
-                                                                             const LocalIndex firstBody,
-                                                                             const LocalIndex lastBody,
-                                                                             const Tc* __restrict__ x,
-                                                                             const Tc* __restrict__ y,
-                                                                             const Tc* __restrict__ z,
-                                                                             const Th* __restrict__ h,
-                                                                             const unsigned ngmax,
-                                                                             LocalIndex* neighbors,
-                                                                             unsigned* neighborsCount)
+__global__ __launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodBuild(
+    const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
+    const Box<Tc> __grid_constant__ box,
+    const LocalIndex firstBody,
+    const LocalIndex lastBody,
+    const Tc* __restrict__ x,
+    const Tc* __restrict__ y,
+    const Tc* __restrict__ z,
+    const Th* __restrict__ h,
+    const unsigned ngmax,
+    LocalIndex* neighbors,
+    unsigned* neighborsCount)
 {
     const LocalIndex threadId = blockDim.x * blockIdx.x + threadIdx.x;
     const LocalIndex i        = firstBody + threadId;
@@ -68,15 +69,15 @@ __global__ __launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodBuild(con
 
 template<int MaxThreads, class Tc, class Th, class In, class Out, class Interaction>
 __global__
-__launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodKernel(const Box<Tc> box,
+__launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodKernel(const Box<Tc> __grid_constant__ box,
                                                                    const LocalIndex firstBody,
                                                                    const LocalIndex lastBody,
                                                                    const Tc* __restrict__ x,
                                                                    const Tc* __restrict__ y,
                                                                    const Tc* __restrict__ z,
                                                                    const Th* __restrict__ h,
-                                                                   const In input,
-                                                                   const Out output,
+                                                                   const In __grid_constant__ input,
+                                                                   const Out __grid_constant__ output,
                                                                    const Interaction interaction,
                                                                    const unsigned ngmax,
                                                                    const LocalIndex* __restrict__ neighbors,
