@@ -57,12 +57,8 @@ inline constexpr Odd odd               = {};
 } // namespace symmetry
 
 template<class Tc, class Th, class... Ts>
-inline auto loadParticleData(const Tc* __restrict__ x,
-                             const Tc* __restrict__ y,
-                             const Tc* __restrict__ z,
-                             const Th* __restrict__ h,
-                             std::tuple<const Ts*...> const& input,
-                             LocalIndex index)
+inline constexpr std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> loadParticleData(
+    const Tc* x, const Tc* y, const Tc* z, const Th* h, std::tuple<const Ts*...> const& input, LocalIndex index)
 {
     return std::tuple_cat(std::make_tuple(index), util::tupleMap([index](auto const* ptr) { return ptr[index]; },
                                                                  std::tuple_cat(std::make_tuple(x, y, z, h), input)));
