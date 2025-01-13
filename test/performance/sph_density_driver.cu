@@ -134,6 +134,23 @@ public:
     }
 };
 
+template<class T>
+struct DensityKernelFun
+{
+    const T* wh;
+
+    template<class ParticleData>
+    constexpr __host__ __device__ auto operator()(ParticleData const& iData, ParticleData const& jData, T distSq) const
+    {
+        const auto [i, xi, yi, zi, hi, _]  = iData;
+        const auto [j, xj, yj, zj, hj, mj] = jData;
+        const T dist                       = std::sqrt(distSq);
+        const T vloc                       = dist * (T(1) / hi);
+        const T w                          = i == j ? T(1) : table_lookup(wh, vloc);
+        return std::make_tuple(w * mj);
+    }
+};
+
 template<class Tc, class T, class Tm, class KeyType>
 void computeDensityCPU(const std::size_t firstBody,
                        const std::size_t lastBody,
@@ -150,16 +167,7 @@ void computeDensityCPU(const std::size_t firstBody,
 {
     ijloop::CpuDirectNeighborhood{ngmax}
         .build(tree, box, firstBody, lastBody, x, y, z, h)
-        .ijLoop(std::make_tuple(m), std::make_tuple(rho),
-                [wh](auto iData, auto jData, T distSq)
-                {
-                    const auto [i, xi, yi, zi, hi, _]  = iData;
-                    const auto [j, xj, yj, zj, hj, mj] = jData;
-                    const T dist                       = std::sqrt(distSq);
-                    const T vloc                       = dist * (T(1) / hi);
-                    const T w                          = i == j ? T(1) : table_lookup(wh, vloc);
-                    return std::make_tuple(w * mj);
-                });
+        .ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh});
 }
 
 template<class Tc, class T, class KeyType>
