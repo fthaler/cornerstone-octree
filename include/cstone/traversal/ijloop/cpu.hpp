@@ -62,13 +62,12 @@ struct CpuDirectNeighborhoodImpl
 #pragma omp parallel
         {
             std::vector<LocalIndex> neighbors(ngmax);
-            const bool anyPbc = box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
-                                box.boundaryZ() == BoundaryType::periodic;
 
 #pragma omp for
             for (LocalIndex i = firstBody; i < lastBody; ++i)
             {
-                const auto iData = loadParticleData(x, y, z, h, input, i);
+                const auto iData  = loadParticleData(x, y, z, h, input, i);
+                const bool usePbc = requiresPbcHandling(box, iData);
 
                 const unsigned nbs = std::min(findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors.data()), ngmax);
                 auto result        = interaction(iData, iData, Tc(0));
@@ -77,7 +76,7 @@ struct CpuDirectNeighborhoodImpl
                     const LocalIndex j = neighbors[nb];
                     const auto jData   = loadParticleData(x, y, z, h, input, j);
 
-                    const Tc distSq = distanceSquared(anyPbc, box, iData, jData);
+                    const Tc distSq = distanceSquared(usePbc, box, iData, jData);
 
                     updateResult(result, interaction(iData, jData, distSq));
                 }

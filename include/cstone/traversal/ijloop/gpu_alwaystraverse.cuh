@@ -45,7 +45,7 @@ namespace cstone::ijloop
 namespace detail
 {
 
-template<class Tc, class Th, class KeyType, class In, class Out, class Interaction>
+template<bool UsePbc, class Tc, class Th, class KeyType, class In, class Out, class Interaction>
 __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeighborhoodKernel(
     const OctreeNsView<Tc, KeyType> tree, // TODO: __grid_constant__?
     const Box<Tc> box,                    // TODO: __grid_constant__?
@@ -68,9 +68,6 @@ __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeigh
     int targetIdx              = 0;
 
     unsigned* warpNidx = neighbors + warpIdxGrid * TravConfig::targetSize * ngmax;
-
-    const bool anyPbc = box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
-                        box.boundaryZ() == BoundaryType::periodic;
 
     while (true)
     {
@@ -108,7 +105,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeigh
                 {
                     const LocalIndex j = nidx[nb * TravConfig::targetSize];
                     const auto jData   = loadParticleData(x, y, z, h, input, j);
-                    const Tc distSq    = distanceSquared(anyPbc, box, iData, jData);
+                    const Tc distSq    = distanceSquared(UsePbc, box, iData, jData);
 
                     updateResult(result, interaction(iData, jData, distSq));
                 }
@@ -139,9 +136,19 @@ struct GpuAlwaysTraverseNeighborhoodImpl
                 Symmetry = symmetry::asymmetric)
     {
         resetTraversalCounters<<<1, 1>>>();
-        gpuAlwaysTraverseNeighborhoodKernel<<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
-            tree, box, firstBody, lastBody, x, y, z, h, input, output, std::forward<Interaction>(interaction), ngmax,
-            rawPtr(neighbors), rawPtr(globalPool));
+        if (box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
+            box.boundaryZ() == BoundaryType::periodic)
+        {
+            gpuAlwaysTraverseNeighborhoodKernel<true><<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
+                tree, box, firstBody, lastBody, x, y, z, h, input, output, std::forward<Interaction>(interaction),
+                ngmax, rawPtr(neighbors), rawPtr(globalPool));
+        }
+        else
+        {
+            gpuAlwaysTraverseNeighborhoodKernel<false><<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
+                tree, box, firstBody, lastBody, x, y, z, h, input, output, std::forward<Interaction>(interaction),
+                ngmax, rawPtr(neighbors), rawPtr(globalPool));
+        }
         checkGpuErrors(cudaDeviceSynchronize());
     }
 };

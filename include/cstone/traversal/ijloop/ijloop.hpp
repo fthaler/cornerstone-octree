@@ -65,6 +65,20 @@ inline constexpr std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> loadParticleData(
 }
 
 template<class Tc, class Th, class... Ts>
+inline constexpr bool requiresPbcHandling(Box<Tc> const& box,
+                                          std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> const& iData)
+{
+    if (box.boundaryX() != BoundaryType::periodic & box.boundaryY() != BoundaryType::periodic &
+        box.boundaryZ() != BoundaryType::periodic)
+        return false;
+    const Tc& xi   = std::get<1>(iData);
+    const Tc& yi   = std::get<2>(iData);
+    const Tc& zi   = std::get<3>(iData);
+    const Tc twoHi = Tc(2) * std::get<4>(iData);
+    return !insideBox({xi, yi, zi}, {twoHi, twoHi, twoHi}, box);
+}
+
+template<class Tc, class Th, class... Ts>
 inline constexpr Tc distanceSquared(bool usePbc,
                                     Box<Tc> const& box,
                                     std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> const& iData,
