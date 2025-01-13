@@ -64,6 +64,21 @@ inline constexpr std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> loadParticleData(
                                                                  std::tuple_cat(std::make_tuple(x, y, z, h), input)));
 }
 
+template<class Tc, class Th, class... Ts>
+inline constexpr Tc distanceSquared(bool usePbc,
+                                    Box<Tc> const& box,
+                                    std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> const& iData,
+                                    std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> const& jData)
+{
+    const Tc& xi = std::get<1>(iData);
+    const Tc& yi = std::get<2>(iData);
+    const Tc& zi = std::get<3>(iData);
+    const Tc& xj = std::get<1>(jData);
+    const Tc& yj = std::get<2>(jData);
+    const Tc& zj = std::get<3>(jData);
+    return usePbc ? distanceSq<true>(xj, yj, zj, xi, yi, zi, box) : distanceSq<false>(xj, yj, zj, xi, yi, zi, box);
+}
+
 template<class... Ts>
 inline constexpr void updateResult(std::tuple<Ts...>& result, std::tuple<Ts...> const& value)
 {

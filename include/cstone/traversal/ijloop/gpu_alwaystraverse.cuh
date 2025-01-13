@@ -49,8 +49,8 @@ template<class Tc, class Th, class KeyType, class In, class Out, class Interacti
 __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeighborhoodKernel(
     const OctreeNsView<Tc, KeyType> tree, // TODO: __grid_constant__?
     const Box<Tc> box,                    // TODO: __grid_constant__?
-    cstone::LocalIndex firstBody,
-    cstone::LocalIndex lastBody,
+    const LocalIndex firstBody,
+    const LocalIndex lastBody,
     const Tc* __restrict__ x,
     const Tc* __restrict__ y,
     const Tc* __restrict__ z,
@@ -108,11 +108,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeigh
                 {
                     const LocalIndex j = nidx[nb * TravConfig::targetSize];
                     const auto jData   = loadParticleData(x, y, z, h, input, j);
-                    const Tc distSq =
-                        anyPbc ? distanceSq<true>(std::get<1>(jData), std::get<2>(jData), std::get<3>(jData),
-                                                  std::get<1>(iData), std::get<2>(iData), std::get<3>(iData), box)
-                               : distanceSq<false>(std::get<1>(jData), std::get<2>(jData), std::get<3>(jData),
-                                                   std::get<1>(iData), std::get<2>(iData), std::get<3>(iData), box);
+                    const Tc distSq    = distanceSquared(anyPbc, box, iData, jData);
 
                     updateResult(result, interaction(iData, jData, distSq));
                 }
