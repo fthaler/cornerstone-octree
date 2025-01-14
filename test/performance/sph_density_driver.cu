@@ -40,6 +40,7 @@
 #include "cstone/primitives/math.hpp"
 #include "cstone/traversal/ijloop/cpu.hpp"
 #include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
+#include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
 #include "cstone/traversal/find_neighbors.cuh"
 #include "cstone/traversal/find_neighbors_clustered.cuh"
@@ -486,88 +487,44 @@ void computeDensityBatched(
 }
 
 template<bool Compress, bool Symmetric, class Tc, class T, class KeyType>
-std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
-buildNeighborhoodClustered(std::size_t firstBody,
-                           std::size_t lastBody,
-                           const Tc* x,
-                           const Tc* y,
-                           const Tc* z,
-                           const T* h,
-                           OctreeNsView<Tc, KeyType> tree,
-                           const Box<Tc>& box,
-                           unsigned ngmax)
+auto buildNeighborhoodClustered(std::size_t firstBody,
+                                std::size_t lastBody,
+                                const Tc* x,
+                                const Tc* y,
+                                const Tc* z,
+                                const T* h,
+                                OctreeNsView<Tc, KeyType> tree,
+                                const Box<Tc>& box,
+                                unsigned ngmax)
 {
-    unsigned numBlocks          = TravConfig::numBlocks();
-    unsigned poolSize           = TravConfig::poolSize();
-    const std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
-    const std::size_t jClusters = iceil(lastBody, ClusterConfig::jSize);
-    thrust::device_vector<LocalIndex> clusterNeighbors(nbStoragePerICluster<ncmax, Compress, Symmetric>::value *
-                                                       iClusters);
-    thrust::device_vector<unsigned> clusterNeighborsCount;
-    thrust::device_vector<util::tuple<Vec3<Tc>, Vec3<Tc>>> jClusterBboxes(jClusters);
-    if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
-    thrust::device_vector<int> globalPool(poolSize);
-    printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * clusterNeighbors.size() + sizeof(unsigned) * clusterNeighborsCount.size()) / 1.0e6);
-
-    constexpr unsigned threads       = 64;
-    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
-    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-
-    {
-        CudaAutoTimer timer("Neighborhood build time: %7.6fs\n");
-
-        computeClusterBoundingBoxes<<<iceil(lastBody, 128), 128>>>(firstBody, lastBody, x, y, z,
-                                                                   rawPtr(jClusterBboxes));
-        checkGpuErrors(cudaGetLastError());
-
-        resetTraversalCounters<<<1, 1>>>();
-        findClusterNeighbors<warpsPerBlock, true, true, ncmax, Compress, Symmetric>
-            <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, rawPtr(jClusterBboxes), tree, box,
-                                       rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), rawPtr(globalPool));
-        checkGpuErrors(cudaGetLastError());
-    }
-
-    return {clusterNeighbors, clusterNeighborsCount};
+    using config = ijloop::GpuClusterConfig<ncmax, ClusterConfig::iSize, ClusterConfig::jSize,
+                                            Compress ? ClusterConfig::expectedCompressionRate : 0, Symmetric>;
+    return ijloop::GpuClusterNbListNeighborhood<config>{}.build(tree, box, firstBody, lastBody, x, y, z, h);
 }
 
 template<bool Compress, bool Symmetric, class Tc, class T>
-void computeDensityClustered(
-    const std::size_t firstBody,
-    const std::size_t lastBody,
-    const Tc* __restrict__ x,
-    const Tc* __restrict__ y,
-    const Tc* __restrict__ z,
-    const T* __restrict__ h,
-    const T* __restrict__ m,
-    const Box<Tc>& box,
-    const unsigned ngmax,
-    const T* __restrict__ wh,
-    T* __restrict__ rho,
-    const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
+void computeDensityClustered(const std::size_t firstBody,
+                             const std::size_t lastBody,
+                             const Tc* x,
+                             const Tc* y,
+                             const Tc* z,
+                             const T* h,
+                             const T* m,
+                             const Box<Tc>& box,
+                             const unsigned ngmax,
+                             const T* wh,
+                             T* rho,
+                             ijloop::detail::GpuClusterNbListNeighborhoodImpl<
+                                 ijloop::GpuClusterConfig<ncmax,
+                                                          ClusterConfig::iSize,
+                                                          ClusterConfig::jSize,
+                                                          Compress ? ClusterConfig::expectedCompressionRate : 0,
+                                                          Symmetric>,
+                                 Tc,
+                                 T> const& neighborhood)
 {
-    auto& [clusterNeighbors, clusterNeighborsCount] = neighborhood;
-    unsigned numBlocks                              = TravConfig::numBlocks();
-
-    if constexpr (Symmetric) checkGpuErrors(cudaMemsetAsync(rho, 0, sizeof(T) * lastBody));
-
-    auto computeDensity = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, auto, T dist2)
-    {
-        T mj         = m[j];
-        const T dist = std::sqrt(dist2);
-        const T vloc = dist * (1 / hi);
-        const T w    = table_lookup(wh, vloc);
-        return i == j ? mj : w * mj;
-    };
-
-    constexpr unsigned threads       = 128;
-    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
-    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-    numBlocks      = iceil(lastBody, ClusterConfig::iSize * warpsPerBlock);
-    findNeighborsClustered<warpsPerBlock, true, true, ncmax, Compress, Symmetric>
-        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
-                                   rawPtr(clusterNeighbors), computeDensity, rho);
-    checkGpuErrors(cudaGetLastError());
+    using sym = std::conditional_t<Symmetric, ijloop::symmetry::Even, ijloop::symmetry::Asymmetric>;
+    neighborhood.ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh}, sym{});
 }
 
 template<class Tc, class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeDensityF>
