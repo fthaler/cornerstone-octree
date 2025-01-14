@@ -149,7 +149,7 @@ struct GpuFullNbListNeighborhood
                                                         const Th* h) const
     {
         const LocalIndex numBodies = lastBody - firstBody;
-        detail::GpuFullNbListNeighborhoodImpl<Tc, Th> nbList{std::move(box),
+        detail::GpuFullNbListNeighborhoodImpl<Tc, Th> nbList{box,
                                                              firstBody,
                                                              lastBody,
                                                              x,
