@@ -118,17 +118,17 @@ struct GpuFullNbListNeighborhoodImpl
     thrust::device_vector<LocalIndex> neighbors;
     thrust::device_vector<unsigned> neighborsCount;
 
-    template<class... In, class... Out, class Interaction, class Symmetry = symmetry::Asymmetric>
-    void ijLoop(std::tuple<const In*...> const& input,
+    template<class... In, class... Out, class Interaction, class Symmetry>
+    void ijLoop(std::tuple<In*...> const& input,
                 std::tuple<Out*...> const& output,
                 Interaction&& interaction,
-                Symmetry = symmetry::asymmetric) const
+                Symmetry) const
     {
         const LocalIndex numBodies = lastBody - firstBody;
         constexpr int numThreads   = 128;
         detail::gpuFullNbListNeighborhoodKernel<numThreads><<<iceil(numBodies, numThreads), numThreads>>>(
-            box, firstBody, lastBody, x, y, z, h, input, output, std::forward<Interaction>(interaction), ngmax,
-            rawPtr(neighbors), rawPtr(neighborsCount));
+            box, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
+            std::forward<Interaction>(interaction), ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
         checkGpuErrors(cudaGetLastError());
     }
 };

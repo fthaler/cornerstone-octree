@@ -49,6 +49,7 @@
 
 using namespace cstone;
 
+constexpr unsigned ngmax = 256;
 constexpr unsigned ncmax = 256;
 
 /* smoothing kernel evaluation functionality borrowed from SPH-EXA */
@@ -153,129 +154,8 @@ struct DensityKernelFun
     }
 };
 
-template<class Tc, class T, class Tm, class KeyType>
-void computeDensityCPU(const std::size_t firstBody,
-                       const std::size_t lastBody,
-                       const Tc* x,
-                       const Tc* y,
-                       const Tc* z,
-                       const T* h,
-                       const Tm* m,
-                       const OctreeNsView<Tc, KeyType>& tree,
-                       const Box<Tc>& box,
-                       const unsigned ngmax,
-                       const T* wh,
-                       T* rho)
-{
-    ijloop::CpuDirectNeighborhood{ngmax}
-        .build(tree, box, firstBody, lastBody, x, y, z, h)
-        .ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh});
-}
-
-template<class Tc, class T, class KeyType>
-auto buildNeighborhoodBatchedDirect(std::size_t firstBody,
-                                    std::size_t lastBody,
-                                    const Tc* x,
-                                    const Tc* y,
-                                    const Tc* z,
-                                    const T* h,
-                                    OctreeNsView<Tc, KeyType> tree,
-                                    const Box<Tc>& box,
-                                    unsigned ngmax)
-{
-    return ijloop::GpuAlwaysTraverseNeighborhood{ngmax}.build(tree, box, firstBody, lastBody, x, y, z, h);
-}
-
-template<class Tc, class T, class KeyType>
-void computeDensityBatchedDirect(const std::size_t firstBody,
-                                 const std::size_t lastBody,
-                                 const Tc* x,
-                                 const Tc* y,
-                                 const Tc* z,
-                                 const T* h,
-                                 const T* m,
-                                 const Box<Tc>& box,
-                                 const unsigned ngmax,
-                                 const T* wh,
-                                 T* rho,
-                                 ijloop::detail::GpuAlwaysTraverseNeighborhoodImpl<Tc, KeyType, T>& neighborhood)
-{
-    neighborhood.ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh});
-}
-
-template<class Tc, class T, class KeyType>
-auto buildNeighborhoodNaive(std::size_t firstBody,
-                            std::size_t lastBody,
-                            const Tc* x,
-                            const Tc* y,
-                            const Tc* z,
-                            const T* h,
-                            OctreeNsView<Tc, KeyType> tree,
-                            const Box<Tc>& box,
-                            unsigned ngmax)
-{
-    return ijloop::GpuFullNbListNeighborhood{ngmax}.build(tree, box, firstBody, lastBody, x, y, z, h);
-}
-
-template<class Tc, class T>
-void computeDensityNaive(const std::size_t firstBody,
-                         const std::size_t lastBody,
-                         const Tc* x,
-                         const Tc* y,
-                         const Tc* z,
-                         const T* h,
-                         const T* m,
-                         const Box<Tc>& box,
-                         const unsigned ngmax,
-                         const T* wh,
-                         T* rho,
-                         ijloop::detail::GpuFullNbListNeighborhoodImpl<Tc, T>& neighborhood)
-{
-    neighborhood.ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh});
-}
-
-template<bool Compress, bool Symmetric, class Tc, class T, class KeyType>
-auto buildNeighborhoodClustered(std::size_t firstBody,
-                                std::size_t lastBody,
-                                const Tc* x,
-                                const Tc* y,
-                                const Tc* z,
-                                const T* h,
-                                OctreeNsView<Tc, KeyType> tree,
-                                const Box<Tc>& box,
-                                unsigned ngmax)
-{
-    using config = ijloop::GpuClusterConfig<ncmax, ClusterConfig::iSize, ClusterConfig::jSize,
-                                            Compress ? ClusterConfig::expectedCompressionRate : 0, Symmetric>;
-    return ijloop::GpuClusterNbListNeighborhood<config>{}.build(tree, box, firstBody, lastBody, x, y, z, h);
-}
-
-template<bool Compress, bool Symmetric, class Tc, class T>
-void computeDensityClustered(const std::size_t firstBody,
-                             const std::size_t lastBody,
-                             const Tc* x,
-                             const Tc* y,
-                             const Tc* z,
-                             const T* h,
-                             const T* m,
-                             const Box<Tc>& box,
-                             const unsigned ngmax,
-                             const T* wh,
-                             T* rho,
-                             ijloop::detail::GpuClusterNbListNeighborhoodImpl<
-                                 ijloop::GpuClusterConfig<ncmax,
-                                                          ClusterConfig::iSize,
-                                                          ClusterConfig::jSize,
-                                                          Compress ? ClusterConfig::expectedCompressionRate : 0,
-                                                          Symmetric>,
-                                 Tc,
-                                 T> const& neighborhood)
-{
-    neighborhood.ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh}, ijloop::symmetry::even);
-}
-
-template<class Tc, class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeDensityF>
-void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeDensity)
+template<class Tc, class T, class StrongKeyType, class Neighborhood>
+void benchmarkGPU(Neighborhood const& neighborhood)
 {
     using KeyType = typename StrongKeyType::ValueType;
 
@@ -290,8 +170,6 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     const double expected_neighbors = 4.0 / 3.0 * M_PI * r * r * r * n;
     std::cout << "Number of particles: " << n << std::endl;
     std::cout << "Expected average number of neighbors: " << expected_neighbors << std::endl;
-
-    int ngmax = 256;
 
     const Tc* x       = coords.x().data();
     const Tc* y       = coords.y().data();
@@ -325,7 +203,10 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
 
     std::vector<T> rho(n), m(n, 1.0);
     auto wh = kernelTable<T>();
-    computeDensityCPU(0, n, x, y, z, h.data(), m.data(), nsView, box, ngmax, wh.data(), rho.data());
+    ijloop::CpuDirectNeighborhood{ngmax}
+        .build(nsView, box, 0, n, x, y, z, h.data())
+        .ijLoop(std::make_tuple(m.data()), std::make_tuple(rho.data()), DensityKernelFun<T>{wh.data()},
+                ijloop::symmetry::even);
 
     thrust::device_vector<Tc> d_x(coords.x().begin(), coords.x().end());
     thrust::device_vector<Tc> d_y(coords.y().begin(), coords.y().end());
@@ -361,8 +242,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     thrust::device_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
     const auto* deviceKeys = (const KeyType*)(rawPtr(d_codes));
 
-    auto neighborhoodGPU =
-        buildNeighborhood(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), nsViewGpu, box, ngmax);
+    auto neighborhoodGPU = neighborhood.build(nsViewGpu, box, 0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h));
 
     cudaStreamAttrValue streamAttr;
     if constexpr (kUseTable && kUseCacheResidencyControl)
@@ -390,8 +270,8 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeDensityF computeD
     cudaEventRecord(events[0]);
     for (std::size_t i = 1; i < events.size(); ++i)
     {
-        computeDensity(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), rawPtr(d_m), box, ngmax, rawPtr(d_wh),
-                       rawPtr(d_rho), neighborhoodGPU);
+        neighborhoodGPU.ijLoop(std::make_tuple(rawPtr(d_m)), std::make_tuple(rawPtr(d_rho)),
+                               DensityKernelFun<T>{rawPtr(d_wh)}, ijloop::symmetry::even);
         cudaEventRecord(events[i]);
     }
     cudaEventSynchronize(events.back());
@@ -455,23 +335,20 @@ int main()
     using KeyType       = typename StrongKeyType::ValueType;
 
     std::cout << "--- BATCHED DIRECT ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodBatchedDirect<Tc, T, KeyType>,
-                                       computeDensityBatchedDirect<Tc, T, KeyType>);
+    benchmarkGPU<Tc, T, StrongKeyType>(ijloop::GpuAlwaysTraverseNeighborhood{ngmax});
 
     std::cout << "--- NAIVE TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodNaive<Tc, T, KeyType>, computeDensityNaive<Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(ijloop::GpuFullNbListNeighborhood{ngmax});
+
+    using BaseClusterNb = ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ncmax>::withClusterSize<4, 4>;
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, false, Tc, T, KeyType>,
-                                       computeDensityClustered<false, false, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withoutCompression{});
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, false, Tc, T, KeyType>,
-                                       computeDensityClustered<true, false, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withCompression<10>{});
     std::cout << "--- CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, true, Tc, T, KeyType>,
-                                       computeDensityClustered<false, true, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withSymmetry::withoutCompression{});
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, true, Tc, T, KeyType>,
-                                       computeDensityClustered<true, true, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withSymmetry::withCompression<10>{});
 
     return 0;
 }

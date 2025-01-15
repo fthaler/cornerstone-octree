@@ -53,12 +53,10 @@ struct CpuDirectNeighborhoodImpl
     const Th* h;
     unsigned ngmax;
 
-    template<class... In, class... Out, class Interaction, class Symmetry = symmetry::Asymmetric>
-    void ijLoop(std::tuple<const In*...> const& input,
-                std::tuple<Out*...> const& output,
-                Interaction&& interaction,
-                Symmetry = symmetry::asymmetric)
+    template<class... In, class... Out, class Interaction, class Symmetry>
+    void ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Symmetry)
     {
+        const auto constInput = makeConstRestrict(input);
 #pragma omp parallel
         {
             std::vector<LocalIndex> neighbors(ngmax);
@@ -66,7 +64,7 @@ struct CpuDirectNeighborhoodImpl
 #pragma omp for
             for (LocalIndex i = firstBody; i < lastBody; ++i)
             {
-                const auto iData  = loadParticleData(x, y, z, h, input, i);
+                const auto iData  = loadParticleData(x, y, z, h, constInput, i);
                 const bool usePbc = requiresPbcHandling(box, iData);
 
                 const unsigned nbs = std::min(findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors.data()), ngmax);
@@ -74,7 +72,7 @@ struct CpuDirectNeighborhoodImpl
                 for (unsigned nb = 0; nb < nbs; ++nb)
                 {
                     const LocalIndex j = neighbors[nb];
-                    const auto jData   = loadParticleData(x, y, z, h, input, j);
+                    const auto jData   = loadParticleData(x, y, z, h, constInput, j);
 
                     const Tc distSq = distanceSquared(usePbc, box, iData, jData);
 
@@ -100,7 +98,7 @@ struct CpuDirectNeighborhood
                                                              const Tc* x,
                                                              const Tc* y,
                                                              const Tc* z,
-                                                             const Th* h)
+                                                             const Th* h) const
     {
         return {std::move(tree), std::move(box), firstBody, lastBody, x, y, z, h, ngmax};
     }

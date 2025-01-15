@@ -32,6 +32,7 @@
 #pragma once
 
 #include <tuple>
+#include <type_traits>
 
 #include "cstone/tree/definitions.h"
 #include "cstone/util/tuple_util.hpp"
@@ -55,6 +56,13 @@ inline constexpr Asymmetric asymmetric = {};
 inline constexpr Even even             = {};
 inline constexpr Odd odd               = {};
 } // namespace symmetry
+
+template<class... Ts>
+inline constexpr std::tuple<const Ts*...> makeConstRestrict(std::tuple<Ts*...> input)
+{
+    // TODO: __restrict__
+    return {input};
+}
 
 template<class Tc, class Th, class... Ts>
 inline constexpr std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> loadParticleData(

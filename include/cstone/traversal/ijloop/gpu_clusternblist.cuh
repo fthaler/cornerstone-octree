@@ -715,15 +715,8 @@ struct GpuClusterNbListNeighborhoodImpl
     thrust::device_vector<LocalIndex> clusterNeighbors;
     thrust::device_vector<unsigned> clusterNeighborsCount;
 
-    template<class... In, class... Out, class Interaction>
-    void
-    ijLoop(std::tuple<const In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction) const
-    {
-        ijLoop(input, output, std::forward<Interaction>(interaction), symmetry::asymmetric);
-    }
-
     template<class... In, class... Out, class Interaction, class Symmetry>
-    void ijLoop(std::tuple<const In*...> const& input,
+    void ijLoop(std::tuple<In*...> const& input,
                 std::tuple<Out*...> const& output,
                 Interaction&& interaction,
                 Symmetry) const
@@ -741,19 +734,18 @@ struct GpuClusterNbListNeighborhoodImpl
         const dim3 blockSize                = {Config::iSize, GpuConfig::warpSize / Config::iSize, numWarpsPerBlock};
         const unsigned numBlocks            = iceil(numBodies, Config::iSize * numWarpsPerBlock);
         gpuClusterNbListNeighborhoodKernel<Config, numWarpsPerBlock, true, Symmetry><<<numBlocks, blockSize>>>(
-            box, firstBody, lastBody, x, y, z, h, input, output, std::forward<Interaction>(interaction),
-            rawPtr(clusterNeighbors), rawPtr(clusterNeighborsCount));
+            box, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
+            std::forward<Interaction>(interaction), rawPtr(clusterNeighbors), rawPtr(clusterNeighborsCount));
         checkGpuErrors(cudaGetLastError());
     }
 };
-} // namespace detail
 
 template<unsigned NcMax                   = 256,
          unsigned ISize                   = 4,
          unsigned JSize                   = 4,
          unsigned ExpectedCompressionRate = 0,
-         bool Symmetric                   = false>
-struct GpuClusterConfig
+         bool Symmetric                   = true>
+struct GpuClusterNbListNeighborhoodConfig
 {
     static constexpr unsigned ncMax                   = NcMax;
     static constexpr unsigned iSize                   = ISize;
@@ -763,11 +755,35 @@ struct GpuClusterConfig
     static constexpr bool symmetric                   = Symmetric;
     static constexpr unsigned ncMaxExtra =
         (NcMax / 4 + GpuConfig::warpSize - 1) / GpuConfig::warpSize * GpuConfig::warpSize;
+
+    template<unsigned NewNcMax>
+    using withNcMax = GpuClusterNbListNeighborhoodConfig<NewNcMax, ISize, JSize, ExpectedCompressionRate, Symmetric>;
+
+    template<unsigned NewISize, unsigned newJSize>
+    using withClusterSize =
+        GpuClusterNbListNeighborhoodConfig<NcMax, NewISize, newJSize, ExpectedCompressionRate, Symmetric>;
+    template<unsigned NewExpectedCompressionRate>
+    using withCompression =
+        GpuClusterNbListNeighborhoodConfig<NcMax, ISize, JSize, NewExpectedCompressionRate, Symmetric>;
+    using withoutCompression = withCompression<0>;
+    using withSymmetry       = GpuClusterNbListNeighborhoodConfig<NcMax, ISize, JSize, ExpectedCompressionRate, true>;
+    using withoutSymmetry    = GpuClusterNbListNeighborhoodConfig<NcMax, ISize, JSize, ExpectedCompressionRate, false>;
 };
 
-template<class Config>
+} // namespace detail
+
+template<class Config = detail::GpuClusterNbListNeighborhoodConfig<>>
 struct GpuClusterNbListNeighborhood
 {
+    template<unsigned NcMax>
+    using withNcMax = GpuClusterNbListNeighborhood<typename Config::withNcMax<NcMax>>;
+    template<unsigned ISize, unsigned JSize>
+    using withClusterSize = GpuClusterNbListNeighborhood<typename Config::withClusterSize<ISize, JSize>>;
+    template<unsigned ExpectedCompressionRate>
+    using withCompression    = GpuClusterNbListNeighborhood<typename Config::withCompression<ExpectedCompressionRate>>;
+    using withoutCompression = GpuClusterNbListNeighborhood<typename Config::withoutCompression>;
+    using withSymmetry       = GpuClusterNbListNeighborhood<typename Config::withSymmetry>;
+    using withoutSymmetry    = GpuClusterNbListNeighborhood<typename Config::withoutSymmetry>;
 
     template<class Tc, class KeyType, class Th>
     detail::GpuClusterNbListNeighborhoodImpl<Config, Tc, Th> build(const OctreeNsView<Tc, KeyType>& tree,

@@ -129,25 +129,22 @@ struct GpuAlwaysTraverseNeighborhoodImpl
     thrust::device_vector<LocalIndex> neighbors;
     thrust::device_vector<int> globalPool;
 
-    template<class... In, class... Out, class Interaction, class Symmetry = symmetry::Asymmetric>
-    void ijLoop(std::tuple<const In*...> const& input,
-                std::tuple<Out*...> const& output,
-                Interaction&& interaction,
-                Symmetry = symmetry::asymmetric)
+    template<class... In, class... Out, class Interaction, class Symmetry>
+    void ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Symmetry)
     {
         resetTraversalCounters<<<1, 1>>>();
         if (box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
             box.boundaryZ() == BoundaryType::periodic)
         {
             gpuAlwaysTraverseNeighborhoodKernel<true><<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
-                tree, box, firstBody, lastBody, x, y, z, h, input, output, std::forward<Interaction>(interaction),
-                ngmax, rawPtr(neighbors), rawPtr(globalPool));
+                tree, box, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
+                std::forward<Interaction>(interaction), ngmax, rawPtr(neighbors), rawPtr(globalPool));
         }
         else
         {
             gpuAlwaysTraverseNeighborhoodKernel<false><<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
-                tree, box, firstBody, lastBody, x, y, z, h, input, output, std::forward<Interaction>(interaction),
-                ngmax, rawPtr(neighbors), rawPtr(globalPool));
+                tree, box, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
+                std::forward<Interaction>(interaction), ngmax, rawPtr(neighbors), rawPtr(globalPool));
         }
         checkGpuErrors(cudaDeviceSynchronize());
     }
