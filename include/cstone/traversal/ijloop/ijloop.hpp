@@ -35,6 +35,7 @@
 #include <type_traits>
 
 #include "cstone/tree/definitions.h"
+#include "cstone/sfc/box.hpp"
 #include "cstone/util/tuple_util.hpp"
 
 namespace cstone::ijloop
@@ -98,7 +99,16 @@ inline constexpr Tc distanceSquared(bool usePbc,
     const Tc& xj = std::get<1>(jData);
     const Tc& yj = std::get<2>(jData);
     const Tc& zj = std::get<3>(jData);
-    return usePbc ? distanceSq<true>(xj, yj, zj, xi, yi, zi, box) : distanceSq<false>(xj, yj, zj, xi, yi, zi, box);
+    Tc dx  = xi - xj;
+    Tc dy  = yi - yj;
+    Tc dz  = zi - zj;
+    if (usePbc)
+    {
+        dx -= (box.boundaryX() == BoundaryType::periodic) * box.lx() * std::rint(dx * box.ilx());
+        dy -= (box.boundaryY() == BoundaryType::periodic) * box.ly() * std::rint(dy * box.ily());
+        dz -= (box.boundaryZ() == BoundaryType::periodic) * box.lz() * std::rint(dz * box.ilz());
+    }
+    return dx * dx + dy * dy + dz * dz;
 }
 
 template<class... Ts>

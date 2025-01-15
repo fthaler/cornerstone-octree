@@ -31,19 +31,13 @@
 
 #include <iostream>
 
-#include <cuda/annotated_ptr>
-
 #include <thrust/device_vector.h>
 
 #include "cstone/cuda/thrust_util.cuh"
-#include "cstone/findneighbors.hpp"
-#include "cstone/primitives/math.hpp"
-#include "cstone/traversal/ijloop/cpu.hpp"
 #include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
 #include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
-#include "cstone/traversal/find_neighbors.cuh"
-#include "cstone/traversal/find_neighbors_clustered.cuh"
+#include "cstone/traversal/ijloop/cpu.hpp"
 
 #include "../coord_samples/random.hpp"
 
@@ -174,7 +168,7 @@ void benchmarkGPU(Neighborhood const& neighborhood)
     const Tc* x       = coords.x().data();
     const Tc* y       = coords.y().data();
     const Tc* z       = coords.z().data();
-    const auto* codes = (KeyType*)(coords.particleKeys().data());
+    const KeyType* codes = coords.particleKeys().data();
 
     unsigned bucketSize   = 64;
     auto [csTree, counts] = computeOctree(codes, codes + n, bucketSize);

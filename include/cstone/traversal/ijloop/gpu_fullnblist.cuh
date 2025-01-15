@@ -31,12 +31,12 @@
 
 #pragma once
 
-#include <algorithm>
-#include <utility>
-#include <vector>
+#include <tuple>
 
-#include "cstone/traversal/ijloop/ijloop.hpp"
+#include "cstone/cuda/thrust_util.cuh"
+#include "cstone/primitives/math.hpp"
 #include "cstone/traversal/find_neighbors.cuh"
+#include "cstone/traversal/ijloop/ijloop.hpp"
 #include "cstone/tree/octree.hpp"
 
 namespace cstone::ijloop

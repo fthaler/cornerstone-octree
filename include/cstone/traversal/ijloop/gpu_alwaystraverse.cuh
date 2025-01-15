@@ -31,12 +31,11 @@
 
 #pragma once
 
-#include <algorithm>
-#include <utility>
-#include <vector>
+#include <tuple>
 
-#include "cstone/traversal/ijloop/ijloop.hpp"
+#include "cstone/cuda/thrust_util.cuh"
 #include "cstone/traversal/find_neighbors.cuh"
+#include "cstone/traversal/ijloop/ijloop.hpp"
 #include "cstone/tree/octree.hpp"
 
 namespace cstone::ijloop
@@ -114,7 +113,6 @@ __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeigh
             }
         }
     }
-    cuda::discard_memory(warpNidx, TravConfig::targetSize * ngmax * sizeof(LocalIndex));
 }
 
 template<class Tc, class KeyType, class Th>

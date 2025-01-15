@@ -40,9 +40,11 @@
 #include <cub/warp/warp_merge_sort.cuh>
 
 #include "cstone/compressneighbors.cuh"
+#include "cstone/cuda/thrust_util.cuh"
+#include "cstone/primitives/math.hpp"
 #include "cstone/reducearray.cuh"
-#include "cstone/traversal/ijloop/ijloop.hpp"
 #include "cstone/traversal/find_neighbors.cuh"
+#include "cstone/traversal/ijloop/ijloop.hpp"
 #include "cstone/tree/octree.hpp"
 
 namespace cstone::ijloop
