@@ -84,6 +84,9 @@ __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalNumParticles,
     const Tc yi = y[std::min(i, totalNumParticles - 1)];
     const Tc zi = z[std::min(i, totalNumParticles - 1)];
 
+    const unsigned jClusters = iceil(totalNumParticles, Config::jSize);
+    const unsigned bboxIdx = i / Config::jSize;
+
     if constexpr (Config::jSize >= 3)
     {
         util::array<Tc, 3> bboxMin{xi, yi, zi};
@@ -96,9 +99,9 @@ __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalNumParticles,
         const Tc size   = (vMax - vMin) * Tc(0.5);
 
         const unsigned idx = warp.thread_rank() % Config::jSize;
-        if (idx < 3)
+        if (idx < 3 & bboxIdx < jClusters)
         {
-            auto* box     = &bboxes[i / Config::jSize];
+            auto* box     = &bboxes[bboxIdx];
             Tc* centerPtr = (Tc*)box + idx;
             Tc* sizePtr   = centerPtr + 3;
             *centerPtr    = center;
@@ -124,7 +127,7 @@ __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalNumParticles,
         Vec3<Tc> center = (bboxMax + bboxMin) * Tc(0.5);
         Vec3<Tc> size   = (bboxMax - bboxMin) * Tc(0.5);
 
-        if (i % Config::jSize == 0 && i < totalNumParticles) bboxes[i / Config::jSize] = {center, size};
+        if (i % Config::jSize == 0 && bboxIdx < jClusters) bboxes[bboxIdx] = {center, size};
     }
 }
 
