@@ -136,14 +136,15 @@ struct DensityKernelFun
 {
     const T* wh;
 
-    template<class ParticleData>
-    constexpr __host__ __device__ auto operator()(ParticleData const& iData, ParticleData const& jData, T distSq) const
+    template<class ParticleData, class Tc>
+    constexpr __host__ __device__ auto
+    operator()(ParticleData const& iData, ParticleData const& jData, Vec3<Tc>, T distSq) const
     {
-        const auto [i, xi, yi, zi, hi, _]  = iData;
-        const auto [j, xj, yj, zj, hj, mj] = jData;
-        const T dist                       = std::sqrt(distSq);
-        const T vloc                       = dist * (T(1) / hi);
-        const T w                          = i == j ? T(1) : table_lookup(wh, vloc);
+        const auto [i, iPos, hi, mi] = iData;
+        const auto [j, jPos, hj, mj] = jData;
+        const T dist                 = std::sqrt(distSq);
+        const T vloc                 = dist * (T(1) / hi);
+        const T w                    = i == j ? T(1) : table_lookup(wh, vloc);
         return std::make_tuple(w * mj);
     }
 };
@@ -165,9 +166,9 @@ void benchmarkGPU(Neighborhood const& neighborhood)
     std::cout << "Number of particles: " << n << std::endl;
     std::cout << "Expected average number of neighbors: " << expected_neighbors << std::endl;
 
-    const Tc* x       = coords.x().data();
-    const Tc* y       = coords.y().data();
-    const Tc* z       = coords.z().data();
+    const Tc* x          = coords.x().data();
+    const Tc* y          = coords.y().data();
+    const Tc* z          = coords.z().data();
     const KeyType* codes = coords.particleKeys().data();
 
     unsigned bucketSize   = 64;

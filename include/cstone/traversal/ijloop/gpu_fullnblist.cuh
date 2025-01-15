@@ -93,15 +93,15 @@ __launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodKernel(const Box<Tc>
     const auto iData  = loadParticleData(x, y, z, h, input, i);
     const bool usePbc = requiresPbcHandling(box, iData);
 
-    auto result = interaction(iData, iData, Tc(0));
+    auto result = interaction(iData, iData, Vec3<Tc>{0, 0, 0}, Tc(0));
     for (unsigned nb = 0; nb < nbs; ++nb)
     {
         const LocalIndex j = neighbors[threadId + nb * neighborsStride];
         const auto jData   = loadParticleData(x, y, z, h, input, j);
 
-        const Tc distSq = distanceSquared(usePbc, box, iData, jData);
+        const auto [ijPosDiff, distSq] = posDiffAndDistSq(usePbc, box, iData, jData);
 
-        updateResult(result, interaction(iData, jData, distSq));
+        updateResult(result, interaction(iData, jData, ijPosDiff, distSq));
     }
 
     storeParticleData(output, i, result);

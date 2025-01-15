@@ -66,49 +66,41 @@ inline constexpr std::tuple<const Ts*...> makeConstRestrict(std::tuple<Ts*...> i
 }
 
 template<class Tc, class Th, class... Ts>
-inline constexpr std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> loadParticleData(
+inline constexpr std::tuple<LocalIndex, Vec3<Tc>, Th, Ts...> loadParticleData(
     const Tc* x, const Tc* y, const Tc* z, const Th* h, std::tuple<const Ts*...> const& input, LocalIndex index)
 {
-    return std::tuple_cat(std::make_tuple(index), util::tupleMap([index](auto const* ptr) { return ptr[index]; },
-                                                                 std::tuple_cat(std::make_tuple(x, y, z, h), input)));
+    const Vec3<Tc> pos = {x[index], y[index], z[index]};
+    return std::tuple_cat(std::make_tuple(index, pos, h[index]),
+                          util::tupleMap([index](auto const* ptr) { return ptr[index]; }, input));
 }
 
 template<class Tc, class Th, class... Ts>
-inline constexpr bool requiresPbcHandling(Box<Tc> const& box,
-                                          std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> const& iData)
+inline constexpr bool requiresPbcHandling(Box<Tc> const& box, std::tuple<LocalIndex, Vec3<Tc>, Th, Ts...> const& iData)
 {
     if (box.boundaryX() != BoundaryType::periodic & box.boundaryY() != BoundaryType::periodic &
         box.boundaryZ() != BoundaryType::periodic)
         return false;
-    const Tc& xi   = std::get<1>(iData);
-    const Tc& yi   = std::get<2>(iData);
-    const Tc& zi   = std::get<3>(iData);
-    const Tc twoHi = Tc(2) * std::get<4>(iData);
-    return !insideBox({xi, yi, zi}, {twoHi, twoHi, twoHi}, box);
+    const Vec3<Tc>& iPos = std::get<1>(iData);
+    const Tc twoHi       = Tc(2) * std::get<2>(iData);
+    return !insideBox(iPos, {twoHi, twoHi, twoHi}, box);
 }
 
 template<class Tc, class Th, class... Ts>
-inline constexpr Tc distanceSquared(bool usePbc,
-                                    Box<Tc> const& box,
-                                    std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> const& iData,
-                                    std::tuple<LocalIndex, Tc, Tc, Tc, Th, Ts...> const& jData)
+inline constexpr std::tuple<Vec3<Tc>, Tc> posDiffAndDistSq(bool usePbc,
+                                                           Box<Tc> const& box,
+                                                           std::tuple<LocalIndex, Vec3<Tc>, Th, Ts...> const& iData,
+                                                           std::tuple<LocalIndex, Vec3<Tc>, Th, Ts...> const& jData)
 {
-    const Tc& xi = std::get<1>(iData);
-    const Tc& yi = std::get<2>(iData);
-    const Tc& zi = std::get<3>(iData);
-    const Tc& xj = std::get<1>(jData);
-    const Tc& yj = std::get<2>(jData);
-    const Tc& zj = std::get<3>(jData);
-    Tc dx  = xi - xj;
-    Tc dy  = yi - yj;
-    Tc dz  = zi - zj;
+    const Vec3<Tc>& iPos = std::get<1>(iData);
+    const Vec3<Tc>& jPos = std::get<1>(jData);
+    Vec3<Tc> ijPosDiff   = iPos - jPos;
     if (usePbc)
     {
-        dx -= (box.boundaryX() == BoundaryType::periodic) * box.lx() * std::rint(dx * box.ilx());
-        dy -= (box.boundaryY() == BoundaryType::periodic) * box.ly() * std::rint(dy * box.ily());
-        dz -= (box.boundaryZ() == BoundaryType::periodic) * box.lz() * std::rint(dz * box.ilz());
+        ijPosDiff[0] -= (box.boundaryX() == BoundaryType::periodic) * box.lx() * std::rint(ijPosDiff[0] * box.ilx());
+        ijPosDiff[1] -= (box.boundaryY() == BoundaryType::periodic) * box.ly() * std::rint(ijPosDiff[1] * box.ily());
+        ijPosDiff[2] -= (box.boundaryZ() == BoundaryType::periodic) * box.lz() * std::rint(ijPosDiff[2] * box.ilz());
     }
-    return dx * dx + dy * dy + dz * dz;
+    return {ijPosDiff, norm2(ijPosDiff)};
 }
 
 template<class... Ts>

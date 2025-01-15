@@ -85,7 +85,7 @@ __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalNumParticles,
     const Tc zi = z[std::min(i, totalNumParticles - 1)];
 
     const unsigned jClusters = iceil(totalNumParticles, Config::jSize);
-    const unsigned bboxIdx = i / Config::jSize;
+    const unsigned bboxIdx   = i / Config::jSize;
 
     if constexpr (Config::jSize >= 3)
     {
@@ -660,7 +660,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
 
     const auto iData = loadParticleData(x, y, z, h, input, i);
 
-    using result_t                       = decltype(interaction(iData, iData, Tc(0)));
+    using result_t                       = decltype(interaction(iData, iData, Vec3<Tc>(), Tc(0)));
     result_t result                      = {0};
     const auto computeClusterInteraction = [&](const unsigned jCluster, const bool self)
     {
@@ -671,14 +671,14 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
         {
             const auto jData = loadParticleData(x, y, z, h, input, j);
 
-            const Tc distSq = distanceSquared(UsePbc, box, iData, jData);
-            const Th twoHi  = Th(2) * std::get<4>(iData);
+            const auto [ijPosDiff, distSq] = posDiffAndDistSq(UsePbc, box, iData, jData);
+            const Th twoHi                 = Th(2) * std::get<2>(iData);
             if (distSq < twoHi * twoHi)
             {
-                updateResult(contrib, interaction(iData, jData, distSq));
+                updateResult(contrib, interaction(iData, jData, ijPosDiff, distSq));
                 updateResult(result, contrib);
                 if constexpr (Config::symmetric && std::is_same_v<Symmetry, symmetry::Asymmetric>)
-                    updateResult(contribSym, interaction(jData, iData, distSq));
+                    updateResult(contribSym, interaction(jData, iData, -ijPosDiff, distSq));
             }
         }
         if constexpr (Config::symmetric)

@@ -99,14 +99,14 @@ __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeigh
                 const auto iData = loadParticleData(x, y, z, h, input, i);
 
                 const unsigned nbs = imin(nc_i[warpTarget], ngmax);
-                auto result        = interaction(iData, iData, Tc(0));
+                auto result        = interaction(iData, iData, Vec3<Tc>{0, 0, 0}, Tc(0));
                 for (unsigned nb = 0; nb < nbs; ++nb)
                 {
-                    const LocalIndex j = nidx[nb * TravConfig::targetSize];
-                    const auto jData   = loadParticleData(x, y, z, h, input, j);
-                    const Tc distSq    = distanceSquared(UsePbc, box, iData, jData);
+                    const LocalIndex j             = nidx[nb * TravConfig::targetSize];
+                    const auto jData               = loadParticleData(x, y, z, h, input, j);
+                    const auto [ijPosDiff, distSq] = posDiffAndDistSq(UsePbc, box, iData, jData);
 
-                    updateResult(result, interaction(iData, jData, distSq));
+                    updateResult(result, interaction(iData, jData, ijPosDiff, distSq));
                 }
 
                 storeParticleData(output, i, result);
