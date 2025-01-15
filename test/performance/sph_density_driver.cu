@@ -523,8 +523,7 @@ void computeDensityClustered(const std::size_t firstBody,
                                  Tc,
                                  T> const& neighborhood)
 {
-    using sym = std::conditional_t<Symmetric, ijloop::symmetry::Even, ijloop::symmetry::Asymmetric>;
-    neighborhood.ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh}, sym{});
+    neighborhood.ijLoop(std::make_tuple(m), std::make_tuple(rho), DensityKernelFun<T>{wh}, ijloop::symmetry::even);
 }
 
 template<class Tc, class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeDensityF>

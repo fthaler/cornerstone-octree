@@ -584,8 +584,8 @@ constexpr __device__ void storeTupleJSum(std::tuple<T0, T...> const& tuple,
     }
 }
 
-template<class... Ts>
-__device__ inline constexpr void applySymmetry(symmetry::Even, std::tuple<Ts...> const& value)
+template<class Symmetry, class... Ts>
+__device__ inline constexpr void applySymmetry(Symmetry, std::tuple<Ts...> const& value)
 {
 }
 
@@ -619,7 +619,6 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
     const unsigned* __restrict__ clusterNeighborsCount)
 {
     static_assert(Config::ncMax % GpuConfig::warpSize == 0);
-    static_assert(Config::symmetric ^ std::is_same_v<Symmetry, symmetry::Asymmetric>);
 
     const auto block = cooperative_groups::this_thread_block();
     assert(block.dim_threads().x == Config::iSize);
@@ -661,7 +660,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
     const auto computeClusterInteraction = [&](const unsigned jCluster, const bool self)
     {
         const unsigned j = jCluster * Config::jSize + block.thread_index().y % Config::jSize;
-        result_t contrib = {0};
+        result_t contrib = {0}, contribSym = {0};
         // TODO: proper bounds for j
         if (i < lastBody & j < lastBody & (!Config::symmetric | !self | (i <= j)))
         {
@@ -673,10 +672,14 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
             {
                 updateResult(contrib, interaction(iData, jData, distSq));
                 updateResult(result, contrib);
+                if constexpr (Config::symmetric && std::is_same_v<Symmetry, symmetry::Asymmetric>)
+                    updateResult(contribSym, interaction(jData, iData, distSq));
             }
         }
         if constexpr (Config::symmetric)
         {
+            if constexpr (std::is_same_v<Symmetry, symmetry::Asymmetric>)
+                util::for_each_tuple([](auto& dst, auto const& src) { dst = src; }, contrib, contribSym);
             if (i == j) util::for_each_tuple([](auto& v) { v = 0; }, contrib);
             applySymmetry(Symmetry{}, contrib);
             storeTupleJSum<Config>(contrib, output, j, j < lastBody);
