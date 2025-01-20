@@ -241,10 +241,10 @@ __global__
     volatile __shared__ int sharedPool[GpuConfig::warpSize * NumWarpsPerBlock];
     __shared__ unsigned nidx[NumWarpsPerBlock][GpuConfig::warpSize / Config::iSize][Config::ncMax + Config::ncMaxExtra];
 
-    assert(firstBody == 0); // TODO: other cases
-    const unsigned numTargets   = iceil(lastBody, GpuConfig::warpSize);
-    const unsigned numIClusters = iceil(lastBody, Config::iSize);
-    const unsigned numJClusters = iceil(lastBody, Config::jSize);
+    const unsigned numTargets    = iceil(lastBody, GpuConfig::warpSize);
+    const unsigned firstICluster = firstBody / Config::iSize;
+    const unsigned lastICluster  = (lastBody - 1) / Config::iSize + 1;
+    const unsigned numJClusters  = iceil(lastBody, Config::jSize);
 
     const TreeNodeIndex* __restrict__ childOffsets   = tree.childOffsets;
     const TreeNodeIndex* __restrict__ internalToLeaf = tree.internalToLeaf;
@@ -316,7 +316,7 @@ __global__
             for (unsigned c = 0; c < GpuConfig::warpSize / Config::iSize; ++c)
             {
                 const auto iClusterC = target * (GpuConfig::warpSize / Config::iSize) + c;
-                if (iClusterC >= numIClusters) break;
+                if (iClusterC < firstICluster | iClusterC >= lastICluster) break;
                 const auto iClusterCenterC = warp.shfl(iClusterCenter, c * Config::iSize);
                 const auto iClusterSizeC   = warp.shfl(iClusterSize, c * Config::iSize);
                 const unsigned ncC         = warp.shfl(nc, c * Config::iSize);
@@ -445,7 +445,7 @@ __global__
         {
             unsigned ncc      = warp.shfl(nc, c * Config::iSize);
             const unsigned ic = warp.shfl(iCluster, c * Config::iSize);
-            if (ic >= numIClusters) continue;
+            if (ic < firstICluster | ic >= lastICluster) continue;
 
             const unsigned i    = imin(ic * Config::iSize + block.thread_index().x, lastBody - 1);
             const Vec3<Tc> iPos = {x[i], y[i], z[i]};
@@ -500,8 +500,9 @@ __global__
             ncc = prunedNcc;
 
             deduplicateAndStoreNeighbors<Config, NumWarpsPerBlock>(
-                nidx[block.thread_index().z][c], ncc, &clusterNeighbors[ic * nbStoragePerICluster<Config>::value],
-                &clusterNeighborsCount[ic]);
+                nidx[block.thread_index().z][c], ncc,
+                &clusterNeighbors[(ic - firstICluster) * nbStoragePerICluster<Config>::value],
+                &clusterNeighborsCount[ic - firstICluster]);
         }
     }
 }
@@ -633,8 +634,10 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
     assert(block.dim_threads().z == NumWarpsPerBlock);
     const auto warp = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
 
-    const unsigned iCluster     = block.group_index().x * NumWarpsPerBlock + block.thread_index().z;
-    const unsigned numIClusters = iceil(lastBody, Config::iSize);
+    const unsigned firstICluster = firstBody / Config::iSize;
+    const unsigned lastICluster  = (lastBody - 1) / Config::iSize + 1;
+    const unsigned numIClusters  = lastICluster - firstICluster;
+    const unsigned iCluster      = block.group_index().x * NumWarpsPerBlock + block.thread_index().z + firstICluster;
 
     if (iCluster >= numIClusters) return;
 
@@ -647,15 +650,16 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
 
     if constexpr (Config::compress)
     {
-        warpDecompressNeighbors((const char*)&clusterNeighbors[iCluster * nbStoragePerICluster<Config>::value], nidx,
-                                iClusterNeighborsCount);
+        warpDecompressNeighbors(
+            (const char*)&clusterNeighbors[(iCluster - firstICluster) * nbStoragePerICluster<Config>::value], nidx,
+            iClusterNeighborsCount);
     }
     else
     {
-        iClusterNeighborsCount = imin(clusterNeighborsCount[iCluster], Config::ncMax);
+        iClusterNeighborsCount = imin(clusterNeighborsCount[iCluster - firstICluster], Config::ncMax);
 #pragma unroll
         for (unsigned nb = warp.thread_rank(); nb < iClusterNeighborsCount; nb += GpuConfig::warpSize)
-            nidx[nb] = clusterNeighbors[iCluster * nbStoragePerICluster<Config>::value + nb];
+            nidx[nb] = clusterNeighbors[(iCluster - firstICluster) * nbStoragePerICluster<Config>::value + nb];
     }
 
     const auto iData = loadParticleData(x, y, z, h, input, i);
@@ -666,8 +670,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
     {
         const unsigned j = jCluster * Config::jSize + block.thread_index().y % Config::jSize;
         result_t contrib = {0}, contribSym = {0};
-        // TODO: proper bounds for j
-        if (i < lastBody & j < lastBody & (!Config::symmetric | !self | (i <= j)))
+        if (i >= firstBody & i < lastBody & j < lastBody & (!Config::symmetric | !self | (i <= j)))
         {
             const auto jData = loadParticleData(x, y, z, h, input, j);
 
@@ -734,10 +737,14 @@ struct GpuClusterNbListNeighborhoodImpl
                 { checkGpuErrors(cudaMemsetAsync(ptr + firstBody, 0, sizeof(decltype(*ptr)) * numBodies)); }, output);
         }
 
+        const LocalIndex firstICluster = firstBody / Config::iSize;
+        const LocalIndex lastICluster  = (lastBody - 1) / Config::iSize + 1;
+        const LocalIndex numIClusters  = lastICluster - firstICluster;
+
         constexpr unsigned threads          = 128;
         constexpr unsigned numWarpsPerBlock = threads / GpuConfig::warpSize;
         const dim3 blockSize                = {Config::iSize, GpuConfig::warpSize / Config::iSize, numWarpsPerBlock};
-        const unsigned numBlocks            = iceil(numBodies, Config::iSize * numWarpsPerBlock);
+        const unsigned numBlocks            = iceil(numIClusters, numWarpsPerBlock);
         gpuClusterNbListNeighborhoodKernel<Config, numWarpsPerBlock, true, Symmetry><<<numBlocks, blockSize>>>(
             box, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
             std::forward<Interaction>(interaction), rawPtr(clusterNeighbors), rawPtr(clusterNeighborsCount));
@@ -800,14 +807,12 @@ struct GpuClusterNbListNeighborhood
                                                                    const Tc* z,
                                                                    const Th* h) const
     {
-        const LocalIndex numBodies = lastBody - firstBody;
-        const LocalIndex iClusters = iceil(numBodies, Config::iSize);
-        // TODO: fix the general case with jClusters inside the halos!
-        const LocalIndex totalParticles = lastBody;
-        assert(firstBody == 0);
-        const LocalIndex jClusters = iceil(totalParticles, Config::jSize);
+        const LocalIndex firstICluster = firstBody / Config::iSize;
+        const LocalIndex lastICluster  = (lastBody - 1) / Config::iSize + 1;
+        const LocalIndex numIClusters  = lastICluster - firstICluster;
+        const LocalIndex numJClusters  = iceil(lastBody, Config::jSize);
 
-        thrust::device_vector<util::tuple<Vec3<Tc>, Vec3<Tc>>> jClusterBboxes(jClusters);
+        thrust::device_vector<util::tuple<Vec3<Tc>, Vec3<Tc>>> jClusterBboxes(numJClusters);
 
         detail::GpuClusterNbListNeighborhoodImpl<Config, Tc, Th> nbList{
             box,
@@ -817,14 +822,14 @@ struct GpuClusterNbListNeighborhood
             y,
             z,
             h,
-            thrust::device_vector<LocalIndex>(detail::nbStoragePerICluster<Config>::value * iClusters),
-            thrust::device_vector<unsigned>(Config::compress ? 0 : iClusters)};
+            thrust::device_vector<LocalIndex>(detail::nbStoragePerICluster<Config>::value * numIClusters),
+            thrust::device_vector<unsigned>(Config::compress ? 0 : numIClusters)};
 
         {
             constexpr unsigned numThreads = 128;
-            unsigned numBlocks            = iceil(totalParticles, numThreads);
+            unsigned numBlocks            = iceil(lastBody, numThreads);
             detail::gpuClusterNbListComputeBboxes<Config>
-                <<<numBlocks, numThreads>>>(totalParticles, x, y, z, rawPtr(jClusterBboxes));
+                <<<numBlocks, numThreads>>>(lastBody, x, y, z, rawPtr(jClusterBboxes));
             checkGpuErrors(cudaGetLastError());
         }
         {
