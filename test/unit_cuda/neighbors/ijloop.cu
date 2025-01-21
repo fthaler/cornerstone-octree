@@ -226,29 +226,26 @@ auto initialData()
 
     Result ref = reference(box, coords.x().data(), coords.y().data(), coords.z().data(), h.data(), v.data(), n / 4, n);
 
-    return std::make_tuple(box, n / 4, n, x, y, z, h, v, codes, octree, layout, centers, sizes, ref);
-}
+    OctreeNsView<double, KeyT> view{octree.numLeafNodes,
+                                    octree.prefixes.data(),
+                                    octree.childOffsets.data(),
+                                    octree.internalToLeaf.data(),
+                                    octree.levelRange.data(),
+                                    nullptr,
+                                    layout.data(),
+                                    centers.data(),
+                                    sizes.data()};
 
-OctreeNsView<double, KeyT> cpuView(OctreeData<KeyT, CpuTag> const& octree,
-                                   std::vector<LocalIndex> const& layout,
-                                   std::vector<Vec3<double>> const& centers,
-                                   std::vector<Vec3<double>> const& sizes)
-{
-    return {octree.numLeafNodes,
-            octree.prefixes.data(),
-            octree.childOffsets.data(),
-            octree.internalToLeaf.data(),
-            octree.levelRange.data(),
-            nullptr,
-            layout.data(),
-            centers.data(),
-            sizes.data()};
+    auto treeData =
+        std::make_tuple(std::move(codes), std::move(octree), std::move(layout), std::move(centers), std::move(sizes));
+
+    return std::make_tuple(box, n / 4, n, std::move(x), std::move(y), std::move(z), std::move(h), std::move(v),
+                           std::move(treeData), std::move(view), std::move(ref));
 }
 
 TEST(IjLoop, CPU)
 {
-    auto [box, firstBody, lastBody, x, y, z, h, v, codes, octree, layout, centers, sizes, ref] = initialData();
-    auto nsView = cpuView(octree, layout, centers, sizes);
+    auto [box, firstBody, lastBody, x, y, z, h, v, treeData, nsView, ref] = initialData();
 
     Result actual;
     ijloop::CpuDirectNeighborhood{ngmax}
