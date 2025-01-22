@@ -205,8 +205,8 @@ void validate(const Result& expected, const Result& actual)
 
 auto initialData()
 {
-    const unsigned lastBody  = 21;
-    const unsigned firstBody = lastBody / 4;
+    const unsigned firstBody = 241;
+    const unsigned lastBody  = 997;
     Box<double> box{0, 1, BoundaryType::periodic};
     RandomCoordinates<double, StrongKeyT> coords(lastBody, box);
 
@@ -215,10 +215,9 @@ auto initialData()
     thrust::universal_vector<double> z   = coords.z();
     thrust::universal_vector<KeyT> codes = coords.particleKeys();
 
-    thrust::universal_vector<double> h(lastBody, 0.1), v(lastBody);
+    thrust::universal_vector<double> h(lastBody), v(lastBody);
     std::mt19937 gen(42);
-    // TODO: re-enable non-uniform h: std::generate(h.begin(), h.end(),
-    // std::bind(std::uniform_real_distribution<double>(0.03, 0.15), std::ref(gen)));
+    std::generate(h.begin(), h.end(), std::bind(std::uniform_real_distribution<double>(0.03, 0.15), std::ref(gen)));
     std::generate(v.begin(), v.end(), std::bind(std::uniform_real_distribution<double>(-100, 100), std::ref(gen)));
 
     auto [csTree, counts] = computeOctree(rawPtr(codes), rawPtr(codes) + lastBody, 8);
@@ -282,6 +281,16 @@ TEST(IjLoop, GpuClusterNbList4x4WithoutSymmetryWithoutCompression)
 }
 TEST(IjLoop, GpuClusterNbList4x4WithSymmetryWithoutCompression)
 {
-    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<2 * ngmax>::withClusterSize<
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
         4, 4>::withSymmetry::withoutCompression{});
+}
+TEST(IjLoop, GpuClusterNbList4x4WithoutSymmetryWithCompression)
+{
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        4, 4>::withoutSymmetry::withCompression<8>{});
+}
+TEST(IjLoop, GpuClusterNbList4x4WithSymmetryWithCompression)
+{
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        4, 4>::withSymmetry::withCompression<8>{});
 }

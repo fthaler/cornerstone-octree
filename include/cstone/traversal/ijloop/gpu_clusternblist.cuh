@@ -38,6 +38,9 @@
 
 #include <cooperative_groups.h>
 #include <cub/warp/warp_merge_sort.cuh>
+#include <thrust/execution_policy.h>
+#include <thrust/functional.h>
+#include <thrust/reduce.h>
 
 #include "cstone/compressneighbors.cuh"
 #include "cstone/cuda/thrust_util.cuh"
@@ -238,7 +241,8 @@ __global__
                                                const util::tuple<Vec3<Tc>, Vec3<Tc>>* const __restrict__ jClusterBboxes,
                                                unsigned* const __restrict__ clusterNeighbors,
                                                unsigned* const __restrict__ clusterNeighborsCount,
-                                               int* const __restrict__ globalPool)
+                                               int* const __restrict__ globalPool,
+                                               const Th maxH)
 {
     static_assert(Config::ncMax % GpuConfig::warpSize == 0);
     static_assert((Config::ncMax + Config::ncMaxExtra) % GpuConfig::warpSize == 0);
@@ -284,8 +288,9 @@ __global__
         const Vec3<Tc> iPos = {x[i], y[i], z[i]};
         const Th hi         = h[i];
 
-        Vec3<Tc> bbMin = {iPos[0] - 2 * hi, iPos[1] - 2 * hi, iPos[2] - 2 * hi};
-        Vec3<Tc> bbMax = {iPos[0] + 2 * hi, iPos[1] + 2 * hi, iPos[2] + 2 * hi};
+        const Th hBound = Config::symmetric ? maxH : hi;
+        Vec3<Tc> bbMin  = {iPos[0] - 2 * hBound, iPos[1] - 2 * hBound, iPos[2] - 2 * hBound};
+        Vec3<Tc> bbMax  = {iPos[0] + 2 * hBound, iPos[1] + 2 * hBound, iPos[2] + 2 * hBound};
         Vec3<Tc> iClusterCenter, iClusterSize;
         if constexpr (Config::iSize == 1)
         {
@@ -466,7 +471,7 @@ __global__
             const unsigned ic = warp.shfl(iCluster, c * Config::iSize);
             if (ic < firstICluster | ic >= lastICluster) continue;
 
-            const unsigned i = std::min(std::max(ic * Config::iSize + block.thread_index().x, firstBody), lastBody - 1);
+            const unsigned i    = std::min(ic * Config::iSize + block.thread_index().x, lastBody - 1);
             const Vec3<Tc> iPos = {x[i], y[i], z[i]};
             const Th hi         = h[i];
 
@@ -503,11 +508,13 @@ __global__
                                                ? Vec3<Tc>{x[j], y[j], z[j]}
                                                : Vec3<Tc>{std::numeric_limits<Tc>::max(), std::numeric_limits<Tc>::max(),
                                                           std::numeric_limits<Tc>::max()};
+                const Th hj              = j < lastBody ? h[j] : 0;
                 const Vec3<Tc> ijPosDiff = posDiff(jPos);
                 const Th d2              = norm2(ijPosDiff);
-                const Th hi2             = Th(2) * hi;
-                const bool keep          = warp.ballot(d2 < hi2 * hi2) & jBlockMask;
-                const unsigned offset    = exclusiveScanBool(keep & (warp.thread_rank() % threadsPerInteraction == 0));
+                const Th iRadiusSq       = Th(4) * hi * hi;
+                const Th jRadiusSq       = Th(4) * hj * hj;
+                const bool keep       = warp.ballot(d2 < iRadiusSq | (Config::symmetric & d2 < jRadiusSq)) & jBlockMask;
+                const unsigned offset = exclusiveScanBool(keep & (warp.thread_rank() % threadsPerInteraction == 0));
 
                 if ((warp.thread_rank() % threadsPerInteraction == 0) & keep)
                     nidx[block.thread_index().z][c][prunedNcc + offset] = jCluster;
@@ -678,7 +685,6 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
     }
 
     const auto iData = i < lastBody ? loadParticleData(x, y, z, h, input, i) : dummyParticleData(x, y, z, h, input, i);
-    const Th iRadiusSq = radiusSq(iData);
 
     using result_t                       = decltype(interaction(iData, iData, Vec3<Tc>(), Tc(0)));
     result_t result                      = {};
@@ -691,12 +697,13 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
             const auto jData = loadParticleData(x, y, z, h, input, j);
 
             const auto [ijPosDiff, distSq] = posDiffAndDistSq(UsePbc, box, iData, jData);
+            const Th iRadiusSq             = radiusSq(iData);
             const Th jRadiusSq             = radiusSq(jData);
             auto ijInteraction             = interaction(iData, jData, ijPosDiff, distSq);
             if (distSq < iRadiusSq) updateResult(result, ijInteraction);
             if constexpr (Config::symmetric)
             {
-                if (distSq < jRadiusSq & (i != j))
+                if (distSq < jRadiusSq & (!self | (i != j)))
                 {
                     if constexpr (std::is_same_v<Symmetry, symmetry::Asymmetric>)
                         ijInteraction = interaction(jData, iData, -ijPosDiff, distSq);
@@ -855,11 +862,14 @@ struct GpuClusterNbListNeighborhood
             unsigned numBlocks = GpuConfig::smCount * (TravConfig::numWarpsPerSm / (numThreads / GpuConfig::warpSize));
             const dim3 blockSize = {Config::iSize, GpuConfig::warpSize / Config::iSize, numWarpsPerBlock};
             thrust::device_vector<int> pool(TravConfig::memPerWarp * numWarpsPerBlock * numBlocks);
+            Th maxH = 0;
+            if constexpr (Config::symmetric)
+                maxH = thrust::reduce(thrust::device, h, h + lastBody, Th(0), thrust::maximum<Th>());
 
             resetTraversalCounters<<<1, 1>>>();
             detail::gpuClusterNbListBuild<Config, numWarpsPerBlock, true><<<numBlocks, blockSize>>>(
                 tree, box, firstBody, lastBody, x, y, z, h, rawPtr(jClusterBboxes), rawPtr(nbList.clusterNeighbors),
-                rawPtr(nbList.clusterNeighborsCount), rawPtr(pool));
+                rawPtr(nbList.clusterNeighborsCount), rawPtr(pool), maxH);
             checkGpuErrors(cudaGetLastError());
 
             checkGpuErrors(cudaDeviceSynchronize());

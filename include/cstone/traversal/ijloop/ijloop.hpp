@@ -80,7 +80,7 @@ dummyParticleData(const Tc*, const Tc*, const Tc*, const Th*, std::tuple<const T
 {
     constexpr Vec3<Tc> pos = {std::numeric_limits<Tc>::max(), std::numeric_limits<Tc>::max(),
                               std::numeric_limits<Tc>::max()};
-    return std::make_tuple(index, pos, std::numeric_limits<Th>::lowest(), Ts{}...);
+    return std::make_tuple(index, pos, Th(0), Ts{}...);
 }
 
 template<class Tc, class Th, class... Ts>
