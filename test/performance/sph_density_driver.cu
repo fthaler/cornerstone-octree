@@ -34,10 +34,10 @@
 #include <thrust/device_vector.h>
 
 #include "cstone/cuda/thrust_util.cuh"
+#include "cstone/traversal/ijloop/cpu.hpp"
 #include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
 #include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
-#include "cstone/traversal/ijloop/cpu.hpp"
 
 #include "../coord_samples/random.hpp"
 
