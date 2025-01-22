@@ -32,9 +32,12 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include <vector>
+
+#include <thrust/universal_vector.h>
 
 #include "cstone/traversal/ijloop/cpu.hpp"
+#include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
+#include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
 
 #include "../../coord_samples/random.hpp"
 
@@ -59,17 +62,17 @@ struct NeighborFun
     }
 };
 
-using Result                      = std::tuple<std::vector<LocalIndex>,   // iSum
-                                               std::vector<LocalIndex>,   // jSum
-                                               std::vector<Vec3<double>>, // iPosSum
-                                               std::vector<Vec3<double>>, // jPosSum
-                                               std::vector<Vec3<double>>, // ijPosDiffSum
-                                               std::vector<double>,       // distSqSum
-                                               std::vector<double>,       // hiSum
-                                               std::vector<double>,       // hjSum
-                                               std::vector<double>,       // viSum
-                                               std::vector<double>,       // vjSum
-                                               std::vector<unsigned>      // neighborsCount
+using Result                      = std::tuple<thrust::universal_vector<LocalIndex>,   // iSum
+                                               thrust::universal_vector<LocalIndex>,   // jSum
+                                               thrust::universal_vector<Vec3<double>>, // iPosSum
+                                               thrust::universal_vector<Vec3<double>>, // jPosSum
+                                               thrust::universal_vector<Vec3<double>>, // ijPosDiffSum
+                                               thrust::universal_vector<double>,       // distSqSum
+                                               thrust::universal_vector<double>,       // hiSum
+                                               thrust::universal_vector<double>,       // hjSum
+                                               thrust::universal_vector<double>,       // viSum
+                                               thrust::universal_vector<double>,       // vjSum
+                                               thrust::universal_vector<unsigned>      // neighborsCount
                                                >;
 constexpr static auto resultNames = std::make_tuple("iSum",
                                                     "jSum",
@@ -92,10 +95,11 @@ Result reference(const Box<double>& box,
                  const LocalIndex firstBody,
                  const LocalIndex lastBody)
 {
-    std::vector<LocalIndex> iSum(lastBody), jSum(lastBody);
-    std::vector<Vec3<double>> iPosSum(lastBody), jPosSum(lastBody), ijPosDiffSum(lastBody);
-    std::vector<double> d2Sum(lastBody), hiSum(lastBody), hjSum(lastBody), viSum(lastBody), vjSum(lastBody);
-    std::vector<unsigned> neighborsCount(lastBody);
+    thrust::universal_vector<LocalIndex> iSum(lastBody), jSum(lastBody);
+    thrust::universal_vector<Vec3<double>> iPosSum(lastBody), jPosSum(lastBody), ijPosDiffSum(lastBody);
+    thrust::universal_vector<double> d2Sum(lastBody), hiSum(lastBody), hjSum(lastBody), viSum(lastBody),
+        vjSum(lastBody);
+    thrust::universal_vector<unsigned> neighborsCount(lastBody);
 
     for (unsigned i = firstBody; i < lastBody; ++i)
     {
@@ -198,67 +202,72 @@ void validate(const Result& expected, const Result& actual)
 
 auto initialData()
 {
-    const unsigned n = 1000;
+    const unsigned lastBody  = 1000;
+    const unsigned firstBody = lastBody / 4;
     Box<double> box{0, 1, BoundaryType::periodic};
-    RandomCoordinates<double, StrongKeyT> coords(n, box);
+    RandomCoordinates<double, StrongKeyT> coords(lastBody, box);
 
-    auto x     = std::move(coords.x());
-    auto y     = std::move(coords.y());
-    auto z     = std::move(coords.z());
-    auto codes = std::move(coords.particleKeys());
+    thrust::universal_vector<double> x   = coords.x();
+    thrust::universal_vector<double> y   = coords.y();
+    thrust::universal_vector<double> z   = coords.z();
+    thrust::universal_vector<KeyT> codes = coords.particleKeys();
 
-    std::vector<double> h(n), v(n);
+    thrust::universal_vector<double> h(lastBody), v(lastBody);
     std::mt19937 gen(42);
     std::generate(h.begin(), h.end(), std::bind(std::uniform_real_distribution<double>(0.03, 0.15), std::ref(gen)));
     std::generate(v.begin(), v.end(), std::bind(std::uniform_real_distribution<double>(-100, 100), std::ref(gen)));
 
-    auto [csTree, counts] = computeOctree(codes.data(), codes.data() + n, 64);
+    auto [csTree, counts] = computeOctree(rawPtr(codes), rawPtr(codes) + lastBody, 64);
     OctreeData<KeyT, CpuTag> octree;
     octree.resize(nNodes(csTree));
     updateInternalTree<KeyT>(csTree, octree.data());
 
-    std::vector<LocalIndex> layout(nNodes(csTree) + 1);
+    thrust::universal_vector<LocalIndex> layout(nNodes(csTree) + 1);
     std::exclusive_scan(counts.begin(), counts.end() + 1, layout.begin(), 0);
 
-    std::vector<Vec3<double>> centers(octree.numNodes), sizes(octree.numNodes);
-    gsl::span<const KeyT> nodeKeys(octree.prefixes.data(), octree.numNodes);
-    nodeFpCenters(nodeKeys, centers.data(), sizes.data(), box);
+    thrust::universal_vector<Vec3<double>> centers(octree.numNodes), sizes(octree.numNodes);
+    gsl::span<const KeyT> nodeKeys(rawPtr(octree.prefixes), octree.numNodes);
+    nodeFpCenters(nodeKeys, rawPtr(centers), rawPtr(sizes), box);
 
-    Result ref = reference(box, coords.x().data(), coords.y().data(), coords.z().data(), h.data(), v.data(), n / 4, n);
+    Result ref = reference(box, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), rawPtr(v), firstBody, lastBody);
 
     OctreeNsView<double, KeyT> view{octree.numLeafNodes,
-                                    octree.prefixes.data(),
-                                    octree.childOffsets.data(),
-                                    octree.internalToLeaf.data(),
-                                    octree.levelRange.data(),
+                                    rawPtr(octree.prefixes),
+                                    rawPtr(octree.childOffsets),
+                                    rawPtr(octree.internalToLeaf),
+                                    rawPtr(octree.levelRange),
                                     nullptr,
-                                    layout.data(),
-                                    centers.data(),
-                                    sizes.data()};
+                                    rawPtr(layout),
+                                    rawPtr(centers),
+                                    rawPtr(sizes)};
 
     auto treeData =
         std::make_tuple(std::move(codes), std::move(octree), std::move(layout), std::move(centers), std::move(sizes));
 
-    return std::make_tuple(box, n / 4, n, std::move(x), std::move(y), std::move(z), std::move(h), std::move(v),
-                           std::move(treeData), std::move(view), std::move(ref));
+    return std::make_tuple(box, firstBody, lastBody, std::move(x), std::move(y), std::move(z), std::move(h),
+                           std::move(v), std::move(treeData), std::move(view), std::move(ref));
 }
 
-TEST(IjLoop, CPU)
+template<class Neighborhood>
+auto run(Neighborhood&& nb)
 {
     auto [box, firstBody, lastBody, x, y, z, h, v, treeData, nsView, ref] = initialData();
 
     Result actual;
-    ijloop::CpuDirectNeighborhood{ngmax}
-        .build(nsView, box, firstBody, lastBody, x.data(), y.data(), z.data(), h.data())
-        .ijLoop(std::make_tuple(v.data()),
+    nb.build(nsView, box, firstBody, lastBody, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h))
+        .ijLoop(std::make_tuple(rawPtr(v)),
                 util::tupleMap(
                     [lastBody = lastBody](auto& vec)
                     {
                         vec.resize(lastBody);
-                        return vec.data();
+                        return rawPtr(vec);
                     },
                     actual),
                 NeighborFun{}, ijloop::symmetry::asymmetric);
 
     validate(ref, actual);
 }
+
+TEST(IjLoop, Cpu) { run(ijloop::CpuDirectNeighborhood{ngmax}); }
+TEST(IjLoop, GpuAlwaysTraverse) { run(ijloop::GpuAlwaysTraverseNeighborhood{ngmax}); }
+TEST(IjLoop, GpuFullNbList) { run(ijloop::GpuFullNbListNeighborhood{ngmax}); }
