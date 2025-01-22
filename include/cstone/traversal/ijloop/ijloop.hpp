@@ -75,6 +75,15 @@ inline constexpr std::tuple<LocalIndex, Vec3<Tc>, Th, Ts...> loadParticleData(
 }
 
 template<class Tc, class Th, class... Ts>
+inline constexpr std::tuple<LocalIndex, Vec3<Tc>, Th, Ts...>
+dummyParticleData(const Tc*, const Tc*, const Tc*, const Th*, std::tuple<const Ts*...> const&, LocalIndex index)
+{
+    constexpr Vec3<Tc> pos = {std::numeric_limits<Tc>::max(), std::numeric_limits<Tc>::max(),
+                              std::numeric_limits<Tc>::max()};
+    return std::make_tuple(index, pos, std::numeric_limits<Th>::lowest(), Ts{}...);
+}
+
+template<class Tc, class Th, class... Ts>
 inline constexpr bool requiresPbcHandling(Box<Tc> const& box, std::tuple<LocalIndex, Vec3<Tc>, Th, Ts...> const& iData)
 {
     if (box.boundaryX() != BoundaryType::periodic & box.boundaryY() != BoundaryType::periodic &
@@ -101,6 +110,12 @@ inline constexpr std::tuple<Vec3<Tc>, Tc> posDiffAndDistSq(bool usePbc,
         ijPosDiff[2] -= (box.boundaryZ() == BoundaryType::periodic) * box.lz() * std::rint(ijPosDiff[2] * box.ilz());
     }
     return {ijPosDiff, norm2(ijPosDiff)};
+}
+
+template<class Tc, class Th, class... Ts>
+inline constexpr Th radiusSq(std::tuple<LocalIndex, Vec3<Tc>, Th, Ts...> const& data)
+{
+    return Th(4) * std::get<2>(data) * std::get<2>(data);
 }
 
 template<class... Ts>

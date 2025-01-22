@@ -53,11 +53,25 @@ namespace cstone::ijloop
 namespace detail
 {
 
-constexpr __forceinline__ bool includeNbSymmetric(unsigned i, unsigned j)
+constexpr __forceinline__ bool includeNbSymmetric(unsigned i, unsigned j, unsigned first)
 {
     constexpr unsigned blockSize = 32;
     const bool s                 = (i / blockSize) % 2 == (j / blockSize) % 2;
-    return i < j ? s : !s;
+    return (j < first) | (i < j ? s : !s);
+}
+
+template<class T>
+constexpr __forceinline__ void atomicAddScalarOrVec(T* ptr, T value)
+{
+    atomicAdd(ptr, value);
+}
+
+template<class T, std::size_t N>
+constexpr __forceinline__ void atomicAddScalarOrVec(util::array<T, N>* ptr, util::array<T, N> const& value)
+{
+#pragma unroll
+    for (std::size_t i = 0; i < N; ++i)
+        atomicAddScalarOrVec(&((*ptr)[i]), value[i]);
 }
 
 template<class Config>
@@ -241,9 +255,9 @@ __global__
     volatile __shared__ int sharedPool[GpuConfig::warpSize * NumWarpsPerBlock];
     __shared__ unsigned nidx[NumWarpsPerBlock][GpuConfig::warpSize / Config::iSize][Config::ncMax + Config::ncMaxExtra];
 
-    const unsigned numTargets    = iceil(lastBody, GpuConfig::warpSize);
+    const unsigned numTargets    = iceil(lastBody - firstBody / Config::iSize * Config::iSize, GpuConfig::warpSize);
     const unsigned firstICluster = firstBody / Config::iSize;
-    const unsigned lastICluster  = (lastBody - 1) / Config::iSize + 1;
+    const unsigned lastICluster  = iceil(lastBody, Config::iSize);
     const unsigned numJClusters  = iceil(lastBody, Config::jSize);
 
     const TreeNodeIndex* __restrict__ childOffsets   = tree.childOffsets;
@@ -260,9 +274,13 @@ __global__
 
         if (target >= numTargets) return;
 
-        const unsigned iCluster = target * (GpuConfig::warpSize / Config::iSize) + block.thread_index().y;
+        const unsigned iCluster =
+            firstICluster + target * (GpuConfig::warpSize / Config::iSize) + block.thread_index().y;
 
-        const unsigned i    = imin(target * GpuConfig::warpSize + warp.thread_rank(), lastBody - 1);
+        const unsigned i = std::min(
+            std::max(target * GpuConfig::warpSize + warp.thread_rank() + firstBody / Config::iSize * Config::iSize,
+                     firstBody),
+            lastBody - 1);
         const Vec3<Tc> iPos = {x[i], y[i], z[i]};
         const Th hi         = h[i];
 
@@ -315,7 +333,7 @@ __global__
 
             for (unsigned c = 0; c < GpuConfig::warpSize / Config::iSize; ++c)
             {
-                const auto iClusterC = target * (GpuConfig::warpSize / Config::iSize) + c;
+                const auto iClusterC = firstICluster + target * (GpuConfig::warpSize / Config::iSize) + c;
                 if (iClusterC < firstICluster | iClusterC >= lastICluster) break;
                 const auto iClusterCenterC = warp.shfl(iClusterCenter, c * Config::iSize);
                 const auto iClusterSizeC   = warp.shfl(iClusterSize, c * Config::iSize);
@@ -323,7 +341,8 @@ __global__
                 const bool isNeighbor =
                     (validJCluster & iClusterC * Config::iSize / Config::jSize != jCluster &
                      jCluster * Config::jSize / Config::iSize != iClusterC &
-                     (!Config::symmetric || includeNbSymmetric(iClusterC, jCluster * Config::jSize / Config::iSize))) &&
+                     (!Config::symmetric ||
+                      includeNbSymmetric(iClusterC, jCluster * Config::jSize / Config::iSize, firstICluster))) &&
                     norm2(minDistance(iClusterCenterC, iClusterSizeC, jClusterCenter, jClusterSize, box)) == 0;
 
                 const unsigned nbIndex = exclusiveScanBool(isNeighbor);
@@ -447,7 +466,7 @@ __global__
             const unsigned ic = warp.shfl(iCluster, c * Config::iSize);
             if (ic < firstICluster | ic >= lastICluster) continue;
 
-            const unsigned i    = imin(ic * Config::iSize + block.thread_index().x, lastBody - 1);
+            const unsigned i = std::min(std::max(ic * Config::iSize + block.thread_index().x, firstBody), lastBody - 1);
             const Vec3<Tc> iPos = {x[i], y[i], z[i]};
             const Th hi         = h[i];
 
@@ -522,10 +541,8 @@ __device__ inline constexpr T0 dynamicTupleGet(std::tuple<T0, T...> const& tuple
 }
 
 template<class Config, class T0, class... T>
-__device__ __forceinline__ void storeTupleISum(std::tuple<T0, T...> const& tuple,
-                                               std::tuple<T0*, T*...> const& ptrs,
-                                               const unsigned index,
-                                               const bool store)
+__device__ __forceinline__ void
+storeTupleISum(std::tuple<T0, T...> tuple, std::tuple<T0*, T*...> const& ptrs, const unsigned index, const bool store)
 {
     const auto block = cooperative_groups::this_thread_block();
     assert(block.dim_threads().x == Config::iSize);
@@ -553,7 +570,7 @@ __device__ __forceinline__ void storeTupleISum(std::tuple<T0, T...> const& tuple
             util::for_each_tuple(
                 [index](auto* ptr, auto const& t)
                 {
-                    if constexpr (Config::symmetric) { atomicAdd(&ptr[index], t); }
+                    if constexpr (Config::symmetric) { atomicAddScalarOrVec(&ptr[index], t); }
                     else { ptr[index] = t; }
                 },
                 ptrs, tuple);
@@ -561,10 +578,8 @@ __device__ __forceinline__ void storeTupleISum(std::tuple<T0, T...> const& tuple
 }
 
 template<class Config, class T0, class... T>
-constexpr __device__ void storeTupleJSum(std::tuple<T0, T...> const& tuple,
-                                         std::tuple<T0*, T*...> const& ptrs,
-                                         const unsigned index,
-                                         const bool store)
+constexpr __device__ void
+storeTupleJSum(std::tuple<T0, T...> tuple, std::tuple<T0*, T*...> const& ptrs, const unsigned index, const bool store)
 {
     const auto block = cooperative_groups::this_thread_block();
     assert(block.dim_threads().x == Config::iSize);
@@ -583,10 +598,11 @@ constexpr __device__ void storeTupleJSum(std::tuple<T0, T...> const& tuple,
     {
 #pragma unroll
         for (unsigned offset = Config::iSize / 2; offset >= 1; offset /= 2)
-            tupleForeach([&](auto& t) { t += warp.shfl_down(t, offset); }, tuple);
+            util::for_each_tuple([&](auto& t) { t += warp.shfl_down(t, offset); }, tuple);
 
         if ((block.thread_index().x == 0) & store)
-            util::for_each_tuple([index](auto* ptr, auto const& t) { atomicAdd(&ptr[index], t); }, ptrs, tuple);
+            util::for_each_tuple([index](auto* ptr, auto const& t) { atomicAddScalarOrVec(&ptr[index], t); }, ptrs,
+                                 tuple);
     }
 }
 
@@ -635,13 +651,12 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
     const auto warp = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
 
     const unsigned firstICluster = firstBody / Config::iSize;
-    const unsigned lastICluster  = (lastBody - 1) / Config::iSize + 1;
-    const unsigned numIClusters  = lastICluster - firstICluster;
+    const unsigned lastICluster  = iceil(lastBody, Config::iSize);
     const unsigned iCluster      = block.group_index().x * NumWarpsPerBlock + block.thread_index().z + firstICluster;
 
-    if (iCluster >= numIClusters) return;
+    if (iCluster >= lastICluster) return;
 
-    const unsigned i = imin(iCluster * Config::iSize + block.thread_index().x, lastBody - 1);
+    const unsigned i = iCluster * Config::iSize + block.thread_index().x;
 
     __shared__ unsigned nidxBuffer[NumWarpsPerBlock][Config::ncMax];
     unsigned* const nidx = nidxBuffer[block.thread_index().z];
@@ -662,35 +677,37 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
             nidx[nb] = clusterNeighbors[(iCluster - firstICluster) * nbStoragePerICluster<Config>::value + nb];
     }
 
-    const auto iData = loadParticleData(x, y, z, h, input, i);
+    const auto iData = i < lastBody ? loadParticleData(x, y, z, h, input, i) : dummyParticleData(x, y, z, h, input, i);
+    const Th iRadiusSq = radiusSq(iData);
 
     using result_t                       = decltype(interaction(iData, iData, Vec3<Tc>(), Tc(0)));
-    result_t result                      = {0};
+    result_t result                      = {};
     const auto computeClusterInteraction = [&](const unsigned jCluster, const bool self)
     {
         const unsigned j = jCluster * Config::jSize + block.thread_index().y % Config::jSize;
-        result_t contrib = {0}, contribSym = {0};
-        if (i >= firstBody & i < lastBody & j < lastBody & (!Config::symmetric | !self | (i <= j)))
+        result_t jResult = {};
+        if (i < lastBody & j < lastBody & (!Config::symmetric | !self | (i <= j)))
         {
             const auto jData = loadParticleData(x, y, z, h, input, j);
 
             const auto [ijPosDiff, distSq] = posDiffAndDistSq(UsePbc, box, iData, jData);
-            const Th twoHi                 = Th(2) * std::get<2>(iData);
-            if (distSq < twoHi * twoHi)
+            const Th jRadiusSq             = radiusSq(jData);
+            auto ijInteraction             = interaction(iData, jData, ijPosDiff, distSq);
+            if (distSq < iRadiusSq) updateResult(result, ijInteraction);
+            if constexpr (Config::symmetric)
             {
-                updateResult(contrib, interaction(iData, jData, ijPosDiff, distSq));
-                updateResult(result, contrib);
-                if constexpr (Config::symmetric && std::is_same_v<Symmetry, symmetry::Asymmetric>)
-                    updateResult(contribSym, interaction(jData, iData, -ijPosDiff, distSq));
+                if (distSq < jRadiusSq & (i != j))
+                {
+                    if constexpr (std::is_same_v<Symmetry, symmetry::Asymmetric>)
+                        ijInteraction = interaction(jData, iData, -ijPosDiff, distSq);
+                    updateResult(jResult, ijInteraction);
+                }
             }
         }
         if constexpr (Config::symmetric)
         {
-            if constexpr (std::is_same_v<Symmetry, symmetry::Asymmetric>)
-                util::for_each_tuple([](auto& dst, auto const& src) { dst = src; }, contrib, contribSym);
-            if (i == j) util::for_each_tuple([](auto& v) { v = 0; }, contrib);
-            applySymmetry(Symmetry{}, contrib);
-            storeTupleJSum<Config>(contrib, output, j, j < lastBody);
+            applySymmetry(Symmetry{}, jResult);
+            storeTupleJSum<Config>(jResult, output, j, j >= firstBody & j < lastBody);
         }
     };
 
@@ -710,7 +727,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
         computeClusterInteraction(jCluster, false);
     }
 
-    storeTupleISum<Config>(result, output, i, i < lastBody);
+    storeTupleISum<Config>(result, output, i, i >= firstBody & i < lastBody);
 }
 
 template<class Config, class Tc, class Th>
@@ -808,7 +825,7 @@ struct GpuClusterNbListNeighborhood
                                                                    const Th* h) const
     {
         const LocalIndex firstICluster = firstBody / Config::iSize;
-        const LocalIndex lastICluster  = (lastBody - 1) / Config::iSize + 1;
+        const LocalIndex lastICluster  = iceil(lastBody, Config::iSize);
         const LocalIndex numIClusters  = lastICluster - firstICluster;
         const LocalIndex numJClusters  = iceil(lastBody, Config::jSize);
 

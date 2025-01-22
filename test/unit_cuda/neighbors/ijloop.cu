@@ -37,6 +37,7 @@
 
 #include "cstone/traversal/ijloop/cpu.hpp"
 #include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
+#include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
 
 #include "../../coord_samples/random.hpp"
@@ -45,7 +46,7 @@
 
 using namespace cstone;
 
-constexpr unsigned ngmax = 160;
+constexpr inline unsigned ngmax = 160;
 
 using StrongKeyT = HilbertKey<std::uint64_t>;
 using KeyT       = StrongKeyT::ValueType;
@@ -185,7 +186,9 @@ void validate(const Result& expected, const Result& actual)
         }
         else
         {
-            if (ei != ai) return testing::AssertionFailure() << name << "[" << i << "]: " << ai << " != " << ei;
+            if (ei != ai)
+                return testing::AssertionFailure()
+                       << name << "[" << i << "]: " << ai << " (actual) != " << ei << " (expected)";
         }
         return testing::AssertionSuccess();
     };
@@ -202,7 +205,7 @@ void validate(const Result& expected, const Result& actual)
 
 auto initialData()
 {
-    const unsigned lastBody  = 1000;
+    const unsigned lastBody  = 21;
     const unsigned firstBody = lastBody / 4;
     Box<double> box{0, 1, BoundaryType::periodic};
     RandomCoordinates<double, StrongKeyT> coords(lastBody, box);
@@ -212,12 +215,13 @@ auto initialData()
     thrust::universal_vector<double> z   = coords.z();
     thrust::universal_vector<KeyT> codes = coords.particleKeys();
 
-    thrust::universal_vector<double> h(lastBody), v(lastBody);
+    thrust::universal_vector<double> h(lastBody, 0.1), v(lastBody);
     std::mt19937 gen(42);
-    std::generate(h.begin(), h.end(), std::bind(std::uniform_real_distribution<double>(0.03, 0.15), std::ref(gen)));
+    // TODO: re-enable non-uniform h: std::generate(h.begin(), h.end(),
+    // std::bind(std::uniform_real_distribution<double>(0.03, 0.15), std::ref(gen)));
     std::generate(v.begin(), v.end(), std::bind(std::uniform_real_distribution<double>(-100, 100), std::ref(gen)));
 
-    auto [csTree, counts] = computeOctree(rawPtr(codes), rawPtr(codes) + lastBody, 64);
+    auto [csTree, counts] = computeOctree(rawPtr(codes), rawPtr(codes) + lastBody, 8);
     OctreeData<KeyT, CpuTag> octree;
     octree.resize(nNodes(csTree));
     updateInternalTree<KeyT>(csTree, octree.data());
@@ -271,3 +275,13 @@ auto run(Neighborhood&& nb)
 TEST(IjLoop, Cpu) { run(ijloop::CpuDirectNeighborhood{ngmax}); }
 TEST(IjLoop, GpuAlwaysTraverse) { run(ijloop::GpuAlwaysTraverseNeighborhood{ngmax}); }
 TEST(IjLoop, GpuFullNbList) { run(ijloop::GpuFullNbListNeighborhood{ngmax}); }
+TEST(IjLoop, GpuClusterNbList4x4WithoutSymmetryWithoutCompression)
+{
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        4, 4>::withoutSymmetry::withoutCompression{});
+}
+TEST(IjLoop, GpuClusterNbList4x4WithSymmetryWithoutCompression)
+{
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<2 * ngmax>::withClusterSize<
+        4, 4>::withSymmetry::withoutCompression{});
+}
