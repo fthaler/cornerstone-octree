@@ -40,16 +40,18 @@
 #include <thrust/universal_vector.h>
 
 #include "cstone/traversal/ijloop/cpu.hpp"
+#include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
+#include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
+#include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
 #include "cstone/cuda/thrust_util.cuh"
 #include "cstone/primitives/math.hpp"
-#include "cstone/findneighbors.hpp"
-#include "cstone/traversal/find_neighbors.cuh"
 #include "cstone/traversal/find_neighbors_clustered.cuh"
 
 #include "../coord_samples/face_centered_cubic.hpp"
 
 using namespace cstone;
 
+constexpr unsigned ngmax = 256;
 constexpr unsigned ncmax = 256;
 
 template<class T>
@@ -70,290 +72,6 @@ struct LjKernelFun
         return std::make_tuple(T(ijPosDiff[0]) * fpair, T(ijPosDiff[1]) * fpair, T(ijPosDiff[2]) * fpair);
     }
 };
-
-template<class Tc, class T, class KeyType>
-std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>, OctreeNsView<Tc, KeyType>>
-buildNeighborhoodNaiveDirect(std::size_t firstBody,
-                             std::size_t lastBody,
-                             const Tc* x,
-                             const Tc* y,
-                             const Tc* z,
-                             const T* h,
-                             OctreeNsView<Tc, KeyType> tree,
-                             const Box<Tc>& box,
-                             unsigned ngmax)
-{
-    thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
-    thrust::device_vector<unsigned> neighborsCount(lastBody);
-    printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
-    return {neighbors, neighborsCount, tree};
-}
-
-template<class Tc, class T, class KeyType>
-std::tuple<thrust::device_vector<LocalIndex>,
-           thrust::device_vector<unsigned>,
-           thrust::device_vector<int>,
-           OctreeNsView<Tc, KeyType>>
-buildNeighborhoodBatchedDirect(std::size_t firstBody,
-                               std::size_t lastBody,
-                               const Tc* x,
-                               const Tc* y,
-                               const Tc* z,
-                               const T* h,
-                               OctreeNsView<Tc, KeyType> tree,
-                               const Box<Tc>& box,
-                               unsigned ngmax)
-{
-    unsigned numBlocks = TravConfig::numBlocks();
-    unsigned poolSize  = TravConfig::poolSize();
-    thrust::device_vector<LocalIndex> neighbors(ngmax * numBlocks * (TravConfig::numThreads / GpuConfig::warpSize) *
-                                                TravConfig::targetSize);
-    thrust::device_vector<unsigned> neighborsCount(lastBody);
-    thrust::device_vector<int> globalPool(poolSize);
-    printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
-
-    return {neighbors, neighborsCount, globalPool, tree};
-}
-
-template<class Tc, class T, class KeyType>
-__global__
-__launch_bounds__(TravConfig::numThreads) void computeLjBatchedDirectKernel(cstone::LocalIndex firstBody,
-                                                                            cstone::LocalIndex lastBody,
-                                                                            const Tc* __restrict__ x,
-                                                                            const Tc* __restrict__ y,
-                                                                            const Tc* __restrict__ z,
-                                                                            const T* __restrict__ h,
-                                                                            const T lj1,
-                                                                            const T lj2,
-                                                                            const Box<Tc> box,
-                                                                            const OctreeNsView<Tc, KeyType> tree,
-                                                                            T* __restrict__ afx,
-                                                                            T* __restrict__ afy,
-                                                                            T* __restrict__ afz,
-                                                                            unsigned* __restrict__ neighborsCount,
-                                                                            unsigned* __restrict__ neighbors,
-                                                                            const unsigned ngmax,
-                                                                            int* __restrict__ globalPool)
-{
-    const unsigned laneIdx     = threadIdx.x & (GpuConfig::warpSize - 1);
-    const unsigned numTargets  = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
-    const unsigned warpIdxGrid = (blockDim.x * blockIdx.x + threadIdx.x) >> GpuConfig::warpSizeLog2;
-    int targetIdx              = 0;
-
-    unsigned* warpNidx = neighbors + warpIdxGrid * TravConfig::targetSize * ngmax;
-
-    while (true)
-    {
-        // first thread in warp grabs next target
-        if (laneIdx == 0) { targetIdx = atomicAdd(&targetCounterGlob, 1); }
-        targetIdx = shflSync(targetIdx, 0);
-
-        if (targetIdx >= numTargets) break;
-
-        const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
-        const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
-
-        unsigned nc_i[TravConfig::nwt] = {0};
-
-        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
-        {
-            if (nc_i[warpTarget] < ngmax)
-                warpNidx[nc_i[warpTarget] * TravConfig::targetSize + warpTarget * GpuConfig::warpSize + laneIdx] = j;
-            ++nc_i[warpTarget];
-        };
-
-        traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
-
-        for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
-        {
-            const cstone::LocalIndex i = bodyBegin + warpTarget * GpuConfig::warpSize + laneIdx;
-            const unsigned* nidx       = warpNidx + warpTarget * GpuConfig::warpSize + laneIdx;
-            if (i < bodyEnd)
-            {
-                const Tc xi = x[i];
-                const Tc yi = y[i];
-                const Tc zi = z[i];
-                const T hi  = h[i];
-                T afxi      = 0;
-                T afyi      = 0;
-                T afzi      = 0;
-
-                const unsigned nbs = imin(nc_i[warpTarget], ngmax);
-                for (unsigned nb = 0; nb < nbs; ++nb)
-                {
-                    const unsigned j = nidx[nb * TravConfig::targetSize];
-                    T xx             = xi - x[j];
-                    T yy             = yi - y[j];
-                    T zz             = zi - z[j];
-                    applyPBC(box, T(2) * hi, xx, yy, zz);
-                    const T rsq = xx * xx + yy * yy + zz * zz;
-
-                    const T r2inv   = 1.0 / rsq;
-                    const T r6inv   = r2inv * r2inv * r2inv;
-                    const T forcelj = r6inv * (lj1 * r6inv - lj2);
-                    const T fpair   = forcelj * r2inv;
-
-                    afxi += xx * fpair;
-                    afyi += yy * fpair;
-                    afzi += zz * fpair;
-                }
-
-                afx[i] = afxi;
-                afy[i] = afyi;
-                afz[i] = afzi;
-            }
-        }
-    }
-    cuda::discard_memory(warpNidx, TravConfig::targetSize * ngmax * sizeof(unsigned));
-}
-
-template<class Tc, class T, class KeyType>
-void computeLjBatchedDirect(const std::size_t firstBody,
-                            const std::size_t lastBody,
-                            const Tc* __restrict__ x,
-                            const Tc* __restrict__ y,
-                            const Tc* __restrict__ z,
-                            const T* __restrict__ h,
-                            const T lj1,
-                            const T lj2,
-                            const Box<Tc>& box,
-                            const unsigned ngmax,
-                            T* __restrict__ afx,
-                            T* __restrict__ afy,
-                            T* __restrict__ afz,
-                            std::tuple<thrust::device_vector<LocalIndex>,
-                                       thrust::device_vector<unsigned>,
-                                       thrust::device_vector<int>,
-                                       OctreeNsView<Tc, KeyType>>& neighborhood)
-{
-    auto& [neighbors, neighborsCount, globalPool, tree] = neighborhood;
-    unsigned numBlocks                                  = TravConfig::numBlocks();
-    resetTraversalCounters<<<1, 1>>>();
-    computeLjBatchedDirectKernel<<<numBlocks, TravConfig::numThreads>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box,
-                                                                        tree, afx, afy, afz, rawPtr(neighborsCount),
-                                                                        rawPtr(neighbors), ngmax, rawPtr(globalPool));
-}
-
-template<class Tc, class T, class KeyType>
-__global__ void buildNeighborhoodNaiveKernel(const Tc* x,
-                                             const Tc* y,
-                                             const Tc* z,
-                                             const T* h,
-                                             LocalIndex firstId,
-                                             LocalIndex lastId,
-                                             const Box<Tc> box,
-                                             const OctreeNsView<Tc, KeyType> treeView,
-                                             unsigned ngmax,
-                                             LocalIndex* neighbors,
-                                             unsigned* neighborsCount)
-{
-    cstone::LocalIndex tid = blockDim.x * blockIdx.x + threadIdx.x;
-    cstone::LocalIndex id  = firstId + tid;
-    if (id >= lastId) { return; }
-
-    neighborsCount[id] = findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors + id, lastId);
-}
-
-template<class Tc, class T, class KeyType>
-std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
-buildNeighborhoodNaive(std::size_t firstBody,
-                       std::size_t lastBody,
-                       const Tc* x,
-                       const Tc* y,
-                       const Tc* z,
-                       const T* h,
-                       OctreeNsView<Tc, KeyType> tree,
-                       const Box<Tc>& box,
-                       unsigned ngmax)
-{
-    thrust::device_vector<LocalIndex> neighbors(ngmax * lastBody);
-    thrust::device_vector<unsigned> neighborsCount(lastBody);
-    printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(LocalIndex) * neighbors.size() + sizeof(unsigned) * neighborsCount.size()) / 1.0e6);
-
-    buildNeighborhoodNaiveKernel<<<iceil(lastBody - firstBody, 128), 128>>>(
-        x, y, z, h, firstBody, lastBody, box, tree, ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
-
-    return {neighbors, neighborsCount};
-}
-
-template<class Tc, class T>
-__global__ void __maxnreg__(40) computeLjNaiveKernel(const Tc* __restrict__ x,
-                                                     const Tc* __restrict__ y,
-                                                     const Tc* __restrict__ z,
-                                                     const T* __restrict__ h,
-                                                     const T lj1,
-                                                     const T lj2,
-                                                     const LocalIndex firstId,
-                                                     const LocalIndex lastId,
-                                                     const Box<Tc> box,
-                                                     const unsigned* neighbors,
-                                                     const unsigned* neighborsCount,
-                                                     const unsigned ngmax,
-                                                     T* __restrict__ afx,
-                                                     T* __restrict__ afy,
-                                                     T* __restrict__ afz)
-{
-    cstone::LocalIndex tid = blockDim.x * blockIdx.x + threadIdx.x;
-    cstone::LocalIndex i   = firstId + tid;
-    if (i >= lastId) { return; }
-
-    const Tc xi = x[i];
-    const Tc yi = y[i];
-    const Tc zi = z[i];
-    const T hi  = h[i];
-    T afxi      = 0;
-    T afyi      = 0;
-    T afzi      = 0;
-
-    const unsigned nbs = imin(neighborsCount[i], ngmax);
-    for (unsigned nb = 0; nb < nbs; ++nb)
-    {
-        const unsigned j = neighbors[i + (unsigned long)nb * lastId];
-        T xx             = xi - x[j];
-        T yy             = yi - y[j];
-        T zz             = zi - z[j];
-        applyPBC(box, T(2) * hi, xx, yy, zz);
-        const T rsq = xx * xx + yy * yy + zz * zz;
-
-        const T r2inv   = T(1) / rsq;
-        const T r6inv   = r2inv * r2inv * r2inv;
-        const T forcelj = r6inv * (lj1 * r6inv - lj2);
-        const T fpair   = forcelj * r2inv;
-
-        afxi += xx * fpair;
-        afyi += yy * fpair;
-        afzi += zz * fpair;
-    }
-
-    afx[i] = afxi;
-    afy[i] = afyi;
-    afz[i] = afzi;
-}
-
-template<class Tc, class T>
-void computeLjNaive(const std::size_t firstBody,
-                    const std::size_t lastBody,
-                    const Tc* __restrict__ x,
-                    const Tc* __restrict__ y,
-                    const Tc* __restrict__ z,
-                    const T* __restrict__ h,
-                    const T lj1,
-                    const T lj2,
-                    const Box<Tc>& box,
-                    const unsigned ngmax,
-                    T* __restrict__ afx,
-                    T* __restrict__ afy,
-                    T* __restrict__ afz,
-                    const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
-{
-    auto& [neighbors, neighborsCount] = neighborhood;
-    computeLjNaiveKernel<<<iceil(lastBody - firstBody, 768), 768>>>(x, y, z, h, lj1, lj2, firstBody, lastBody, box,
-                                                                    rawPtr(neighbors), rawPtr(neighborsCount), ngmax,
-                                                                    afx, afy, afz);
-}
 
 namespace gromacs_like
 {
@@ -765,95 +483,8 @@ void computeLjClustered(
 
 } // namespace gromacs_like
 
-template<bool Compress, bool Symmetric, class Tc, class T, class KeyType>
-std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>
-buildNeighborhoodClustered(std::size_t firstBody,
-                           std::size_t lastBody,
-                           const Tc* x,
-                           const Tc* y,
-                           const Tc* z,
-                           const T* h,
-                           OctreeNsView<Tc, KeyType> tree,
-                           const Box<Tc>& box,
-                           unsigned ngmax)
-{
-    unsigned numBlocks    = TravConfig::numBlocks();
-    unsigned poolSize     = TravConfig::poolSize();
-    std::size_t iClusters = iceil(lastBody, ClusterConfig::iSize);
-    std::size_t jClusters = iceil(lastBody, ClusterConfig::jSize);
-    thrust::device_vector<unsigned> clusterNeighbors(nbStoragePerICluster<ncmax, Compress, Symmetric>::value *
-                                                     iClusters);
-    thrust::device_vector<unsigned> clusterNeighborsCount;
-    thrust::device_vector<util::tuple<Vec3<Tc>, Vec3<Tc>>> jClusterBboxes(jClusters);
-    if constexpr (!Compress) clusterNeighborsCount.resize(iClusters);
-    thrust::device_vector<int> globalPool(poolSize);
-    printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(unsigned) * clusterNeighbors.size() + sizeof(unsigned) * clusterNeighborsCount.size()) / 1.0e6);
-
-    computeClusterBoundingBoxes<<<iceil(lastBody, 128), 128>>>(firstBody, lastBody, x, y, z, rawPtr(jClusterBboxes));
-    checkGpuErrors(cudaGetLastError());
-
-    constexpr unsigned threads       = Compress ? 64 : 32;
-    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
-    dim3 blockSize = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-
-    resetTraversalCounters<<<1, 1>>>();
-    findClusterNeighbors<warpsPerBlock, true, true, ncmax, Compress, Symmetric>
-        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, rawPtr(jClusterBboxes), tree, box,
-                                   rawPtr(clusterNeighborsCount), rawPtr(clusterNeighbors), rawPtr(globalPool));
-    checkGpuErrors(cudaGetLastError());
-
-    return {clusterNeighbors, clusterNeighborsCount};
-}
-
-template<bool Compress, bool Symmetric, class Tc, class T>
-void computeLjClustered(
-    const std::size_t firstBody,
-    const std::size_t lastBody,
-    const Tc* __restrict__ x,
-    const Tc* __restrict__ y,
-    const Tc* __restrict__ z,
-    const T* __restrict__ h,
-    const T lj1,
-    const T lj2,
-    const Box<Tc>& box,
-    const unsigned ngmax,
-    T* __restrict__ afx,
-    T* __restrict__ afy,
-    T* __restrict__ afz,
-    const std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>>& neighborhood)
-{
-    auto& [clusterNeighbors, clusterNeighborsCount] = neighborhood;
-
-    if constexpr (Symmetric)
-    {
-        checkGpuErrors(cudaMemsetAsync(afx, 0, sizeof(T) * lastBody));
-        checkGpuErrors(cudaMemsetAsync(afy, 0, sizeof(T) * lastBody));
-        checkGpuErrors(cudaMemsetAsync(afz, 0, sizeof(T) * lastBody));
-    }
-
-    auto computeLj = [=] __device__(unsigned i, auto iPos, T hi, unsigned j, auto jPos, auto ijPosDiff, T rsq)
-    {
-        const T r2inv   = T(1) / rsq;
-        const T r6inv   = r2inv * r2inv * r2inv;
-        const T forcelj = r6inv * (lj1 * r6inv - lj2);
-        const T fpair   = i == j ? 0 : forcelj * r2inv;
-
-        return std::make_tuple(ijPosDiff[0] * fpair, ijPosDiff[1] * fpair, ijPosDiff[2] * fpair);
-    };
-
-    constexpr unsigned threads       = 128;
-    constexpr unsigned warpsPerBlock = threads / GpuConfig::warpSize;
-    const dim3 blockSize     = {ClusterConfig::iSize, GpuConfig::warpSize / ClusterConfig::iSize, warpsPerBlock};
-    const unsigned numBlocks = iceil(lastBody, ClusterConfig::iSize * warpsPerBlock);
-    findNeighborsClustered<warpsPerBlock, true, true, ncmax, Compress, Symmetric ? -1 : 0>
-        <<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, box, rawPtr(clusterNeighborsCount),
-                                   rawPtr(clusterNeighbors), computeLj, afx, afy, afz);
-    checkGpuErrors(cudaGetLastError());
-}
-
-template<class Tc, class T, class StrongKeyType, class BuildNeighborhoodF, class ComputeLjF>
-void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
+template<class Tc, class T, class StrongKeyType, class Neighborhood>
+void benchmarkGPU(Neighborhood const& neighborhood)
 {
     using KeyType = typename StrongKeyType::ValueType;
 
@@ -864,8 +495,6 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     const int n = coords.x().size();
     std::vector<T> h(n, 3.8 / 2);
     printf("Number of atoms: %d\n", n);
-
-    const int ngmax = 256;
 
     const Tc* x       = coords.x().data();
     const Tc* y       = coords.y().data();
@@ -932,8 +561,7 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     thrust::device_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
     const auto* deviceKeys = (const KeyType*)(rawPtr(d_codes));
 
-    auto neighborhoodGPU =
-        buildNeighborhood(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), nsViewGpu, box, ngmax);
+    auto neighborhoodGPU = neighborhood.build(nsViewGpu, box, 0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h));
 
     std::array<float, 11> times;
     std::array<cudaEvent_t, times.size() + 1> events;
@@ -942,8 +570,8 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
     cudaEventRecord(events[0]);
     for (std::size_t i = 1; i < events.size(); ++i)
     {
-        computeLj(0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h), lj1, lj2, box, ngmax, rawPtr(d_afx),
-                  rawPtr(d_afy), rawPtr(d_afz), neighborhoodGPU);
+        neighborhoodGPU.ijLoop(std::make_tuple(), std::make_tuple(rawPtr(d_afx), rawPtr(d_afy), rawPtr(d_afz)),
+                               LjKernelFun<T>{lj1, lj2}, ijloop::symmetry::odd);
         cudaEventRecord(events[i]);
     }
     cudaEventSynchronize(events.back());
@@ -1003,27 +631,24 @@ int main()
     using KeyType       = typename StrongKeyType::ValueType;
 
     std::cout << "--- BATCHED DIRECT ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodBatchedDirect<Tc, T, KeyType>,
-                                       computeLjBatchedDirect<Tc, T, KeyType>);
+    benchmarkGPU<Tc, T, StrongKeyType>(ijloop::GpuAlwaysTraverseNeighborhood{ngmax});
 
     std::cout << "--- NAIVE TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodNaive<Tc, T, KeyType>, computeLjNaive<Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(ijloop::GpuFullNbListNeighborhood{ngmax});
 
-    std::cout << "--- GROMACS CLUSTERED TWO-STAGE ---" << std::endl;
+    /*std::cout << "--- GROMACS CLUSTERED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(gromacs_like::buildNeighborhoodClustered<Tc, T, KeyType>,
-                                       gromacs_like::computeLjClustered<Tc, T>);
+                                       gromacs_like::computeLjClustered<Tc, T>);*/
+
+    using BaseClusterNb = ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ncmax>::withClusterSize<4, 4>;
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, false, Tc, T, KeyType>,
-                                       computeLjClustered<false, false, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withoutCompression{});
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, false, Tc, T, KeyType>,
-                                       computeLjClustered<true, false, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withCompression<10>{});
     std::cout << "--- CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<false, true, Tc, T, KeyType>,
-                                       computeLjClustered<false, true, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withSymmetry::withoutCompression{});
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(buildNeighborhoodClustered<true, true, Tc, T, KeyType>,
-                                       computeLjClustered<true, true, Tc, T>);
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withSymmetry::withCompression<6>{});
 
     return 0;
 }
