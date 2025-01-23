@@ -149,16 +149,17 @@ struct GpuFullNbListNeighborhood
                                                         const Th* h) const
     {
         const LocalIndex numBodies = lastBody - firstBody;
-        detail::GpuFullNbListNeighborhoodImpl<Tc, Th> nbList{box,
-                                                             firstBody,
-                                                             lastBody,
-                                                             x,
-                                                             y,
-                                                             z,
-                                                             h,
-                                                             ngmax,
-                                                             thrust::device_vector<LocalIndex>(ngmax * numBodies),
-                                                             thrust::device_vector<int>(numBodies)};
+        detail::GpuFullNbListNeighborhoodImpl<Tc, Th> nbList{
+            box,
+            firstBody,
+            lastBody,
+            x,
+            y,
+            z,
+            h,
+            ngmax,
+            thrust::device_vector<LocalIndex>(ngmax * std::size_t(numBodies)),
+            thrust::device_vector<int>(numBodies)};
         constexpr int numThreads = 128;
         detail::gpuFullNbListNeighborhoodBuild<numThreads><<<iceil(numBodies, numThreads), numThreads>>>(
             tree, box, firstBody, lastBody, x, y, z, h, ngmax, rawPtr(nbList.neighbors), rawPtr(nbList.neighborsCount));

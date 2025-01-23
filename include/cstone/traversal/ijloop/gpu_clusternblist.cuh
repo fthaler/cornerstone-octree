@@ -762,7 +762,7 @@ struct GpuClusterNbListNeighborhoodImpl
         }
 
         const LocalIndex firstICluster = firstBody / Config::iSize;
-        const LocalIndex lastICluster  = (lastBody - 1) / Config::iSize + 1;
+        const LocalIndex lastICluster  = iceil(lastBody, Config::iSize);
         const LocalIndex numIClusters  = lastICluster - firstICluster;
 
         constexpr unsigned threads          = 128;
