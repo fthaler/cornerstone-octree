@@ -39,10 +39,10 @@
 #include <thrust/device_vector.h>
 #include <thrust/universal_vector.h>
 
+#include "cstone/traversal/ijloop/cpu.hpp"
 #include "cstone/cuda/thrust_util.cuh"
 #include "cstone/primitives/math.hpp"
 #include "cstone/findneighbors.hpp"
-
 #include "cstone/traversal/find_neighbors.cuh"
 #include "cstone/traversal/find_neighbors_clustered.cuh"
 
@@ -52,83 +52,24 @@ using namespace cstone;
 
 constexpr unsigned ncmax = 256;
 
-template<class Tc, class Th, class KeyType>
-std::tuple<std::vector<LocalIndex>, std::vector<unsigned>> buildNeighborhoodCPU(std::size_t firstBody,
-                                                                                std::size_t lastBody,
-                                                                                const Tc* x,
-                                                                                const Tc* y,
-                                                                                const Tc* z,
-                                                                                const Th* h,
-                                                                                OctreeNsView<Tc, KeyType> tree,
-                                                                                const Box<Tc>& box,
-                                                                                unsigned ngmax)
+template<class T>
+struct LjKernelFun
 {
-    std::vector<LocalIndex> neighbors(ngmax * lastBody);
-    std::vector<unsigned> neighborsCount(lastBody);
+    T lj1, lj2;
 
-#pragma omp parallel for simd
-    for (std::size_t i = firstBody; i < lastBody; ++i)
+    template<class ParticleData, class Tc>
+    constexpr __host__ __device__ auto
+    operator()(ParticleData const& iData, ParticleData const& jData, Vec3<Tc> ijPosDiff, T distSq) const
     {
-        neighborsCount[i] = findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors.data() + i * ngmax);
+        const auto [i, iPos, hi] = iData;
+        const auto [j, jPos, hj] = jData;
+        const T r2inv            = T(1) / distSq;
+        const T r6inv            = r2inv * r2inv * r2inv;
+        const T forcelj          = r6inv * (lj1 * r6inv - lj2);
+        const T fpair            = i == j ? 0 : forcelj * r2inv;
+        return std::make_tuple(T(ijPosDiff[0]) * fpair, T(ijPosDiff[1]) * fpair, T(ijPosDiff[2]) * fpair);
     }
-
-    return {neighbors, neighborsCount};
-}
-
-template<class Tc, class T>
-void computeLjCPU(const std::size_t firstBody,
-                  const std::size_t lastBody,
-
-                  const Tc* __restrict__ x,
-                  const Tc* __restrict__ y,
-                  const Tc* __restrict__ z,
-                  const T* __restrict__ h,
-                  const T lj1,
-                  const T lj2,
-                  const Box<Tc>& box,
-                  const unsigned ngmax,
-                  T* __restrict__ afx,
-                  T* __restrict__ afy,
-                  T* __restrict__ afz,
-                  const std::tuple<std::vector<LocalIndex>, std::vector<unsigned>>& neighborhood)
-{
-    auto& [neighbors, neighborsCount] = neighborhood;
-#pragma omp parallel for simd
-    for (std::size_t i = firstBody; i < lastBody; ++i)
-    {
-        const Tc xi = x[i];
-        const Tc yi = y[i];
-        const Tc zi = z[i];
-        const T hi  = h[i];
-        T afxi      = 0;
-        T afyi      = 0;
-        T afzi      = 0;
-
-        const unsigned nbs = std::min(neighborsCount[i], ngmax);
-        for (unsigned nb = 0; nb < nbs; ++nb)
-        {
-            const unsigned j = neighbors[i * ngmax + nb];
-            T xx             = xi - x[j];
-            T yy             = yi - y[j];
-            T zz             = zi - z[j];
-            applyPBC(box, T(2) * hi, xx, yy, zz);
-            const T rsq = xx * xx + yy * yy + zz * zz;
-
-            const T r2inv   = 1.0 / rsq;
-            const T r6inv   = r2inv * r2inv * r2inv;
-            const T forcelj = r6inv * (lj1 * r6inv - lj2);
-            const T fpair   = forcelj * r2inv;
-
-            afxi += xx * fpair;
-            afyi += yy * fpair;
-            afzi += zz * fpair;
-        }
-
-        afx[i] = afxi;
-        afy[i] = afyi;
-        afz[i] = afzi;
-    }
-}
+};
 
 template<class Tc, class T, class KeyType>
 std::tuple<thrust::device_vector<LocalIndex>, thrust::device_vector<unsigned>, OctreeNsView<Tc, KeyType>>
@@ -956,12 +897,13 @@ void benchmarkGPU(BuildNeighborhoodF buildNeighborhood, ComputeLjF computeLj)
                                      centers.data(),
                                      sizes.data()};
 
-    std::vector<T> afx(n), afy(n), afz(n);
-    auto neighborhoodCPU = buildNeighborhoodCPU(0, n, x, y, z, h.data(), nsView, box, ngmax);
-    printf("Number of neighbors: %d\n", std::get<1>(neighborhoodCPU).at(0));
     const T lj1 = 48;
     const T lj2 = 24;
-    computeLjCPU(0, n, x, y, z, h.data(), lj1, lj2, box, ngmax, afx.data(), afy.data(), afz.data(), neighborhoodCPU);
+    std::vector<T> afx(n), afy(n), afz(n);
+    ijloop::CpuDirectNeighborhood{ngmax}
+        .build(nsView, box, 0, n, x, y, z, h.data())
+        .ijLoop(std::make_tuple(), std::make_tuple(afx.data(), afy.data(), afz.data()), LjKernelFun<T>{lj1, lj2},
+                ijloop::symmetry::odd);
 
     thrust::device_vector<Tc> d_x(coords.x().begin(), coords.x().end());
     thrust::device_vector<Tc> d_y(coords.y().begin(), coords.y().end());
