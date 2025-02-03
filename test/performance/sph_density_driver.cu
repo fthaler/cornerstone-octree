@@ -31,7 +31,7 @@
 
 #include <iostream>
 
-#include <thrust/device_vector.h>
+#include <thrust/universal_vector.h>
 
 #include "cstone/cuda/thrust_util.cuh"
 #include "cstone/traversal/ijloop/cpu.hpp"
@@ -40,6 +40,7 @@
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
 
 #include "../coord_samples/random.hpp"
+#include "./gromacs_ijloop.cuh"
 
 using namespace cstone;
 
@@ -202,26 +203,26 @@ void benchmarkGPU(Neighborhood const& neighborhood)
         .ijLoop(std::make_tuple(m.data()), std::make_tuple(rho.data()), DensityKernelFun<T>{wh.data()},
                 ijloop::symmetry::even);
 
-    thrust::device_vector<Tc> d_x(coords.x().begin(), coords.x().end());
-    thrust::device_vector<Tc> d_y(coords.y().begin(), coords.y().end());
-    thrust::device_vector<Tc> d_z(coords.z().begin(), coords.z().end());
-    thrust::device_vector<T> d_h = h;
-    thrust::device_vector<T> d_m = m;
-    thrust::device_vector<T> d_rho(n);
-    thrust::device_vector<T> d_wh(wh.size());
+    thrust::universal_vector<Tc> d_x(coords.x().begin(), coords.x().end());
+    thrust::universal_vector<Tc> d_y(coords.y().begin(), coords.y().end());
+    thrust::universal_vector<Tc> d_z(coords.z().begin(), coords.z().end());
+    thrust::universal_vector<T> d_h = h;
+    thrust::universal_vector<T> d_m = m;
+    thrust::universal_vector<T> d_rho(n);
+    thrust::universal_vector<T> d_wh(wh.size());
     thrust::copy(wh.begin(), wh.end(), d_wh.begin());
 
     printf("Memory usage of particle data: %.2f MB\n", (sizeof(Tc) * (d_x.size() + d_y.size() + d_z.size()) +
                                                         sizeof(T) * (d_h.size() + d_m.size() + d_rho.size())) /
                                                            1.0e6);
 
-    thrust::device_vector<KeyType> d_prefixes             = octree.prefixes;
-    thrust::device_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
-    thrust::device_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
-    thrust::device_vector<TreeNodeIndex> d_levelRange     = octree.levelRange;
-    thrust::device_vector<LocalIndex> d_layout            = layout;
-    thrust::device_vector<Vec3<Tc>> d_centers             = centers;
-    thrust::device_vector<Vec3<Tc>> d_sizes               = sizes;
+    thrust::universal_vector<KeyType> d_prefixes             = octree.prefixes;
+    thrust::universal_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
+    thrust::universal_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
+    thrust::universal_vector<TreeNodeIndex> d_levelRange     = octree.levelRange;
+    thrust::universal_vector<LocalIndex> d_layout            = layout;
+    thrust::universal_vector<Vec3<Tc>> d_centers             = centers;
+    thrust::universal_vector<Vec3<Tc>> d_sizes               = sizes;
 
     printf("Memory usage of tree data: %.2f MB\n",
            (sizeof(KeyType) * d_prefixes.size() +
@@ -233,7 +234,7 @@ void benchmarkGPU(Neighborhood const& neighborhood)
                                         rawPtr(d_internalToLeaf), rawPtr(d_levelRange), nullptr,
                                         rawPtr(d_layout),         rawPtr(d_centers),    rawPtr(d_sizes)};
 
-    thrust::device_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
+    thrust::universal_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
     const auto* deviceKeys = (const KeyType*)(rawPtr(d_codes));
 
     auto neighborhoodGPU = neighborhood.build(nsViewGpu, box, 0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h));
@@ -333,6 +334,9 @@ int main()
 
     std::cout << "--- NAIVE TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(ijloop::GpuFullNbListNeighborhood{ngmax});
+
+    std::cout << "--- GROMACS CLUSTERED TWO-STAGE ---" << std::endl;
+    benchmarkGPU<Tc, T, StrongKeyType>(ijloop::GromacsLikeNeighborhood{ngmax});
 
     using BaseClusterNb = ijloop::GpuClusterNbListNeighborhood<>::withNcMax<192>::withClusterSize<4, 4>;
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;

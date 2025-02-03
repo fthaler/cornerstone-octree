@@ -36,7 +36,7 @@
 
 #include <cuda/annotated_ptr>
 
-#include <thrust/device_vector.h>
+#include <thrust/universal_vector.h>
 #include <thrust/universal_vector.h>
 
 #include "cstone/traversal/ijloop/cpu.hpp"
@@ -48,6 +48,7 @@
 #include "cstone/traversal/find_neighbors_clustered.cuh"
 
 #include "../coord_samples/face_centered_cubic.hpp"
+#include "./gromacs_ijloop.cuh"
 
 using namespace cstone;
 
@@ -71,416 +72,6 @@ struct LjKernelFun
         return std::make_tuple(T(ijPosDiff[0]) * fpair, T(ijPosDiff[1]) * fpair, T(ijPosDiff[2]) * fpair);
     }
 };
-
-namespace gromacs_like
-{
-
-// Constants from GROMACS
-
-constexpr unsigned clusterSize               = 8;
-constexpr unsigned clusterPairSplit          = GpuConfig::warpSize == 64 ? 1 : 2;
-constexpr unsigned numClusterPerSupercluster = 8;
-constexpr unsigned jGroupSize                = 32 / numClusterPerSupercluster;
-constexpr unsigned superClusterSize          = numClusterPerSupercluster * clusterSize;
-constexpr unsigned exclSize                  = clusterSize * clusterSize / clusterPairSplit;
-
-// Gromacs-like data structures
-
-struct Sci
-{
-    unsigned sci, cjPackedBegin, cjPackedEnd;
-};
-
-struct Excl
-{
-    std::array<unsigned, exclSize> pair = {0};
-
-    bool operator==(Excl const& other) const { return pair == other.pair; }
-    bool operator<(Excl const& other) const { return pair < other.pair; }
-};
-
-struct ImEi
-{
-    unsigned imask   = 0u;
-    unsigned exclInd = 0u;
-};
-
-struct CjPacked
-{
-    std::array<unsigned, jGroupSize> cj;
-    std::array<ImEi, clusterPairSplit> imei;
-};
-
-// Helpers for building the GROMACS-like NB lists
-
-constexpr bool includeNb(unsigned i, unsigned j)
-{
-    const unsigned ci  = i / clusterSize;
-    const unsigned sci = ci / numClusterPerSupercluster;
-    const unsigned cj  = j / clusterSize;
-    const unsigned scj = cj / numClusterPerSupercluster;
-    return cstone::detail::includeNbSymmetric(sci, scj) || (sci == scj && ci < cj) || (ci == cj && i < j);
-}
-
-struct CjData
-{
-    Excl excl;
-    unsigned imask;
-};
-
-std::map<unsigned, std::array<CjData, clusterPairSplit>>
-clusterNeighborsOfSuperCluster(const thrust::universal_vector<unsigned>& neighbors,
-                               const thrust::universal_vector<unsigned>& neighborsCount,
-                               const unsigned ngmax,
-                               const unsigned sci)
-{
-    const unsigned long lastBody        = neighborsCount.size();
-    constexpr unsigned splitClusterSize = clusterSize / clusterPairSplit;
-    std::map<unsigned, std::array<CjData, clusterPairSplit>> superClusterNeighbors;
-    for (unsigned cii = 0; cii < numClusterPerSupercluster; ++cii)
-    {
-        const unsigned ci = sci * numClusterPerSupercluster + cii;
-        for (unsigned ii = 0; ii < clusterSize; ++ii)
-        {
-            const unsigned i   = ci * clusterSize + ii;
-            const unsigned nci = std::min(neighborsCount[i], ngmax);
-            for (unsigned nb = 0; nb < nci; ++nb)
-            {
-                const unsigned j = neighbors[i + nb * lastBody];
-                if (includeNb(i, j))
-                {
-                    const unsigned cj    = j / clusterSize;
-                    const unsigned jj    = j - cj * clusterSize;
-                    auto [it, _]         = superClusterNeighbors.emplace(cj, std::array<CjData, clusterPairSplit>({0}));
-                    const unsigned split = jj / splitClusterSize;
-                    it->second.at(split).imask |= 1 << cii;
-                    const unsigned thread = ii + (jj % splitClusterSize) * clusterSize;
-                    it->second.at(split).excl.pair[thread] |= 1 << cii;
-                }
-            }
-        }
-    }
-    return superClusterNeighbors;
-}
-
-void optimizeExcl(const unsigned lastBody,
-                  const unsigned sci,
-                  const CjPacked& cjPacked,
-                  std::array<Excl, clusterPairSplit>& excl)
-{
-    // Keep exact interaction on last super cluster to avoid OOB accesses
-    const unsigned numSuperclusters = iceil(lastBody, superClusterSize);
-    if (sci == numSuperclusters - 1) return;
-
-    const unsigned numClusters = iceil(lastBody, clusterSize);
-    bool selfInteraction       = false;
-    for (unsigned cj : cjPacked.cj)
-    {
-        // Keep exact interaction on last j-cluster to avoid OOB accesses
-        if (cj == numClusters - 1) return;
-        if (cj / numClusterPerSupercluster == sci) selfInteraction = true;
-    }
-
-    if (!selfInteraction)
-    {
-        // Compute all interactions if j-clusters do not overlap super cluster
-        for (unsigned split = 0; split < clusterPairSplit; ++split)
-            excl[split].pair.fill(0xffffffffu);
-        return;
-    }
-
-    // Use triangular masks (i < j) where j-clusters overlap with super cluster
-    for (unsigned jj = 0; jj < clusterSize; ++jj)
-    {
-        for (unsigned ii = 0; ii < clusterSize; ++ii)
-        {
-            const unsigned thread = ii + (jj % (clusterSize / clusterPairSplit)) * clusterSize;
-            const unsigned split  = jj / (clusterSize / clusterPairSplit);
-            for (unsigned jm = 0; jm < jGroupSize; ++jm)
-            {
-                for (unsigned cii = 0; cii < numClusterPerSupercluster; ++cii)
-                {
-                    const unsigned ci = sci * numClusterPerSupercluster + cii;
-                    const unsigned i  = ci * clusterSize + ii;
-                    const unsigned j  = cjPacked.cj[jm] * clusterSize + jj;
-                    excl[split].pair[thread] |= includeNb(i, j) ? 1 << (cii + jm * numClusterPerSupercluster) : 0;
-                }
-            }
-        }
-    }
-}
-
-template<class Tc, class T, class KeyType>
-std::tuple<thrust::universal_vector<Sci>, thrust::universal_vector<CjPacked>, thrust::universal_vector<Excl>>
-buildNeighborhoodClustered(const std::size_t firstBody,
-                           const std::size_t lastBody,
-                           const Tc* x,
-                           const Tc* y,
-                           const Tc* z,
-                           const T* h,
-                           OctreeNsView<Tc, KeyType> tree,
-                           const Box<Tc>& box,
-                           unsigned ngmax)
-{
-    thrust::universal_vector<unsigned> neighbors(ngmax * lastBody);
-    thrust::universal_vector<unsigned> neighborsCount(lastBody);
-
-    buildNeighborhoodNaiveKernel<<<iceil(lastBody, 128), 128>>>(x, y, z, h, firstBody, lastBody, box, tree, ngmax,
-                                                                rawPtr(neighbors), rawPtr(neighborsCount));
-    checkGpuErrors(cudaDeviceSynchronize());
-
-    const unsigned numSuperclusters = iceil(lastBody, superClusterSize);
-    const unsigned numClusters      = iceil(lastBody, clusterSize);
-
-    thrust::universal_vector<Sci> sciSorted(numSuperclusters);
-    thrust::universal_vector<CjPacked> cjPacked;
-    cjPacked.reserve(thrust::reduce(neighborsCount.begin(), neighborsCount.end(), 0u, std::plus()) / jGroupSize);
-    thrust::universal_vector<Excl> excl(1);
-    excl.front().pair.fill(0xffffffffu);
-
-    std::map<Excl, unsigned> exclIndexMap;
-    exclIndexMap[excl.front()] = 0;
-
-    std::shared_mutex exclMutex, cjPackedMutex;
-
-    const auto exclIndex = [&](Excl const& e)
-    {
-        {
-            std::shared_lock lock(exclMutex);
-            const auto it = exclIndexMap.find(e);
-            if (it != exclIndexMap.end()) return it->second;
-        }
-        {
-            std::unique_lock lock(exclMutex);
-            const auto it = exclIndexMap.find(e);
-            if (it != exclIndexMap.end()) return it->second;
-            const unsigned index = excl.size();
-            excl.push_back(e);
-            exclIndexMap[e] = index;
-            return index;
-        }
-    };
-
-#pragma omp parallel for shared(sciSorted, cjPacked, excl, exclIndexMap, exclMutex, cjPackedMutex, neighbors,          \
-                                    neighborsCount)
-    for (unsigned sci = 0; sci < numSuperclusters; ++sci)
-    {
-        const auto superClusterNeighbors = clusterNeighborsOfSuperCluster(neighbors, neighborsCount, ngmax, sci);
-
-        const unsigned ncjPacked = iceil(superClusterNeighbors.size(), jGroupSize);
-        auto it                  = superClusterNeighbors.begin();
-        unsigned cjPackedBegin, cjPackedEnd;
-        {
-            std::unique_lock lock(cjPackedMutex);
-            cjPackedBegin = cjPacked.size();
-            cjPackedEnd   = cjPackedBegin + ncjPacked;
-            cjPacked.resize(cjPackedEnd);
-        }
-        for (unsigned n = 0; n < ncjPacked; ++n)
-        {
-            CjPacked next                               = {0};
-            std::array<Excl, clusterPairSplit> nextExcl = {0};
-            for (unsigned jm = 0; jm < jGroupSize; ++jm, ++it)
-            {
-                if (it == superClusterNeighbors.end()) break;
-
-                const auto& [cj, data] = *it;
-                next.cj[jm]            = cj;
-                for (unsigned split = 0; split < clusterPairSplit; ++split)
-                {
-                    next.imei[split].imask |= data[split].imask << (jm * numClusterPerSupercluster);
-                    for (unsigned e = 0; e < exclSize; ++e)
-                        nextExcl[split].pair[e] |= data[split].excl.pair[e] << (jm * numClusterPerSupercluster);
-                }
-            }
-            optimizeExcl(lastBody, sci, next, nextExcl);
-            for (unsigned split = 0; split < clusterPairSplit; ++split)
-                next.imei[split].exclInd = exclIndex(nextExcl[split]);
-            {
-                std::shared_lock lock(cjPackedMutex);
-                cjPacked[cjPackedBegin + n] = next;
-            }
-        }
-
-        sciSorted[sci] = {sci, cjPackedBegin, cjPackedEnd};
-    }
-    printf("Memory usage of neighborhood data: %.2f MB\n",
-           (sizeof(Sci) * sciSorted.size() + sizeof(CjPacked) * cjPacked.size() + sizeof(Excl) * excl.size()) / 1.0e6);
-    printf("ncsci: %lu, ncjPacked: %lu, nexcl: %lu\n", sciSorted.size(), cjPacked.size(), excl.size());
-
-    return {sciSorted, cjPacked, excl};
-}
-
-template<class Tc, class T>
-__global__
-__launch_bounds__(clusterSize* clusterSize) void computeLjClusteredKernel(cstone::LocalIndex firstBody,
-                                                                          cstone::LocalIndex lastBody,
-                                                                          const Tc* __restrict__ x,
-                                                                          const Tc* __restrict__ y,
-                                                                          const Tc* __restrict__ z,
-                                                                          const T* __restrict__ h,
-                                                                          const T lj1,
-                                                                          const T lj2,
-                                                                          const __grid_constant__ Box<Tc> box,
-                                                                          T* __restrict__ afx,
-                                                                          T* __restrict__ afy,
-                                                                          T* __restrict__ afz,
-                                                                          const Sci* __restrict__ sciSorted,
-                                                                          const CjPacked* __restrict__ cjPacked,
-                                                                          const Excl* __restrict__ excl)
-{
-    namespace cg = cooperative_groups;
-
-    constexpr unsigned superClusterInteractionMask = (1u << numClusterPerSupercluster) - 1u;
-
-    const auto block = cg::this_thread_block();
-    const auto warp  = cg::tiled_partition<GpuConfig::warpSize>(block);
-
-    const Sci nbSci               = sciSorted[block.group_index().x];
-    const unsigned sci            = nbSci.sci;
-    const unsigned cijPackedBegin = nbSci.cjPackedBegin;
-    const unsigned cijPackedEnd   = nbSci.cjPackedEnd;
-    T* const af[3]                = {afx, afy, afz};
-
-    using T3  = std::conditional_t<std::is_same_v<T, double>, double3, float3>;
-    using Tc3 = std::conditional_t<std::is_same_v<Tc, double>, double3, float3>;
-    using Tc4 = std::conditional_t<std::is_same_v<Tc, double>, double4, float4>;
-
-    __shared__ Tc4 xqib[clusterSize * numClusterPerSupercluster];
-
-    constexpr bool loadUsingAllXYThreads = clusterSize == numClusterPerSupercluster;
-    if (loadUsingAllXYThreads || block.thread_index().y < numClusterPerSupercluster)
-    {
-        const unsigned ci = sci * numClusterPerSupercluster + block.thread_index().y;
-        const unsigned ai = ci * clusterSize + block.thread_index().x;
-        xqib[block.thread_index().y * clusterSize + block.thread_index().x] = {x[ai], y[ai], z[ai], Tc(h[ai])};
-    }
-    block.sync();
-
-    T3 fciBuf[numClusterPerSupercluster];
-    for (unsigned i = 0; i < numClusterPerSupercluster; ++i)
-        fciBuf[i] = {T(0), T(0), T(0)};
-
-    for (unsigned jPacked = cijPackedBegin; jPacked < cijPackedEnd; ++jPacked)
-    {
-        const unsigned wexclIdx = cjPacked[jPacked].imei[warp.meta_group_rank()].exclInd;
-        const unsigned imask    = cjPacked[jPacked].imei[warp.meta_group_rank()].imask;
-        const unsigned wexcl    = excl[wexclIdx].pair[warp.thread_rank()];
-        if (imask)
-        {
-            for (unsigned jm = 0; jm < jGroupSize; ++jm)
-            {
-                if (imask & (superClusterInteractionMask << (jm * numClusterPerSupercluster)))
-                {
-                    unsigned maskJi   = 1u << (jm * numClusterPerSupercluster);
-                    const unsigned cj = cjPacked[jPacked].cj[jm];
-                    const unsigned aj = cj * clusterSize + block.thread_index().y;
-                    const Tc3 xj      = {x[aj], y[aj], z[aj]};
-                    T3 fcjBuf         = {T(0), T(0), T(0)};
-
-#pragma unroll
-                    for (unsigned i = 0; i < numClusterPerSupercluster; ++i)
-                    {
-                        if (imask & maskJi)
-                        {
-                            const unsigned ci = sci * numClusterPerSupercluster + i;
-                            const unsigned ai = ci * clusterSize + block.thread_index().x;
-                            if (ai < lastBody)
-                            {
-                                const Tc4 xi = xqib[i * clusterSize + block.thread_index().x];
-                                const T hi   = xi.w;
-                                T3 rv        = {T(xi.x - xj.x), T(xi.y - xj.y), T(xi.z - xj.z)};
-                                const T r    = 2 * hi;
-                                rv.x -= (box.boundaryX() == BoundaryType::periodic) * box.lx() *
-                                        std::rint(rv.x * box.ilx());
-                                rv.y -= (box.boundaryY() == BoundaryType::periodic) * box.ly() *
-                                        std::rint(rv.y * box.ily());
-                                rv.z -= (box.boundaryZ() == BoundaryType::periodic) * box.lz() *
-                                        std::rint(rv.z * box.ilz());
-                                const T r2     = rv.x * rv.x + rv.y * rv.y + rv.z * rv.z;
-                                const T intBit = (wexcl & maskJi) ? T(1) : T(0);
-                                if ((r2 < r * r) * intBit)
-                                {
-                                    const T rinv    = rsqrt(r2);
-                                    const T r2inv   = rinv * rinv;
-                                    const T r6inv   = r2inv * r2inv * r2inv;
-                                    const T forcelj = r6inv * (lj1 * r6inv - lj2);
-                                    const T fpair   = forcelj * r2inv;
-                                    const T3 fij    = {rv.x * fpair, rv.y * fpair, rv.z * fpair};
-                                    fcjBuf.x -= fij.x;
-                                    fcjBuf.y -= fij.y;
-                                    fcjBuf.z -= fij.z;
-                                    fciBuf[i].x += fij.x;
-                                    fciBuf[i].y += fij.y;
-                                    fciBuf[i].z += fij.z;
-                                }
-                            }
-                        }
-                        maskJi += maskJi;
-                    }
-
-                    fcjBuf.x += warp.shfl_down(fcjBuf.x, 1);
-                    fcjBuf.y += warp.shfl_up(fcjBuf.y, 1);
-                    fcjBuf.z += warp.shfl_down(fcjBuf.z, 1);
-                    if (block.thread_index().x & 1) fcjBuf.x = fcjBuf.y;
-                    fcjBuf.x += warp.shfl_down(fcjBuf.x, 2);
-                    fcjBuf.z += warp.shfl_up(fcjBuf.z, 2);
-                    if (block.thread_index().x & 2) fcjBuf.x = fcjBuf.z;
-                    fcjBuf.x += warp.shfl_down(fcjBuf.x, 4);
-                    if (block.thread_index().x < 3 && aj < lastBody)
-                        atomicAdd(af[block.thread_index().x] + aj, fcjBuf.x);
-                }
-            }
-        }
-    }
-
-    for (unsigned i = 0; i < numClusterPerSupercluster; ++i)
-    {
-        const unsigned ai = (sci * numClusterPerSupercluster + i) * clusterSize + block.thread_index().x;
-        fciBuf[i].x += warp.shfl_down(fciBuf[i].x, clusterSize);
-        fciBuf[i].y += warp.shfl_up(fciBuf[i].y, clusterSize);
-        fciBuf[i].z += warp.shfl_down(fciBuf[i].z, clusterSize);
-        if (block.thread_index().y & 1) fciBuf[i].x = fciBuf[i].y;
-        fciBuf[i].x += warp.shfl_down(fciBuf[i].x, 2 * clusterSize);
-        fciBuf[i].z += warp.shfl_up(fciBuf[i].z, 2 * clusterSize);
-        if (block.thread_index().y & 2) fciBuf[i].x = fciBuf[i].z;
-        if ((block.thread_index().y & 3) < 3 && ai < lastBody)
-            atomicAdd(af[block.thread_index().y & 3] + ai, fciBuf[i].x);
-    }
-}
-
-template<class Tc, class T>
-void computeLjClustered(
-    const std::size_t firstBody,
-    const std::size_t lastBody,
-    const Tc* __restrict__ x,
-    const Tc* __restrict__ y,
-    const Tc* __restrict__ z,
-    const T* __restrict__ h,
-    const T lj1,
-    const T lj2,
-    const Box<Tc>& box,
-    const unsigned ngmax,
-    T* __restrict__ afx,
-    T* __restrict__ afy,
-    T* __restrict__ afz,
-    const std::tuple<thrust::universal_vector<Sci>, thrust::universal_vector<CjPacked>, thrust::universal_vector<Excl>>&
-        neighborhood)
-{
-    auto& [sciSorted, cjPacked, excl] = neighborhood;
-
-    checkGpuErrors(cudaMemsetAsync(afx, 0, sizeof(T) * lastBody));
-    checkGpuErrors(cudaMemsetAsync(afy, 0, sizeof(T) * lastBody));
-    checkGpuErrors(cudaMemsetAsync(afz, 0, sizeof(T) * lastBody));
-
-    const dim3 blockSize     = {clusterSize, clusterSize, 1};
-    const unsigned numBlocks = sciSorted.size();
-    computeLjClusteredKernel<<<numBlocks, blockSize>>>(firstBody, lastBody, x, y, z, h, lj1, lj2, box, afx, afy, afz,
-                                                       rawPtr(sciSorted), rawPtr(cjPacked), rawPtr(excl));
-    checkGpuErrors(cudaGetLastError());
-}
-
-} // namespace gromacs_like
 
 template<class Tc, class T, class StrongKeyType, class Neighborhood>
 void benchmarkGPU(Neighborhood const& neighborhood)
@@ -533,31 +124,31 @@ void benchmarkGPU(Neighborhood const& neighborhood)
         .ijLoop(std::make_tuple(), std::make_tuple(afx.data(), afy.data(), afz.data()), LjKernelFun<T>{lj1, lj2},
                 ijloop::symmetry::odd);
 
-    thrust::device_vector<Tc> d_x(coords.x().begin(), coords.x().end());
-    thrust::device_vector<Tc> d_y(coords.y().begin(), coords.y().end());
-    thrust::device_vector<Tc> d_z(coords.z().begin(), coords.z().end());
-    thrust::device_vector<T> d_h = h;
-    thrust::device_vector<T> d_afx(n, std::numeric_limits<T>::quiet_NaN());
-    thrust::device_vector<T> d_afy(n, std::numeric_limits<T>::quiet_NaN());
-    thrust::device_vector<T> d_afz(n, std::numeric_limits<T>::quiet_NaN());
+    thrust::universal_vector<Tc> d_x(coords.x().begin(), coords.x().end());
+    thrust::universal_vector<Tc> d_y(coords.y().begin(), coords.y().end());
+    thrust::universal_vector<Tc> d_z(coords.z().begin(), coords.z().end());
+    thrust::universal_vector<T> d_h = h;
+    thrust::universal_vector<T> d_afx(n, std::numeric_limits<T>::quiet_NaN());
+    thrust::universal_vector<T> d_afy(n, std::numeric_limits<T>::quiet_NaN());
+    thrust::universal_vector<T> d_afz(n, std::numeric_limits<T>::quiet_NaN());
     printf("Memory usage of particle data: %.2f MB\n",
            (sizeof(Tc) * (d_x.size() + d_y.size() + d_z.size()) +
             sizeof(T) * (d_h.size() + d_afx.size() + d_afy.size() + d_afz.size())) /
                1.0e6);
 
-    thrust::device_vector<KeyType> d_prefixes             = octree.prefixes;
-    thrust::device_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
-    thrust::device_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
-    thrust::device_vector<TreeNodeIndex> d_levelRange     = octree.levelRange;
-    thrust::device_vector<LocalIndex> d_layout            = layout;
-    thrust::device_vector<Vec3<Tc>> d_centers             = centers;
-    thrust::device_vector<Vec3<Tc>> d_sizes               = sizes;
+    thrust::universal_vector<KeyType> d_prefixes             = octree.prefixes;
+    thrust::universal_vector<TreeNodeIndex> d_childOffsets   = octree.childOffsets;
+    thrust::universal_vector<TreeNodeIndex> d_internalToLeaf = octree.internalToLeaf;
+    thrust::universal_vector<TreeNodeIndex> d_levelRange     = octree.levelRange;
+    thrust::universal_vector<LocalIndex> d_layout            = layout;
+    thrust::universal_vector<Vec3<Tc>> d_centers             = centers;
+    thrust::universal_vector<Vec3<Tc>> d_sizes               = sizes;
 
     OctreeNsView<Tc, KeyType> nsViewGpu{octree.numLeafNodes,      rawPtr(d_prefixes),   rawPtr(d_childOffsets),
                                         rawPtr(d_internalToLeaf), rawPtr(d_levelRange), nullptr,
                                         rawPtr(d_layout),         rawPtr(d_centers),    rawPtr(d_sizes)};
 
-    thrust::device_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
+    thrust::universal_vector<KeyType> d_codes(coords.particleKeys().begin(), coords.particleKeys().end());
     const auto* deviceKeys = (const KeyType*)(rawPtr(d_codes));
 
     auto neighborhoodGPU = neighborhood.build(nsViewGpu, box, 0, n, rawPtr(d_x), rawPtr(d_y), rawPtr(d_z), rawPtr(d_h));
@@ -635,9 +226,8 @@ int main()
     std::cout << "--- NAIVE TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(ijloop::GpuFullNbListNeighborhood{ngmax});
 
-    /*std::cout << "--- GROMACS CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(gromacs_like::buildNeighborhoodClustered<Tc, T, KeyType>,
-                                       gromacs_like::computeLjClustered<Tc, T>);*/
+    std::cout << "--- GROMACS CLUSTERED TWO-STAGE ---" << std::endl;
+    benchmarkGPU<Tc, T, StrongKeyType>(ijloop::GromacsLikeNeighborhood{ngmax});
 
     using BaseClusterNb = ijloop::GpuClusterNbListNeighborhood<>::withNcMax<160>::withClusterSize<4, 4>;
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
