@@ -788,8 +788,7 @@ struct GpuClusterNbListNeighborhoodConfig
     static constexpr unsigned expectedCompressionRate = ExpectedCompressionRate;
     static constexpr bool compress                    = ExpectedCompressionRate > 1;
     static constexpr bool symmetric                   = Symmetric;
-    static constexpr unsigned ncMaxExtra =
-        (NcMax / 4 + GpuConfig::warpSize - 1) / GpuConfig::warpSize * GpuConfig::warpSize;
+    static constexpr unsigned ncMaxExtra              = NcMax;
 
     template<unsigned NewNcMax>
     using withNcMax = GpuClusterNbListNeighborhoodConfig<NewNcMax, ISize, JSize, ExpectedCompressionRate, Symmetric>;
