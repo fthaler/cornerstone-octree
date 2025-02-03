@@ -58,7 +58,7 @@ namespace detail
 
 constexpr __forceinline__ bool includeNbSymmetric(unsigned i, unsigned j, unsigned first)
 {
-    constexpr unsigned blockSize = 32;
+    constexpr unsigned blockSize = 8;
     const bool s                 = (i / blockSize) % 2 == (j / blockSize) % 2;
     return (j < first) | (i < j ? s : !s);
 }
