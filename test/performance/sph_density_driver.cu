@@ -44,7 +44,6 @@
 using namespace cstone;
 
 constexpr unsigned ngmax = 256;
-constexpr unsigned ncmax = 256;
 
 /* smoothing kernel evaluation functionality borrowed from SPH-EXA */
 
@@ -335,15 +334,16 @@ int main()
     std::cout << "--- NAIVE TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(ijloop::GpuFullNbListNeighborhood{ngmax});
 
-    using BaseClusterNb = ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ncmax>::withClusterSize<4, 4>;
+    using BaseClusterNb = ijloop::GpuClusterNbListNeighborhood<>::withNcMax<192>::withClusterSize<4, 4>;
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withoutCompression{});
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withCompression<10>{});
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withCompression<9>{});
+    using SymmetricClusterNB = BaseClusterNb::withNcMax<96>::withSymmetry;
     std::cout << "--- CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withSymmetry::withoutCompression{});
+    benchmarkGPU<Tc, T, StrongKeyType>(SymmetricClusterNB::withoutCompression{});
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withSymmetry::withCompression<10>{});
+    benchmarkGPU<Tc, T, StrongKeyType>(SymmetricClusterNB::withCompression<6>{});
 
     return 0;
 }

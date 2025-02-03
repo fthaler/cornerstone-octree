@@ -51,8 +51,7 @@
 
 using namespace cstone;
 
-constexpr unsigned ngmax = 256;
-constexpr unsigned ncmax = 256;
+constexpr unsigned ngmax = 224;
 
 template<class T>
 struct LjKernelFun
@@ -640,15 +639,16 @@ int main()
     benchmarkGPU<Tc, T, StrongKeyType>(gromacs_like::buildNeighborhoodClustered<Tc, T, KeyType>,
                                        gromacs_like::computeLjClustered<Tc, T>);*/
 
-    using BaseClusterNb = ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ncmax>::withClusterSize<4, 4>;
+    using BaseClusterNb = ijloop::GpuClusterNbListNeighborhood<>::withNcMax<160>::withClusterSize<4, 4>;
     std::cout << "--- CLUSTERED TWO-STAGE ---" << std::endl;
     benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withoutCompression{});
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withCompression<10>{});
+    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withoutSymmetry::withCompression<8>{});
+    using SymmetricClusterNb = BaseClusterNb::withNcMax<128>::withSymmetry;
     std::cout << "--- CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withSymmetry::withoutCompression{});
+    benchmarkGPU<Tc, T, StrongKeyType>(SymmetricClusterNb::withoutCompression{});
     std::cout << "--- COMPRESSED CLUSTERED TWO-STAGE SYMMETRIC ---" << std::endl;
-    benchmarkGPU<Tc, T, StrongKeyType>(BaseClusterNb::withSymmetry::withCompression<6>{});
+    benchmarkGPU<Tc, T, StrongKeyType>(SymmetricClusterNb::withCompression<7>{});
 
     return 0;
 }
