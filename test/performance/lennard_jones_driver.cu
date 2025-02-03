@@ -44,8 +44,6 @@
 #include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
 #include "cstone/cuda/thrust_util.cuh"
-#include "cstone/primitives/math.hpp"
-#include "cstone/traversal/find_neighbors_clustered.cuh"
 
 #include "../coord_samples/face_centered_cubic.hpp"
 #include "./gromacs_ijloop.cuh"
