@@ -80,8 +80,7 @@ constexpr __forceinline__ void atomicAddScalarOrVec(util::array<T, N>* ptr, util
 template<class Config>
 using nbStoragePerICluster =
     std::integral_constant<std::size_t,
-                           (Config::compress ? Config::ncMax / Config::expectedCompressionRate : Config::ncMax) /
-                               (Config::symmetric ? 2 : 1)>;
+                           (Config::compress ? Config::ncMax / Config::expectedCompressionRate : Config::ncMax)>;
 
 template<class Config, class Tc>
 __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalNumParticles,
