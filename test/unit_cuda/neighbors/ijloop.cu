@@ -294,3 +294,23 @@ TEST(IjLoop, GpuClusterNbList4x4WithSymmetryWithCompression)
     run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
         4, 4>::withSymmetry::withCompression<8>{});
 }
+TEST(IjLoop, GpuClusterNbList8x4WithoutSymmetryWithoutCompression)
+{
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        8, 4>::withoutSymmetry::withoutCompression{});
+}
+TEST(IjLoop, GpuClusterNbList8x4WithSymmetryWithoutCompression)
+{
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        8, 4>::withSymmetry::withoutCompression{});
+}
+TEST(IjLoop, GpuClusterNbList8x4WithoutSymmetryWithCompression)
+{
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        8, 4>::withoutSymmetry::withCompression<8>{});
+}
+TEST(IjLoop, GpuClusterNbList8x4WithSymmetryWithCompression)
+{
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        8, 4>::withSymmetry::withCompression<8>{});
+}
