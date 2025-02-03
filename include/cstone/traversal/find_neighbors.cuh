@@ -399,6 +399,50 @@ warpBbox(const util::array<Vec4<Tc>, TravConfig::nwt>& pos_i)
     return thrust::make_tuple(targetCenter, targetSize);
 }
 
+/*! @brief Find neighbors of a group of given particles, does not count self reference: min return value is 0
+ *
+ * @param[in]  bodyBegin   index of first particle in (x,y,z) to look for neighbors
+ * @param[in]  bodyEnd     last (excluding) index of particle to look for neighbors
+ * @param[in]  x           particle x coordinates
+ * @param[in]  y           particle y coordinates
+ * @param[in]  z           particle z coordinates
+ * @param[in]  h           particle smoothing lengths
+ * @param[in]  tree        octree connectivity and cell data
+ * @param[in]  box         global coordinate bounding box
+ * @param[out] warpNidx    storage for up to ngmax neighbor part. indices for each of the (bodyEnd - bodyBegin) targets
+ * @param[in]  ngmax       maximum number of neighbors to store
+ * @param[-]   globalPool  global memory for cell traversal stack
+ * @return                 actual neighbor count of the particle handled by the executing warp lane, can be > ngmax,
+ *                         minimum returned value is 0
+ *
+ * Note: Number of handled particles (bodyEnd - bodyBegin) should be GpuConfig::warpSize * TravConfig::nwt or smaller
+ */
+template<class Tc, class Th, class KeyType>
+__device__ util::array<unsigned, TravConfig::nwt> traverseNeighbors(cstone::LocalIndex bodyBegin,
+                                                                    cstone::LocalIndex bodyEnd,
+                                                                    const Tc* __restrict__ x,
+                                                                    const Tc* __restrict__ y,
+                                                                    const Tc* __restrict__ z,
+                                                                    const Th* __restrict__ h,
+                                                                    const OctreeNsView<Tc, KeyType>& tree,
+                                                                    const Box<Tc>& box,
+                                                                    cstone::LocalIndex* warpNidx,
+                                                                    unsigned ngmax,
+                                                                    TreeNodeIndex* globalPool)
+{
+    const unsigned laneIdx                      = threadIdx.x & (GpuConfig::warpSize - 1);
+    util::array<unsigned, TravConfig::nwt> nc_i = {};
+    auto handleInteraction                      = [&](int warpTarget, cstone::LocalIndex j)
+    {
+        if (nc_i[warpTarget] < ngmax)
+            warpNidx[nc_i[warpTarget] * TravConfig::targetSize + laneIdx + warpTarget * GpuConfig::warpSize] = j;
+        ++nc_i[warpTarget];
+    };
+    traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
+
+    return nc_i;
+}
+
 /*! @brief Find neighbors of a group of given particles, does not count self reference
  *
  * @param[in]  bodyBegin         index of first particle in (x,y,z) to look for neighbors

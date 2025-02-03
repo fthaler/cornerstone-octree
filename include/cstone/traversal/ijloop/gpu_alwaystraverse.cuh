@@ -78,16 +78,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeigh
         const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
         const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
 
-        unsigned nc_i[TravConfig::nwt] = {0};
-
-        auto handleInteraction = [&](int warpTarget, cstone::LocalIndex j)
-        {
-            if (nc_i[warpTarget] < ngmax)
-                warpNidx[nc_i[warpTarget] * TravConfig::targetSize + warpTarget * GpuConfig::warpSize + laneIdx] = j;
-            ++nc_i[warpTarget];
-        };
-
-        traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, handleInteraction, globalPool);
+        auto nc_i = traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, warpNidx, ngmax, globalPool);
 
 #pragma unroll
         for (unsigned warpTarget = 0; warpTarget < TravConfig::nwt; ++warpTarget)
