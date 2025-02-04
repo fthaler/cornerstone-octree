@@ -30,6 +30,7 @@
  */
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <tuple>
@@ -48,7 +49,6 @@
 /* smoothing kernel evaluation functionality borrowed from SPH-EXA */
 
 constexpr int kTableSize = 20000;
-constexpr bool kUseTable = false;
 
 template<typename T>
 constexpr inline T wharmonic_std(T v)
@@ -81,10 +81,10 @@ auto kernelTable()
     return tabulateFunction<T>([](T x) { return std::pow(wharmonic_std(x), 6.0); }, 0.0, 2.0, kTableSize);
 }
 
-template<bool useKernelTable = kUseTable, class T>
+template<bool UseKernelTable, class T>
 constexpr inline T table_lookup(const T* table, T v)
 {
-    if constexpr (useKernelTable)
+    if constexpr (UseKernelTable)
     {
         constexpr int numIntervals = kTableSize - 1;
         constexpr T support        = 2.0;
@@ -104,7 +104,7 @@ constexpr inline T table_lookup(const T* table, T v)
     }
 }
 
-template<class T>
+template<bool UseKernelTable, class T>
 struct DensityKernelFun
 {
     const T* wh;
@@ -116,18 +116,15 @@ struct DensityKernelFun
         const auto [j, jPos, hj, mj] = jData;
         const T dist                 = std::sqrt(distSq);
         const T vloc                 = dist * (T(1) / hi);
-        const T w                    = i == j ? T(1) : table_lookup(wh, vloc);
+        const T w                    = i == j ? T(1) : table_lookup<UseKernelTable>(wh, vloc);
         return std::make_tuple(w * mj);
     }
 };
 
-int main()
+template<class Tc, class T, class StrongKeyType, bool UseKernelTable>
+void benchmarkMain()
 {
     using namespace cstone;
-
-    using Tc            = double;
-    using T             = float;
-    using StrongKeyType = HilbertKey<uint64_t>;
 
     constexpr unsigned ngmax = 256;
 
@@ -138,7 +135,7 @@ int main()
     RandomCoordinates<Tc, StrongKeyType> coords(n, {0, 1, BoundaryType::periodic});
 
     const auto wh = kernelTable<T>();
-    const DensityKernelFun<T> kernelFun{rawPtr(wh)};
+    const DensityKernelFun<UseKernelTable, T> kernelFun{rawPtr(wh)};
     const auto inputValues         = std::tuple(T(1));
     const auto initialOutputValues = std::tuple(std::numeric_limits<T>::quiet_NaN());
 
@@ -147,6 +144,7 @@ int main()
         printf("--- %s ---\n", name);
         benchmarkNeighborhood<Tc, T, StrongKeyType>(coords, neighborhood, h, ngmax, kernelFun, ijloop::symmetry::even,
                                                     inputValues, initialOutputValues);
+        printf("\n");
     };
 
     runBenchmark("BATCHED DIRECT", ijloop::GpuAlwaysTraverseNeighborhood{ngmax});
@@ -160,6 +158,23 @@ int main()
     using SymmetricClusterNb = BaseClusterNb::withNcMax<96>::withSymmetry;
     runBenchmark("CLUSTERED TWO-STAGE SYMMETRIC", SymmetricClusterNb::withoutCompression{});
     runBenchmark("COMPRESSED CLUSTERED TWO-STAGE ", SymmetricClusterNb::withCompression<7>{});
+}
+
+int main()
+{
+    using StrongKeyType = cstone::HilbertKey<std::uint64_t>;
+
+    printf("=== DOUBLE COORDINATES, DOUBLE VALUES, KERNEL TABLE ===\n\n");
+    benchmarkMain<double, double, StrongKeyType, true>();
+
+    printf("=== DOUBLE COORDINATES, DOUBLE VALUES, DIRECT KERNEL EVALUATION ===\n\n");
+    benchmarkMain<double, double, StrongKeyType, false>();
+
+    printf("=== DOUBLE COORDINATES, FLOAT VALUES, KERNEL TABLE ===\n\n");
+    benchmarkMain<double, float, StrongKeyType, true>();
+
+    printf("=== DOUBLE COORDINATES, FLOAT VALUES, DIRECT KERNEL EVALUATION ===\n\n");
+    benchmarkMain<double, float, StrongKeyType, false>();
 
     return 0;
 }
