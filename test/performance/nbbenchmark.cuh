@@ -202,5 +202,5 @@ void benchmarkNeighborhood(const Coords& coords,
             }
         },
         dOutputs, outputs);
-    printf("TOTAL FAILS: %lu\n", numFails);
+    if (numFails) printf("TOTAL FAILS: %lu\n", numFails);
 }
