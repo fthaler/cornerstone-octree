@@ -51,7 +51,7 @@ constexpr int kTableSize = 20000;
 constexpr bool kUseTable = false;
 
 template<typename T>
-__host__ __device__ inline T wharmonic_std(T v)
+constexpr inline T wharmonic_std(T v)
 {
     if (v == 0.0) { return 1.0; }
 
@@ -59,14 +59,14 @@ __host__ __device__ inline T wharmonic_std(T v)
     return std::sin(Pv) / Pv;
 }
 
-template<class T, std::size_t N, class F>
-std::array<T, N> tabulateFunction(F&& func, double lowerSupport, double upperSupport)
+template<class T, class F>
+thrust::universal_vector<T>
+tabulateFunction(F&& func, const double lowerSupport, const double upperSupport, const std::size_t n)
 {
-    constexpr int numIntervals = N - 1;
-    std::array<T, N> table;
+    thrust::universal_vector<T> table(n);
 
-    const T dx = (upperSupport - lowerSupport) / numIntervals;
-    for (size_t i = 0; i < N; ++i)
+    const T dx = (upperSupport - lowerSupport) / (n - 1);
+    for (size_t i = 0; i < n; ++i)
     {
         T normalizedVal = lowerSupport + i * dx;
         table[i]        = func(normalizedVal);
@@ -76,13 +76,13 @@ std::array<T, N> tabulateFunction(F&& func, double lowerSupport, double upperSup
 }
 
 template<class T>
-std::array<T, kTableSize> kernelTable()
+auto kernelTable()
 {
-    return tabulateFunction<T, kTableSize>([](T x) { return std::pow(wharmonic_std(x), 6.0); }, 0.0, 2.0);
+    return tabulateFunction<T>([](T x) { return std::pow(wharmonic_std(x), 6.0); }, 0.0, 2.0, kTableSize);
 }
 
 template<bool useKernelTable = kUseTable, class T>
-__host__ __device__ inline T table_lookup(const T* table, T v)
+constexpr inline T table_lookup(const T* table, T v)
 {
     if constexpr (useKernelTable)
     {
@@ -110,8 +110,7 @@ struct DensityKernelFun
     const T* wh;
 
     template<class ParticleData, class Tc>
-    constexpr __host__ __device__ auto
-    operator()(ParticleData const& iData, ParticleData const& jData, cstone::Vec3<Tc>, T distSq) const
+    constexpr auto operator()(ParticleData const& iData, ParticleData const& jData, cstone::Vec3<Tc>, T distSq) const
     {
         const auto [i, iPos, hi, mi] = iData;
         const auto [j, jPos, hj, mj] = jData;
@@ -139,10 +138,7 @@ int main()
     RandomCoordinates<Tc, StrongKeyType> coords(n, {0, 1, BoundaryType::periodic});
 
     const auto wh = kernelTable<T>();
-    thrust::universal_vector<T> dWh(wh.size());
-    thrust::copy(wh.begin(), wh.end(), dWh.begin());
-
-    const DensityKernelFun<T> kernelFun{rawPtr(dWh)};
+    const DensityKernelFun<T> kernelFun{rawPtr(wh)};
     const auto inputValues         = std::tuple(T(1));
     const auto initialOutputValues = std::tuple(std::numeric_limits<T>::quiet_NaN());
 
