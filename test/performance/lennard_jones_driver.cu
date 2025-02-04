@@ -29,6 +29,7 @@
  * @author Felix Thaler <thaler@cscs.ch>
  */
 
+#include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <tuple>
@@ -60,13 +61,10 @@ struct LjKernelFun
     }
 };
 
-int main()
+template<class Tc, class T, class StrongKeyType>
+void benchmarkMain()
 {
     using namespace cstone;
-
-    using Tc            = double;
-    using T             = double;
-    using StrongKeyType = HilbertKey<uint64_t>;
 
     constexpr unsigned ngmax = 224;
 
@@ -85,6 +83,7 @@ int main()
         printf("--- %s ---\n", name);
         benchmarkNeighborhood<Tc, T, StrongKeyType>(coords, neighborhood, h, ngmax, kernelFun, ijloop::symmetry::odd,
                                                     inputValues, initialOutputValues);
+        printf("\n");
     };
 
     runBenchmark("BATCHED DIRECT", ijloop::GpuAlwaysTraverseNeighborhood{ngmax});
@@ -98,6 +97,20 @@ int main()
     using SymmetricClusterNb = BaseClusterNb::withNcMax<128>::withSymmetry;
     runBenchmark("CLUSTERED TWO-STAGE SYMMETRIC", SymmetricClusterNb::withoutCompression{});
     runBenchmark("COMPRESSED CLUSTERED TWO-STAGE ", SymmetricClusterNb::withCompression<7>{});
+}
+
+int main()
+{
+    using StrongKeyType = cstone::HilbertKey<std::uint64_t>;
+
+    printf("=== DOUBLE COORDINATES, DOUBLE VALUES ===\n\n");
+    benchmarkMain<double, double, StrongKeyType>();
+
+    printf("=== DOUBLE COORDINATES, FLOAT VALUES ===\n\n");
+    benchmarkMain<double, float, StrongKeyType>();
+
+    printf("=== FLOAT COORDINATES, FLOAT VALUES ===\n\n");
+    benchmarkMain<float, float, StrongKeyType>();
 
     return 0;
 }
