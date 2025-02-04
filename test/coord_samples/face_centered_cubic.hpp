@@ -159,6 +159,7 @@ public:
         swap(z_, temp);
     }
 
+    const Box<T>& box() const { return box_; }
     const std::vector<T>& x() const { return x_; }
     const std::vector<T>& y() const { return y_; }
     const std::vector<T>& z() const { return z_; }
