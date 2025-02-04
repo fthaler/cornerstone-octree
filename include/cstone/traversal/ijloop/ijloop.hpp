@@ -37,6 +37,7 @@
 #include "cstone/tree/definitions.h"
 #include "cstone/sfc/box.hpp"
 #include "cstone/util/tuple_util.hpp"
+#include "cstone/tree/octree.hpp"
 
 namespace cstone::ijloop
 {
@@ -130,5 +131,37 @@ storeParticleData(std::tuple<Ts*...> const& output, LocalIndex index, std::tuple
 {
     util::for_each_tuple([index](auto* ptr, auto const& v) { ptr[index] = v; }, output, value);
 }
+
+namespace detail
+{
+
+struct ConceptTestInteraction
+{
+    constexpr std::tuple<int>
+    operator()(std::tuple<LocalIndex, double, float>, std::tuple<LocalIndex, double, float>, Vec3<double>, double) const
+    {
+        return {0};
+    }
+};
+
+} // namespace detail
+
+template<class T>
+concept Neighborhood = requires(T nb,
+                                OctreeNsView<double, unsigned> tree,
+                                Box<double> box,
+                                LocalIndex firstBody,
+                                LocalIndex lastBody,
+                                const double* x,
+                                const double* y,
+                                const double* z,
+                                const float* h)
+{
+    nb.build(tree, box, firstBody, lastBody, x, y, z, h);
+    {
+        nb.build(tree, box, firstBody, lastBody, x, y, z, h)
+            .ijLoop(std::tuple(), std::tuple<int*>(), detail::ConceptTestInteraction{}, symmetry::asymmetric)
+    } -> std::same_as<void>;
+};
 
 } // namespace cstone::ijloop

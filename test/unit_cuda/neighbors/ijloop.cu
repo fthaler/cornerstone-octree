@@ -54,7 +54,7 @@ using KeyT       = StrongKeyT::ValueType;
 struct NeighborFun
 {
     template<class ParticleData>
-    constexpr __host__ __device__ auto
+    constexpr auto
     operator()(ParticleData const& iData, ParticleData const& jData, Vec3<double> ijPosDiff, double distSq) const
     {
         const auto [i, iPos, hi, vi] = iData;
@@ -251,22 +251,23 @@ auto initialData()
                            std::move(v), std::move(treeData), std::move(view), std::move(ref));
 }
 
-template<class Neighborhood>
-auto run(Neighborhood&& nb)
+template<ijloop::Neighborhood Neighborhood>
+auto run(Neighborhood const& nb)
 {
     auto [box, firstBody, lastBody, x, y, z, h, v, treeData, nsView, ref] = initialData();
 
     Result actual;
-    nb.build(nsView, box, firstBody, lastBody, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h))
-        .ijLoop(std::make_tuple(rawPtr(v)),
-                util::tupleMap(
-                    [lastBody = lastBody](auto& vec)
-                    {
-                        vec.resize(lastBody);
-                        return rawPtr(vec);
-                    },
-                    actual),
-                NeighborFun{}, ijloop::symmetry::asymmetric);
+    const auto built = nb.build(nsView, box, firstBody, lastBody, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h));
+
+    built.ijLoop(std::make_tuple(rawPtr(v)),
+                 util::tupleMap(
+                     [lastBody = lastBody](auto& vec)
+                     {
+                         vec.resize(lastBody);
+                         return rawPtr(vec);
+                     },
+                     actual),
+                 NeighborFun{}, ijloop::symmetry::asymmetric);
 
     validate(ref, actual);
 }
@@ -291,8 +292,8 @@ TEST(IjLoop, GpuClusterNbList4x4WithoutSymmetryWithCompression)
 }
 TEST(IjLoop, GpuClusterNbList4x4WithSymmetryWithCompression)
 {
-    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
-        4, 4>::withSymmetry::withCompression<8>{});
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<4, 4>::withSymmetry::withCompression<
+        8>{});
 }
 TEST(IjLoop, GpuClusterNbList8x4WithoutSymmetryWithoutCompression)
 {
@@ -311,6 +312,6 @@ TEST(IjLoop, GpuClusterNbList8x4WithoutSymmetryWithCompression)
 }
 TEST(IjLoop, GpuClusterNbList8x4WithSymmetryWithCompression)
 {
-    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
-        8, 4>::withSymmetry::withCompression<8>{});
+    run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<8, 4>::withSymmetry::withCompression<
+        8>{});
 }
