@@ -288,7 +288,7 @@ storeTupleJSum(std::tuple<T0, T...> tuple, std::tuple<T0*, T*...> const& ptrs, c
     }
 }
 
-template<bool UsePbc, class Symmetry, class Tc, class Th, class In, class Out, class Interaction>
+template<bool UsePbc, Symmetry Sym, class Tc, class Th, class In, class Out, class Interaction>
 __global__
 __launch_bounds__(clusterSize* clusterSize) void gromacsLikeNeighborhoodKernel(const Box<Tc> __grid_constant__ box,
                                                                                const LocalIndex firstBody,
@@ -366,7 +366,7 @@ __launch_bounds__(clusterSize* clusterSize) void gromacsLikeNeighborhoodKernel(c
                                 {
                                     auto ijInteraction = interaction(iData, jData, ijPosDiff, distSq);
                                     updateResult(iResultBuf[i], ijInteraction);
-                                    if constexpr (std::is_same_v<Symmetry, symmetry::Asymmetric>)
+                                    if constexpr (std::is_same_v<Sym, symmetry::Asymmetric>)
                                         ijInteraction = interaction(jData, iData, -ijPosDiff, distSq);
                                     if (ai != aj) updateResult(jResultBuf, ijInteraction);
                                 }
@@ -375,7 +375,7 @@ __launch_bounds__(clusterSize* clusterSize) void gromacsLikeNeighborhoodKernel(c
                         maskJi += maskJi;
                     }
 
-                    if constexpr (std::is_same_v<Symmetry, symmetry::Odd>)
+                    if constexpr (std::is_same_v<Sym, symmetry::Odd>)
                         util::for_each_tuple([](auto& v) { v = -v; }, jResultBuf);
 
                     storeTupleJSum(jResultBuf, output, aj, aj >= firstBody & aj < lastBody);
@@ -402,11 +402,9 @@ struct GromacsLikeNeighborhoodImpl
     const Tc *x, *y, *z;
     const Th* h;
 
-    template<class... In, class... Out, class Interaction, class Symmetry>
-    void ijLoop(std::tuple<In*...> const& input,
-                std::tuple<Out*...> const& output,
-                Interaction&& interaction,
-                Symmetry) const
+    template<class... In, class... Out, class Interaction, Symmetry Sym>
+    void
+    ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Sym) const
     {
         const auto constInput = makeConstRestrict(input);
 
@@ -420,13 +418,13 @@ struct GromacsLikeNeighborhoodImpl
         if (box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
             box.boundaryZ() == BoundaryType::periodic)
         {
-            gromacsLikeNeighborhoodKernel<true, Symmetry><<<numBlocks, blockSize>>>(
+            gromacsLikeNeighborhoodKernel<true, Sym><<<numBlocks, blockSize>>>(
                 box, firstBody, lastBody, x, y, z, h, constInput, output, std::forward<Interaction>(interaction),
                 rawPtr(sciSorted), rawPtr(cjPacked), rawPtr(excl));
         }
         else
         {
-            gromacsLikeNeighborhoodKernel<false, Symmetry><<<numBlocks, blockSize>>>(
+            gromacsLikeNeighborhoodKernel<false, Sym><<<numBlocks, blockSize>>>(
                 box, firstBody, lastBody, x, y, z, h, constInput, output, std::forward<Interaction>(interaction),
                 rawPtr(sciSorted), rawPtr(cjPacked), rawPtr(excl));
         }

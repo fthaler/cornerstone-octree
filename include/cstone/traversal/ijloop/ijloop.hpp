@@ -147,6 +147,10 @@ struct ConceptTestInteraction
 } // namespace detail
 
 template<class T>
+concept Symmetry =
+    std::is_same_v<T, symmetry::Asymmetric> || std::is_same_v<T, symmetry::Even> || std::is_same_v<T, symmetry::Odd>;
+
+template<class T>
 concept Neighborhood = requires(T nb,
                                 OctreeNsView<double, unsigned> tree,
                                 Box<double> box,

@@ -54,11 +54,9 @@ struct CpuDirectNeighborhoodImpl
     const Th* h;
     unsigned ngmax;
 
-    template<class... In, class... Out, class Interaction, class Symmetry>
-    void ijLoop(std::tuple<In*...> const& input,
-                std::tuple<Out*...> const& output,
-                Interaction&& interaction,
-                Symmetry) const
+    template<class... In, class... Out, class Interaction, Symmetry Sym>
+    void
+    ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Sym) const
     {
         const auto constInput = makeConstRestrict(input);
 #pragma omp parallel

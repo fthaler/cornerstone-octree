@@ -612,21 +612,10 @@ storeTupleJSum(std::tuple<T0, T...> tuple, std::tuple<T0*, T*...> const& ptrs, c
     }
 }
 
-template<class Symmetry, class... Ts>
-__device__ inline constexpr void applySymmetry(Symmetry, std::tuple<Ts...> const& value)
-{
-}
-
-template<class... Ts>
-__device__ inline constexpr void applySymmetry(symmetry::Odd, std::tuple<Ts...>& value)
-{
-    util::for_each_tuple([](auto& v) { v = -v; }, value);
-}
-
 template<class Config,
          unsigned NumWarpsPerBlock,
          bool UsePbc,
-         class Symmetry,
+         Symmetry Sym,
          class Tc,
          class Th,
          class In,
@@ -704,7 +693,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
             {
                 if (distSq < jRadiusSq & (!self | (i != j)))
                 {
-                    if constexpr (std::is_same_v<Symmetry, symmetry::Asymmetric>)
+                    if constexpr (std::is_same_v<Sym, symmetry::Asymmetric>)
                         ijInteraction = interaction(jData, iData, -ijPosDiff, distSq);
                     updateResult(jResult, ijInteraction);
                 }
@@ -712,7 +701,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
         }
         if constexpr (Config::symmetric)
         {
-            applySymmetry(Symmetry{}, jResult);
+            if constexpr (std::is_same_v<Sym, symmetry::Odd>) util::for_each_tuple([](auto& r) { r = -r; }, jResult);
             storeTupleJSum<Config>(jResult, output, j, j >= firstBody & j < lastBody);
         }
     };
@@ -746,11 +735,9 @@ struct GpuClusterNbListNeighborhoodImpl
     thrust::device_vector<LocalIndex> clusterNeighbors;
     thrust::device_vector<unsigned> clusterNeighborsCount;
 
-    template<class... In, class... Out, class Interaction, class Symmetry>
-    void ijLoop(std::tuple<In*...> const& input,
-                std::tuple<Out*...> const& output,
-                Interaction&& interaction,
-                Symmetry) const
+    template<class... In, class... Out, class Interaction, Symmetry Sym>
+    void
+    ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Sym) const
     {
         const LocalIndex numBodies = lastBody - firstBody;
         if (Config::symmetric)
@@ -768,7 +755,7 @@ struct GpuClusterNbListNeighborhoodImpl
         constexpr unsigned numWarpsPerBlock = threads / GpuConfig::warpSize;
         const dim3 blockSize                = {Config::iSize, GpuConfig::warpSize / Config::iSize, numWarpsPerBlock};
         const unsigned numBlocks            = iceil(numIClusters, numWarpsPerBlock);
-        gpuClusterNbListNeighborhoodKernel<Config, numWarpsPerBlock, true, Symmetry><<<numBlocks, blockSize>>>(
+        gpuClusterNbListNeighborhoodKernel<Config, numWarpsPerBlock, true, Sym><<<numBlocks, blockSize>>>(
             box, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
             std::forward<Interaction>(interaction), rawPtr(clusterNeighbors), rawPtr(clusterNeighborsCount));
         checkGpuErrors(cudaGetLastError());

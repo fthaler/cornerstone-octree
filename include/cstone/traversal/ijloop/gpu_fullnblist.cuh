@@ -118,11 +118,9 @@ struct GpuFullNbListNeighborhoodImpl
     thrust::device_vector<LocalIndex> neighbors;
     thrust::device_vector<unsigned> neighborsCount;
 
-    template<class... In, class... Out, class Interaction, class Symmetry>
-    void ijLoop(std::tuple<In*...> const& input,
-                std::tuple<Out*...> const& output,
-                Interaction&& interaction,
-                Symmetry) const
+    template<class... In, class... Out, class Interaction, Symmetry Sym>
+    void
+    ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Sym) const
     {
         const LocalIndex numBodies = lastBody - firstBody;
         constexpr int numThreads   = 128;
