@@ -115,11 +115,14 @@ struct GpuAlwaysTraverseNeighborhoodImpl
     const Tc *x, *y, *z;
     const Th* h;
     unsigned ngmax;
-    thrust::device_vector<LocalIndex> neighbors;
-    thrust::device_vector<int> globalPool;
+    mutable thrust::device_vector<LocalIndex> neighbors;
+    mutable thrust::device_vector<int> globalPool;
 
     template<class... In, class... Out, class Interaction, class Symmetry>
-    void ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Symmetry)
+    void ijLoop(std::tuple<In*...> const& input,
+                std::tuple<Out*...> const& output,
+                Interaction&& interaction,
+                Symmetry) const
     {
         resetTraversalCounters<<<1, 1>>>();
         if (box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
