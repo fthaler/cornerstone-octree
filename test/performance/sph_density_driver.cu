@@ -29,12 +29,14 @@
  * @author Felix Thaler <thaler@cscs.ch>
  */
 
-#include <iostream>
+#include <cmath>
+#include <cstdio>
+#include <limits>
+#include <tuple>
 
 #include <thrust/universal_vector.h>
 
 #include "cstone/cuda/thrust_util.cuh"
-#include "cstone/traversal/ijloop/cpu.hpp"
 #include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
 #include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
@@ -42,8 +44,6 @@
 #include "../coord_samples/random.hpp"
 #include "./gromacs_ijloop.cuh"
 #include "./nbbenchmark.cuh"
-
-using namespace cstone;
 
 /* smoothing kernel evaluation functionality borrowed from SPH-EXA */
 
@@ -111,7 +111,7 @@ struct DensityKernelFun
 
     template<class ParticleData, class Tc>
     constexpr __host__ __device__ auto
-    operator()(ParticleData const& iData, ParticleData const& jData, Vec3<Tc>, T distSq) const
+    operator()(ParticleData const& iData, ParticleData const& jData, cstone::Vec3<Tc>, T distSq) const
     {
         const auto [i, iPos, hi, mi] = iData;
         const auto [j, jPos, hj, mj] = jData;
