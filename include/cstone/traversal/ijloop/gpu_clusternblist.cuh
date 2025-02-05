@@ -760,6 +760,14 @@ struct GpuClusterNbListNeighborhoodImpl
             std::forward<Interaction>(interaction), rawPtr(clusterNeighbors), rawPtr(clusterNeighborsCount));
         checkGpuErrors(cudaGetLastError());
     }
+
+    Statistics stats() const
+    {
+        return {.numBodies = lastBody - firstBody,
+                .numBytes =
+                    clusterNeighbors.size() * sizeof(typename decltype(clusterNeighbors)::value_type) +
+                    clusterNeighborsCount.size() * sizeof(typename decltype(clusterNeighborsCount)::value_type)};
+    }
 };
 
 template<unsigned NcMax                   = 256,

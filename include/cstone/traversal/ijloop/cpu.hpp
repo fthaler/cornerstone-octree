@@ -85,6 +85,8 @@ struct CpuDirectNeighborhoodImpl
             }
         }
     }
+
+    Statistics stats() const { return {.numBodies = lastBody - firstBody, .numBytes = 0}; }
 };
 } // namespace detail
 

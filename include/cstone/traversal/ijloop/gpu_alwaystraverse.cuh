@@ -138,6 +138,13 @@ struct GpuAlwaysTraverseNeighborhoodImpl
         }
         checkGpuErrors(cudaDeviceSynchronize());
     }
+
+    Statistics stats() const
+    {
+        return {.numBodies = lastBody - firstBody,
+                .numBytes  = neighbors.size() * sizeof(typename decltype(neighbors)::value_type) +
+                            globalPool.size() * sizeof(typename decltype(globalPool)::value_type)};
+    }
 };
 } // namespace detail
 

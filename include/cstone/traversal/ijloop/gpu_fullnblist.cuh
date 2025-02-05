@@ -129,6 +129,13 @@ struct GpuFullNbListNeighborhoodImpl
             std::forward<Interaction>(interaction), ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
         checkGpuErrors(cudaGetLastError());
     }
+
+    Statistics stats() const
+    {
+        return {.numBodies = lastBody - firstBody,
+                .numBytes  = neighbors.size() * sizeof(typename decltype(neighbors)::value_type) +
+                            neighborsCount.size() * sizeof(typename decltype(neighborsCount)::value_type)};
+    }
 };
 } // namespace detail
 

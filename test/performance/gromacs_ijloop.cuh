@@ -430,6 +430,14 @@ struct GromacsLikeNeighborhoodImpl
         }
         checkGpuErrors(cudaGetLastError());
     }
+
+    Statistics stats() const
+    {
+        return {.numBodies = lastBody - firstBody,
+                .numBytes  = sciSorted.size() * sizeof(typename decltype(sciSorted)::value_type) +
+                            cjPacked.size() * sizeof(typename decltype(cjPacked)::value_type) +
+                            excl.size() * sizeof(typename decltype(excl)::value_type)};
+    }
 };
 
 } // namespace gromacs_like_neighborhood_detail

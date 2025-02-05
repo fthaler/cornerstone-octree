@@ -146,6 +146,11 @@ struct ConceptTestInteraction
 
 } // namespace detail
 
+struct Statistics
+{
+    const std::size_t numBodies, numBytes;
+};
+
 template<class T>
 concept Symmetry =
     std::is_same_v<T, symmetry::Asymmetric> || std::is_same_v<T, symmetry::Even> || std::is_same_v<T, symmetry::Odd>;
@@ -162,6 +167,9 @@ concept Neighborhood = requires(T nb,
                                 const float* h)
 {
     nb.build(tree, box, firstBody, lastBody, x, y, z, h);
+    {
+        nb.build(tree, box, firstBody, lastBody, x, y, z, h).stats()
+    } -> std::same_as<Statistics>;
     {
         nb.build(tree, box, firstBody, lastBody, x, y, z, h)
             .ijLoop(std::tuple(), std::tuple<int*>(), detail::ConceptTestInteraction{}, symmetry::asymmetric)
