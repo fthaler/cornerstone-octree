@@ -79,8 +79,8 @@ template<class Tc, class Th, class... Ts>
 inline constexpr std::tuple<LocalIndex, Vec3<Tc>, Th, Ts...>
 dummyParticleData(const Tc*, const Tc*, const Tc*, const Th*, std::tuple<const Ts*...> const&, LocalIndex index)
 {
-    constexpr Vec3<Tc> pos = {std::numeric_limits<Tc>::max(), std::numeric_limits<Tc>::max(),
-                              std::numeric_limits<Tc>::max()};
+    constexpr Vec3<Tc> pos = {std::numeric_limits<Tc>::quiet_NaN(), std::numeric_limits<Tc>::quiet_NaN(),
+                              std::numeric_limits<Tc>::quiet_NaN()};
     return std::make_tuple(index, pos, Th(0), Ts{}...);
 }
 
@@ -148,7 +148,7 @@ struct ConceptTestInteraction
 
 struct Statistics
 {
-    const std::size_t numBodies, numBytes;
+    const std::size_t numParticles, numBytes;
 };
 
 template<class T>
@@ -159,19 +159,20 @@ template<class T>
 concept Neighborhood = requires(T nb,
                                 OctreeNsView<double, unsigned> tree,
                                 Box<double> box,
-                                LocalIndex firstBody,
-                                LocalIndex lastBody,
+                                LocalIndex totalParticles,
+                                LocalIndex firstIParticle,
+                                LocalIndex lastIParticle,
                                 const double* x,
                                 const double* y,
                                 const double* z,
                                 const float* h)
 {
-    nb.build(tree, box, firstBody, lastBody, x, y, z, h);
+    nb.build(tree, box, totalParticles, firstIParticle, lastIParticle, x, y, z, h);
     {
-        nb.build(tree, box, firstBody, lastBody, x, y, z, h).stats()
+        nb.build(tree, box, totalParticles, firstIParticle, lastIParticle, x, y, z, h).stats()
     } -> std::same_as<Statistics>;
     {
-        nb.build(tree, box, firstBody, lastBody, x, y, z, h)
+        nb.build(tree, box, totalParticles, firstIParticle, lastIParticle, x, y, z, h)
             .ijLoop(std::tuple(), std::tuple<int*>(), detail::ConceptTestInteraction{}, symmetry::asymmetric)
     } -> std::same_as<void>;
 };

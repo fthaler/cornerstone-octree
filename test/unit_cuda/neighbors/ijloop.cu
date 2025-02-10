@@ -93,18 +93,19 @@ Result reference(const Box<double>& box,
                  const double* const z,
                  const double* const h,
                  const double* const v,
-                 const LocalIndex firstBody,
-                 const LocalIndex lastBody)
+                 const LocalIndex numParticles,
+                 const LocalIndex firstIParticle,
+                 const LocalIndex lastIParticle)
 {
-    thrust::universal_vector<LocalIndex> iSum(lastBody), jSum(lastBody);
-    thrust::universal_vector<Vec3<double>> iPosSum(lastBody), jPosSum(lastBody), ijPosDiffSum(lastBody);
-    thrust::universal_vector<double> d2Sum(lastBody), hiSum(lastBody), hjSum(lastBody), viSum(lastBody),
-        vjSum(lastBody);
-    thrust::universal_vector<unsigned> neighborsCount(lastBody);
+    thrust::universal_vector<LocalIndex> iSum(lastIParticle), jSum(lastIParticle);
+    thrust::universal_vector<Vec3<double>> iPosSum(lastIParticle), jPosSum(lastIParticle), ijPosDiffSum(lastIParticle);
+    thrust::universal_vector<double> d2Sum(lastIParticle), hiSum(lastIParticle), hjSum(lastIParticle),
+        viSum(lastIParticle), vjSum(lastIParticle);
+    thrust::universal_vector<unsigned> neighborsCount(lastIParticle);
 
-    for (unsigned i = firstBody; i < lastBody; ++i)
+    for (unsigned i = firstIParticle; i < lastIParticle; ++i)
     {
-        for (unsigned j = 0; j < lastBody; ++j)
+        for (unsigned j = 0; j < numParticles; ++j)
         {
             const double xi = x[i];
             const double yi = y[i];
@@ -205,22 +206,23 @@ void validate(const Result& expected, const Result& actual)
 
 auto initialData()
 {
-    const unsigned firstBody = 241;
-    const unsigned lastBody  = 997;
+    const unsigned totalParticles = 997;
+    const unsigned firstIParticle = 241;
+    const unsigned lastIParticle  = 701;
     Box<double> box{0, 1, BoundaryType::periodic};
-    RandomCoordinates<double, StrongKeyT> coords(lastBody, box);
+    RandomCoordinates<double, StrongKeyT> coords(totalParticles, box);
 
     thrust::universal_vector<double> x   = coords.x();
     thrust::universal_vector<double> y   = coords.y();
     thrust::universal_vector<double> z   = coords.z();
     thrust::universal_vector<KeyT> codes = coords.particleKeys();
 
-    thrust::universal_vector<double> h(lastBody), v(lastBody);
+    thrust::universal_vector<double> h(totalParticles), v(totalParticles);
     std::mt19937 gen(42);
     std::generate(h.begin(), h.end(), std::bind(std::uniform_real_distribution<double>(0.03, 0.15), std::ref(gen)));
     std::generate(v.begin(), v.end(), std::bind(std::uniform_real_distribution<double>(-100, 100), std::ref(gen)));
 
-    auto [csTree, counts] = computeOctree(rawPtr(codes), rawPtr(codes) + lastBody, 8);
+    auto [csTree, counts] = computeOctree(rawPtr(codes), rawPtr(codes) + totalParticles, 8);
     OctreeData<KeyT, CpuTag> octree;
     octree.resize(nNodes(csTree));
     updateInternalTree<KeyT>(csTree, octree.data());
@@ -232,7 +234,8 @@ auto initialData()
     gsl::span<const KeyT> nodeKeys(rawPtr(octree.prefixes), octree.numNodes);
     nodeFpCenters(nodeKeys, rawPtr(centers), rawPtr(sizes), box);
 
-    Result ref = reference(box, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), rawPtr(v), firstBody, lastBody);
+    Result ref = reference(box, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), rawPtr(v), totalParticles, firstIParticle,
+                           lastIParticle);
 
     OctreeNsView<double, KeyT> view{octree.numLeafNodes,
                                     rawPtr(octree.prefixes),
@@ -247,27 +250,29 @@ auto initialData()
     auto treeData =
         std::make_tuple(std::move(codes), std::move(octree), std::move(layout), std::move(centers), std::move(sizes));
 
-    return std::make_tuple(box, firstBody, lastBody, std::move(x), std::move(y), std::move(z), std::move(h),
-                           std::move(v), std::move(treeData), std::move(view), std::move(ref));
+    return std::make_tuple(box, totalParticles, firstIParticle, lastIParticle, std::move(x), std::move(y), std::move(z),
+                           std::move(h), std::move(v), std::move(treeData), std::move(view), std::move(ref));
 }
 
 template<ijloop::Neighborhood Neighborhood>
 auto run(Neighborhood const& nb)
 {
-    auto [box, firstBody, lastBody, x, y, z, h, v, treeData, nsView, ref] = initialData();
+    auto [box, totalParticles, firstIParticle, lastIParticle, x, y, z, h, v, treeData, nsView, ref] = initialData();
 
     Result actual;
-    const auto built = nb.build(nsView, box, firstBody, lastBody, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h));
+    const auto built = nb.build(nsView, box, totalParticles, firstIParticle, lastIParticle, rawPtr(x), rawPtr(y),
+                                rawPtr(z), rawPtr(h));
 
     built.ijLoop(std::make_tuple(rawPtr(v)),
                  util::tupleMap(
-                     [lastBody = lastBody](auto& vec)
+                     [lastIParticle = lastIParticle](auto& vec)
                      {
-                         vec.resize(lastBody);
+                         vec.resize(lastIParticle);
                          return rawPtr(vec);
                      },
                      actual),
                  NeighborFun{}, ijloop::symmetry::asymmetric);
+    checkGpuErrors(cudaDeviceSynchronize());
 
     validate(ref, actual);
 }

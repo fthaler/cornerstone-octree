@@ -48,8 +48,8 @@ template<bool UsePbc, class Tc, class Th, class KeyType, class In, class Out, cl
 __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeighborhoodKernel(
     const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
     const Box<Tc> __grid_constant__ box,
-    const LocalIndex firstBody,
-    const LocalIndex lastBody,
+    const LocalIndex firstIParticle,
+    const LocalIndex lastIParticle,
     const Tc* __restrict__ x,
     const Tc* __restrict__ y,
     const Tc* __restrict__ z,
@@ -62,7 +62,7 @@ __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeigh
     int* __restrict__ globalPool)
 {
     const unsigned laneIdx     = threadIdx.x & (GpuConfig::warpSize - 1);
-    const unsigned numTargets  = (lastBody - firstBody - 1) / TravConfig::targetSize + 1;
+    const unsigned numTargets  = (lastIParticle - firstIParticle - 1) / TravConfig::targetSize + 1;
     const unsigned warpIdxGrid = (blockDim.x * blockIdx.x + threadIdx.x) >> GpuConfig::warpSizeLog2;
     int targetIdx              = 0;
 
@@ -75,8 +75,8 @@ __global__ __launch_bounds__(TravConfig::numThreads) void gpuAlwaysTraverseNeigh
 
         if (targetIdx >= numTargets) break;
 
-        const cstone::LocalIndex bodyBegin = firstBody + targetIdx * TravConfig::targetSize;
-        const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastBody);
+        const cstone::LocalIndex bodyBegin = firstIParticle + targetIdx * TravConfig::targetSize;
+        const cstone::LocalIndex bodyEnd   = imin(bodyBegin + TravConfig::targetSize, lastIParticle);
 
         auto nc_i = traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, warpNidx, ngmax, globalPool);
 
@@ -111,7 +111,7 @@ struct GpuAlwaysTraverseNeighborhoodImpl
 {
     OctreeNsView<Tc, KeyType> tree;
     Box<Tc> box;
-    LocalIndex firstBody, lastBody;
+    LocalIndex firstIParticle, lastIParticle;
     const Tc *x, *y, *z;
     const Th* h;
     unsigned ngmax;
@@ -127,22 +127,22 @@ struct GpuAlwaysTraverseNeighborhoodImpl
             box.boundaryZ() == BoundaryType::periodic)
         {
             gpuAlwaysTraverseNeighborhoodKernel<true><<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
-                tree, box, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
+                tree, box, firstIParticle, lastIParticle, x, y, z, h, makeConstRestrict(input), output,
                 std::forward<Interaction>(interaction), ngmax, rawPtr(neighbors), rawPtr(globalPool));
         }
         else
         {
             gpuAlwaysTraverseNeighborhoodKernel<false><<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
-                tree, box, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
+                tree, box, firstIParticle, lastIParticle, x, y, z, h, makeConstRestrict(input), output,
                 std::forward<Interaction>(interaction), ngmax, rawPtr(neighbors), rawPtr(globalPool));
         }
-        checkGpuErrors(cudaDeviceSynchronize());
+        checkGpuErrors(cudaGetLastError());
     }
 
     Statistics stats() const
     {
-        return {.numBodies = lastBody - firstBody,
-                .numBytes  = neighbors.size() * sizeof(typename decltype(neighbors)::value_type) +
+        return {.numParticles = lastIParticle - firstIParticle,
+                .numBytes     = neighbors.size() * sizeof(typename decltype(neighbors)::value_type) +
                             globalPool.size() * sizeof(typename decltype(globalPool)::value_type)};
     }
 };
@@ -153,10 +153,11 @@ struct GpuAlwaysTraverseNeighborhood
     unsigned ngmax;
 
     template<class Tc, class KeyType, class Th>
-    detail::GpuAlwaysTraverseNeighborhoodImpl<Tc, KeyType, Th> build(OctreeNsView<Tc, KeyType> tree,
-                                                                     Box<Tc> box,
-                                                                     LocalIndex firstBody,
-                                                                     LocalIndex lastBody,
+    detail::GpuAlwaysTraverseNeighborhoodImpl<Tc, KeyType, Th> build(const OctreeNsView<Tc, KeyType> tree,
+                                                                     const Box<Tc> box,
+                                                                     const LocalIndex /* totalParticles */,
+                                                                     const LocalIndex firstIParticle,
+                                                                     const LocalIndex lastIParticle,
                                                                      const Tc* x,
                                                                      const Tc* y,
                                                                      const Tc* z,
@@ -164,8 +165,8 @@ struct GpuAlwaysTraverseNeighborhood
     {
         return {std::move(tree),
                 std::move(box),
-                firstBody,
-                lastBody,
+                firstIParticle,
+                lastIParticle,
                 x,
                 y,
                 z,

@@ -107,7 +107,7 @@ void benchmarkNeighborhood(const Coords& coords,
     const std::tuple<std::vector<InputTs>...> inputs = util::tupleMap(allocVec, inputValues);
     std::tuple<std::vector<OutputTs>...> outputs     = util::tupleMap(allocVec, initialOutputValues);
     ijloop::CpuDirectNeighborhood{ngmax}
-        .build(nsView, box, 0, n, x, y, z, h.data())
+        .build(nsView, box, n, 0, n, x, y, z, h.data())
         .ijLoop(util::tupleMap([](auto const& v) { return v.data(); }, inputs),
                 util::tupleMap([](auto& v) { return v.data(); }, outputs), interaction, Sym{});
 
@@ -143,10 +143,11 @@ void benchmarkNeighborhood(const Coords& coords,
                                             rawPtr(dLayout),         rawPtr(dCenters),    rawPtr(dSizes)};
     const thrust::universal_vector<KeyType> dCodes(coords.particleKeys().begin(), coords.particleKeys().end());
 
-    const auto neighborhoodGPU = neighborhood.build(dNsView, box, 0, n, rawPtr(dX), rawPtr(dY), rawPtr(dZ), rawPtr(dH));
+    const auto neighborhoodGPU =
+        neighborhood.build(dNsView, box, n, 0, n, rawPtr(dX), rawPtr(dY), rawPtr(dZ), rawPtr(dH));
     const ijloop::Statistics stats = neighborhoodGPU.stats();
     printf("Memory usage of neighborhood data: %.2f MB (%.1f B/particle)\n", stats.numBytes / 1.0e6,
-           stats.numBytes / double(stats.numBodies));
+           stats.numBytes / double(stats.numParticles));
 
     std::array<float, 11> times;
     std::array<cudaEvent_t, times.size() + 1> events;
