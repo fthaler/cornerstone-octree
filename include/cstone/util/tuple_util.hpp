@@ -117,7 +117,7 @@ constexpr auto discardLastElement(Tp&& tp)
 template<class... Tps>
 constexpr auto zipTuples(Tps&&... tps)
 {
-    return tupleMap([](auto&&... args) { return std::make_tuple(std::forward<decltype(args)>(args)...); },
+    return tupleMap([](auto&&... args) { return std::tuple<decltype(args)...>(std::forward<decltype(args)>(args)...); },
                     std::forward<Tps>(tps)...);
 }
 
