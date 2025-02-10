@@ -108,17 +108,4 @@ constexpr auto discardLastElement(Tp&& tp)
     return selectTuple(std::forward<Tp>(tp), std::make_index_sequence<std::tuple_size_v<std::decay_t<Tp>> - 1>{});
 }
 
-/*! @brief Zip multiple tuples into a single tuple, similar to C++23 std::views::zip, but for tuples (no iterators)
- *
- * @tparam Tps types of tuples
- * @param tps  some tuples, tuple(A0, ..., An), tuple(B0, ..., Bn)
- * @return     a single  tuple( tuple(A0, B0, ...), ...)
- */
-template<class... Tps>
-constexpr auto zipTuples(Tps&&... tps)
-{
-    return tupleMap([](auto&&... args) { return std::tuple<decltype(args)...>(std::forward<decltype(args)>(args)...); },
-                    std::forward<Tps>(tps)...);
-}
-
 } // namespace util
