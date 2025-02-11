@@ -38,6 +38,7 @@
 #include "cstone/traversal/ijloop/cpu.hpp"
 #include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
 #include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
+#include "cstone/traversal/ijloop/gpu_superclusternblist.cuh"
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
 
 #include "../../coord_samples/random.hpp"

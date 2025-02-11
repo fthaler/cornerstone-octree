@@ -37,6 +37,7 @@
 #include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
 #include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
+#include "cstone/traversal/ijloop/gpu_superclusternblist.cuh"
 
 #include "../coord_samples/face_centered_cubic.hpp"
 #include "./gromacs_ijloop.cuh"
@@ -97,6 +98,12 @@ void benchmarkMain()
     using SymmetricClusterNb = BaseClusterNb::withNcMax<128>::withSymmetry;
     runBenchmark("CLUSTERED TWO-STAGE SYMMETRIC", SymmetricClusterNb::withoutCompression{});
     runBenchmark("COMPRESSED CLUSTERED TWO-STAGE ", SymmetricClusterNb::withCompression<7>{});
+
+    using BaseSuperclusterNb = ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<512>::withClusterSize<8, 8>;
+    runBenchmark("SUPERCLUSTERED TWO-STAGE", BaseSuperclusterNb::withoutSymmetry::withoutCompression{});
+
+    using SymmetricSuperclusterNb = BaseSuperclusterNb::withNcMax<512>::withSymmetry;
+    runBenchmark("SUPERCLUSTERED TWO-STAGE SYMMETRIC", SymmetricSuperclusterNb::withoutCompression{});
 }
 
 int main()
