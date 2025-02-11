@@ -510,7 +510,6 @@ struct GromacsLikeNeighborhood
                     clusterNeighborsOfSuperCluster(tree, box, x, y, z, h, lastIParticle, ngmax, neighbors.data(), sci);
 
                 const unsigned ncjPacked = iceil(superClusterNeighbors.size(), jGroupSize);
-                auto it                  = superClusterNeighbors.begin();
                 unsigned cjPackedBegin, cjPackedEnd;
                 {
                     std::unique_lock lock(cjPackedMutex);
@@ -518,6 +517,7 @@ struct GromacsLikeNeighborhood
                     cjPackedEnd   = cjPackedBegin + ncjPacked;
                     nbList.cjPacked.resize(cjPackedEnd);
                 }
+                auto it                  = superClusterNeighbors.begin();
                 for (unsigned n = 0; n < ncjPacked; ++n)
                 {
                     CjPacked next                               = {};
