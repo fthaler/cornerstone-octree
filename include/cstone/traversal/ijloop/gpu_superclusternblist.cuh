@@ -34,10 +34,8 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <set>
 #include <tuple>
 #include <type_traits>
-#include <vector>
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -447,10 +445,8 @@ __device__ __forceinline__ void pruneCandidatesAndComputeMasks(const Box<Tc>& bo
     constexpr unsigned iClustersPerWarp = Config::iThreads / Config::iSize;
     const unsigned iClusterOffset       = iClustersPerWarp == 1 ? 0 : block.thread_index().x / Config::iSize;
 
-    const unsigned firstISupercluster = firstIParticle / Config::iSuperclusterSize;
-    const unsigned lastISupercluster  = iceil(lastIParticle, Config::iSuperclusterSize);
-    std::uint32_t previousJCluster    = std::numeric_limits<std::uint32_t>::max();
-    numJClusters                      = 0;
+    std::uint32_t previousJCluster = std::numeric_limits<std::uint32_t>::max();
+    numJClusters                   = 0;
     for (unsigned candidate = 0; candidate < numCandidates; ++candidate)
     {
         const std::uint32_t jCluster = jClusters[candidate];
