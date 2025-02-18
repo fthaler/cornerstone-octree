@@ -47,7 +47,7 @@
 
 using namespace cstone;
 
-constexpr inline unsigned ngmax = 160;
+constexpr inline unsigned ngmax = 320;
 
 using StrongKeyT = HilbertKey<std::uint64_t>;
 using KeyT       = StrongKeyT::ValueType;
@@ -320,4 +320,34 @@ TEST(IjLoop, GpuClusterNbList8x4WithSymmetryWithCompression)
 {
     run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<8, 4>::withSymmetry::withCompression<
         8>{});
+}
+TEST(IjLoop, GpuSuperclusterNbList4x4WithoutSymmetryWithoutCompression)
+{
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        4, 4>::withoutSymmetry::withoutCompression{});
+}
+TEST(IjLoop, GpuSuperclusterNbList4x4WithSymmetryWithoutCompression)
+{
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        4, 4>::withSymmetry::withoutCompression{});
+}
+TEST(IjLoop, GpuSuperclusterNbList8x4WithoutSymmetryWithoutCompression)
+{
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        8, 4>::withoutSymmetry::withoutCompression{});
+}
+TEST(IjLoop, GpuSuperclusterNbList8x4WithSymmetryWithoutCompression)
+{
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        8, 4>::withSymmetry::withoutCompression{});
+}
+TEST(IjLoop, GpuSuperclusterNbList8x8WithoutSymmetryWithoutCompression)
+{
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        8, 8>::withoutSymmetry::withoutCompression{});
+}
+TEST(IjLoop, GpuSuperclusterNbList8x8WithSymmetryWithoutCompression)
+{
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+        8, 8>::withSymmetry::withoutCompression{});
 }
