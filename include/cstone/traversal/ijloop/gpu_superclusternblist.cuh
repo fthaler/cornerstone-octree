@@ -45,6 +45,7 @@
 #include <thrust/reduce.h>
 #include <thrust/sort.h>
 
+#include "cstone/compressneighbors.hpp"
 #include "cstone/cuda/thrust_util.cuh"
 #include "cstone/primitives/math.hpp"
 #include "cstone/reducearray.cuh"
@@ -514,7 +515,7 @@ __device__ __forceinline__ void pruneCandidatesAndComputeMasks(const Box<Tc>& bo
 
 static __device__ unsigned long long globalNeighborDataSize;
 
-template<class Config>
+template<class Config, unsigned NumSuperclustersPerBlock>
 __device__ __forceinline__ void storeNeighborData(const std::uint32_t* const __restrict__ jClusters,
                                                   const std::uint32_t* const __restrict__ masks,
                                                   std::uint32_t* const __restrict__ neighborData,
@@ -524,9 +525,19 @@ __device__ __forceinline__ void storeNeighborData(const std::uint32_t* const __r
     const auto block = cooperative_groups::this_thread_block();
     const auto warp  = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
 
-    const unsigned mSize               = masksSize<Config>(info.neighborsCount);
-    const unsigned long long totalSize = info.neighborsCount + mSize;
+    const unsigned mSize = masksSize<Config>(info.neighborsCount);
+    unsigned nbSize      = info.neighborsCount;
 
+    // TODO: proper size
+    __shared__ std::uint32_t compressedJClusters[NumSuperclustersPerBlock][Config::compress ? Config::ncMax * 2 : 1];
+
+    if constexpr (Config::compress)
+    {
+        warpCompressNeighbors(jClusters, (char*)compressedJClusters[warp.meta_group_rank()], info.neighborsCount);
+        nbSize = compressedNeighborsSize((const char*)compressedJClusters[warp.meta_group_rank()]);
+    }
+
+    const unsigned long long totalSize = nbSize + mSize;
     if (warp.thread_rank() == 0) info.dataIndex = atomicAdd(&globalNeighborDataSize, totalSize);
     info.dataIndex = warp.shfl(info.dataIndex, 0);
 
@@ -536,10 +547,11 @@ __device__ __forceinline__ void storeNeighborData(const std::uint32_t* const __r
         if (index < neighborDataSize) neighborData[index] = masks[n];
     }
 
-    for (unsigned n = warp.thread_rank(); n < info.neighborsCount; n += warp.num_threads())
+    for (unsigned n = warp.thread_rank(); n < nbSize; n += warp.num_threads())
     {
         const auto index = info.dataIndex + mSize + n;
-        if (index < neighborDataSize) neighborData[index] = jClusters[n];
+        if (index < neighborDataSize)
+            neighborData[index] = (Config::compress ? compressedJClusters[warp.meta_group_rank()] : jClusters)[n];
     }
 }
 
@@ -600,7 +612,7 @@ __global__ __maxnreg__(72) void gpuSuperclusterNbListBuild(const OctreeNsView<Tc
             box, totalParticles, firstIParticle, lastIParticle, x, y, z, h, info.index, jClusters, masks, numCandidates,
             info.neighborsCount);
 
-        storeNeighborData<Config>(jClusters, masks, neighborData, neighborDataSize, info);
+        storeNeighborData<Config, NumSuperclustersPerBlock>(jClusters, masks, neighborData, neighborDataSize, info);
 
         if (warp.thread_rank() == 0) superclusterInfo[index] = info;
     }
@@ -756,10 +768,22 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
     const unsigned maskSize   = masksSize<Config>(iSuperclusterNeighborsCount);
     const unsigned nbDataSize = iSuperclusterNeighborsCount + maskSize;
 
+    constexpr unsigned iClustersPerWarp = Config::iThreads / Config::iSize;
+    const unsigned warpIndex            = block.thread_index().y / (Config::jSize / Config::numWarpsPerInteraction);
+
     if constexpr (Config::compress)
     {
-        // TODO
-        static_assert(!Config::compress, "TODO!");
+        for (unsigned n = block.thread_index().y * Config::iThreads + block.thread_index().x; n < maskSize;
+             n += Config::iThreads * Config::jSize)
+            nbData[n] = neighborData[iSuperclusterDataIndex + n];
+        // TODO: use all warps
+        if (warpIndex == 0)
+        {
+            unsigned n;
+            warpDecompressNeighbors((const char*)&neighborData[iSuperclusterDataIndex + maskSize], &nbData[maskSize],
+                                    n);
+            assert(n == iSuperclusterNeighborsCount);
+        }
     }
     else
     {
@@ -770,10 +794,8 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
 
     block.sync();
 
-    constexpr unsigned iClustersPerWarp = Config::iThreads / Config::iSize;
-    using result_t                      = decltype(interaction(particleData_t(), particleData_t(), Vec3<Tc>(), Tc(0)));
+    using result_t = decltype(interaction(particleData_t(), particleData_t(), Vec3<Tc>(), Tc(0)));
     std::array<result_t, Config::iClustersPerSupercluster / iClustersPerWarp> iResults = {};
-    const unsigned warpIndex      = block.thread_index().y / (Config::jSize / Config::numWarpsPerInteraction);
     const unsigned iClusterOffset = iClustersPerWarp == 1 ? 0 : block.thread_index().x / Config::iSize;
 
     for (unsigned nb = 0; nb < iSuperclusterNeighborsCount; ++nb)

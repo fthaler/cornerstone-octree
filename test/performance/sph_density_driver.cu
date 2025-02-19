@@ -160,11 +160,13 @@ void benchmarkMain()
     runBenchmark("CLUSTERED TWO-STAGE SYMMETRIC", SymmetricClusterNb::withoutCompression{});
     runBenchmark("COMPRESSED CLUSTERED TWO-STAGE ", SymmetricClusterNb::withCompression<7>{});
 
-    using BaseSuperclusterNb = ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<256>::withClusterSize<8, 8>;
+    using BaseSuperclusterNb = ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<512>::withClusterSize<8, 8>;
     runBenchmark("SUPERCLUSTERED TWO-STAGE", BaseSuperclusterNb::withoutSymmetry::withoutCompression{});
+    runBenchmark("COMPRESSED SUPERCLUSTERED TWO-STAGE", BaseSuperclusterNb::withoutSymmetry::withCompression<9>{});
 
     using SymmetricSuperclusterNb = BaseSuperclusterNb::withNcMax<256>::withSymmetry;
     runBenchmark("SUPERCLUSTERED TWO-STAGE SYMMETRIC", SymmetricSuperclusterNb::withoutCompression{});
+    runBenchmark("COMPRESSED SUPERCLUSTERED TWO-STAGE SYMMETRIC", SymmetricSuperclusterNb::withCompression<7>{});
 }
 
 int main()
