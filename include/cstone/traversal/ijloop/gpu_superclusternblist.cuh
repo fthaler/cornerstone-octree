@@ -182,8 +182,7 @@ template<class Config, unsigned NumSuperclustersPerBlock, bool UsePbc, class Tc,
 __device__ __forceinline__ void collectJClusterCandidates(const OctreeNsView<Tc, KeyType>& tree,
                                                           const Box<Tc>& box,
                                                           const LocalIndex totalParticles,
-                                                          const LocalIndex firstIParticle,
-                                                          const LocalIndex lastIParticle,
+                                                          const GroupView& groups,
                                                           const LocalIndex firstGroupParticle,
                                                           const LocalIndex lastGroupParticle,
                                                           const Tc* const __restrict__ x,
@@ -226,8 +225,8 @@ __device__ __forceinline__ void collectJClusterCandidates(const OctreeNsView<Tc,
     const Vec3<Tc> groupCenter = (bbMax + bbMin) * Tc(0.5);
     const Vec3<Tc> groupSize   = (bbMax - bbMin) * Tc(0.5);
 
-    const unsigned firstISupercluster = firstIParticle / Config::superclusterSize;
-    const unsigned lastISupercluster  = iceil(lastIParticle, Config::superclusterSize);
+    const unsigned firstISupercluster = groups.firstBody / Config::superclusterSize;
+    const unsigned lastISupercluster  = iceil(groups.lastBody, Config::superclusterSize);
     const unsigned iSupercluster      = firstGroupParticle / Config::superclusterSize;
     const unsigned numJClusters       = iceil(totalParticles, Config::jSize);
     numCandidates                     = 0;
@@ -410,8 +409,6 @@ __device__ __forceinline__ void sortCandidates(std::uint32_t* candidates, unsign
 template<class Config, unsigned NumSuperclustersPerBlock, bool UsePbc, class Tc, class Th>
 __device__ __forceinline__ void pruneCandidatesAndComputeMasks(const Box<Tc>& box,
                                                                const LocalIndex totalParticles,
-                                                               const LocalIndex firstIParticle,
-                                                               const LocalIndex lastIParticle,
                                                                const Tc* const __restrict__ x,
                                                                const Tc* const __restrict__ y,
                                                                const Tc* const __restrict__ z,
@@ -563,8 +560,7 @@ template<class Config, unsigned NumSuperclustersPerBlock, bool UsePbc, class Tc,
 __global__ __maxnreg__(72) void gpuSuperclusterNbListBuild(const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
                                                            const Box<Tc> __grid_constant__ box,
                                                            const LocalIndex totalParticles,
-                                                           const LocalIndex firstIParticle,
-                                                           const LocalIndex lastIParticle,
+                                                           const GroupView __grid_constant__ groups,
                                                            const Tc* const __restrict__ x,
                                                            const Tc* const __restrict__ y,
                                                            const Tc* const __restrict__ z,
@@ -603,8 +599,8 @@ __global__ __maxnreg__(72) void gpuSuperclusterNbListBuild(const OctreeNsView<Tc
 
         unsigned numCandidates = 0;
         collectJClusterCandidates<Config, NumSuperclustersPerBlock, UsePbc>(
-            tree, box, totalParticles, firstIParticle, lastIParticle, firstGroupParticle, lastGroupParticle, x, y, z, h,
-            maxH, jClusterBboxCenters, jClusterBboxSizes, globalPool, jClusters, numCandidates);
+            tree, box, totalParticles, groups, firstGroupParticle, lastGroupParticle, x, y, z, h, maxH,
+            jClusterBboxCenters, jClusterBboxSizes, globalPool, jClusters, numCandidates);
 
         sortCandidates<Config, NumSuperclustersPerBlock>(jClusters, numCandidates);
 
@@ -612,8 +608,7 @@ __global__ __maxnreg__(72) void gpuSuperclusterNbListBuild(const OctreeNsView<Tc
         std::uint32_t* masks = masksBuffer[warp.meta_group_rank()];
 
         pruneCandidatesAndComputeMasks<Config, NumSuperclustersPerBlock, UsePbc>(
-            box, totalParticles, firstIParticle, lastIParticle, x, y, z, h, info.index, jClusters, masks, numCandidates,
-            info.neighborsCount);
+            box, totalParticles, x, y, z, h, info.index, jClusters, masks, numCandidates, info.neighborsCount);
 
         storeNeighborData<Config, NumSuperclustersPerBlock>(jClusters, masks, neighborData, neighborDataSize, info,
                                                             globalBuildData);
@@ -1050,8 +1045,8 @@ struct GpuSuperclusterNbListNeighborhood
             auto run = [&](auto usePbc)
             {
                 gpuSuperclusterNbListBuild<Config, numSuperclustersPerBlock, decltype(usePbc)::value>
-                    <<<numBlocks, blockSize>>>(tree, box, totalParticles, groups.firstBody, groups.lastBody, x, y, z, h,
-                                               maxH, rawPtr(jClusterBboxCenters), rawPtr(jClusterBboxSizes),
+                    <<<numBlocks, blockSize>>>(tree, box, totalParticles, groups, x, y, z, h, maxH,
+                                               rawPtr(jClusterBboxCenters), rawPtr(jClusterBboxSizes),
                                                rawPtr(nbList.neighborData), nbList.neighborData.size(),
                                                rawPtr(nbList.superclusterInfo), nbList.superclusterInfo.size(),
                                                rawPtr(globalPool), rawPtr(globalBuildData));
