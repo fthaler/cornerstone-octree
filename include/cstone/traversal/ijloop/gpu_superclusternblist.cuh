@@ -528,8 +528,7 @@ __device__ __forceinline__ void storeNeighborData(const std::uint32_t* const __r
     const unsigned mSize = masksSize<Config>(info.neighborsCount);
     unsigned nbSize      = info.neighborsCount;
 
-    // TODO: proper size
-    __shared__ std::uint32_t compressedJClusters[NumSuperclustersPerBlock][Config::compress ? Config::ncMax * 2 : 1];
+    __shared__ std::uint32_t compressedJClusters[NumSuperclustersPerBlock][Config::compress ? Config::ncMax : 1];
 
     if constexpr (Config::compress)
     {
@@ -746,7 +745,7 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
 
     using particleData_t = decltype(loadParticleData(x, y, z, h, input, 0));
 
-    // TODO: bank-conflict friendly SoA layout
+    // TODO: bank-conflict friendly SoA layout?
     __shared__ particleData_t
         iSuperclusterDataBuffer[NumSuperclustersPerBlock][Config::iClustersPerSupercluster * Config::iSize];
     particleData_t* iSuperclusterData = iSuperclusterDataBuffer[block.thread_index().z];
@@ -761,8 +760,7 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
         }
     }
 
-    // TODO: proper size
-    __shared__ unsigned nbDataBuffer[NumSuperclustersPerBlock][Config::ncMax * 2];
+    __shared__ unsigned nbDataBuffer[NumSuperclustersPerBlock][Config::ncMax + masksSize<Config>(Config::ncMax)];
     unsigned* const nbData = nbDataBuffer[block.thread_index().z];
 
     const unsigned maskSize   = masksSize<Config>(iSuperclusterNeighborsCount);
@@ -920,11 +918,11 @@ struct GpuSuperclusterNbListNeighborhoodImpl
 template<unsigned NcMax = 256, unsigned ISize = 4, unsigned JSize = 4, bool Compress = false, bool Symmetric = true>
 struct GpuSuperclusterNbListNeighborhoodConfig
 {
-    static constexpr unsigned ncMax      = NcMax;
-    static constexpr unsigned iSize      = ISize;
-    static constexpr unsigned jSize      = JSize;
-    static constexpr bool compress       = Compress;
-    static constexpr bool symmetric      = Symmetric;
+    static constexpr unsigned ncMax = NcMax;
+    static constexpr unsigned iSize = ISize;
+    static constexpr unsigned jSize = JSize;
+    static constexpr bool compress  = Compress;
+    static constexpr bool symmetric = Symmetric;
 
     static constexpr unsigned iClustersPerSupercluster = std::max(jSize, GpuConfig::warpSize / iSize);
     static constexpr unsigned iThreads                 = std::max(iSize, GpuConfig::warpSize / jSize);
