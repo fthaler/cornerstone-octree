@@ -917,20 +917,14 @@ struct GpuSuperclusterNbListNeighborhoodImpl
     }
 };
 
-template<unsigned NcMax                   = 256,
-         unsigned ISize                   = 4,
-         unsigned JSize                   = 4,
-         unsigned ExpectedCompressionRate = 0,
-         bool Symmetric                   = true>
+template<unsigned NcMax = 256, unsigned ISize = 4, unsigned JSize = 4, bool Compress = false, bool Symmetric = true>
 struct GpuSuperclusterNbListNeighborhoodConfig
 {
-    static constexpr unsigned ncMax                   = NcMax;
-    static constexpr unsigned iSize                   = ISize;
-    static constexpr unsigned jSize                   = JSize;
-    static constexpr unsigned expectedCompressionRate = ExpectedCompressionRate;
-    static constexpr bool compress                    = ExpectedCompressionRate > 1;
-    static constexpr bool symmetric                   = Symmetric;
-    static constexpr unsigned ncMaxExtra              = NcMax;
+    static constexpr unsigned ncMax      = NcMax;
+    static constexpr unsigned iSize      = ISize;
+    static constexpr unsigned jSize      = JSize;
+    static constexpr bool compress       = Compress;
+    static constexpr bool symmetric      = Symmetric;
 
     static constexpr unsigned iClustersPerSupercluster = std::max(jSize, GpuConfig::warpSize / iSize);
     static constexpr unsigned iThreads                 = std::max(iSize, GpuConfig::warpSize / jSize);
@@ -938,19 +932,14 @@ struct GpuSuperclusterNbListNeighborhoodConfig
     static constexpr unsigned numWarpsPerInteraction = (iSize * jSize + GpuConfig::warpSize - 1) / GpuConfig::warpSize;
 
     template<unsigned NewNcMax>
-    using withNcMax =
-        GpuSuperclusterNbListNeighborhoodConfig<NewNcMax, ISize, JSize, ExpectedCompressionRate, Symmetric>;
+    using withNcMax = GpuSuperclusterNbListNeighborhoodConfig<NewNcMax, ISize, JSize, Compress, Symmetric>;
 
     template<unsigned NewISize, unsigned newJSize>
-    using withClusterSize =
-        GpuSuperclusterNbListNeighborhoodConfig<NcMax, NewISize, newJSize, ExpectedCompressionRate, Symmetric>;
-    template<unsigned NewExpectedCompressionRate>
-    using withCompression =
-        GpuSuperclusterNbListNeighborhoodConfig<NcMax, ISize, JSize, NewExpectedCompressionRate, Symmetric>;
-    using withoutCompression = withCompression<0>;
-    using withSymmetry = GpuSuperclusterNbListNeighborhoodConfig<NcMax, ISize, JSize, ExpectedCompressionRate, true>;
-    using withoutSymmetry =
-        GpuSuperclusterNbListNeighborhoodConfig<NcMax, ISize, JSize, ExpectedCompressionRate, false>;
+    using withClusterSize    = GpuSuperclusterNbListNeighborhoodConfig<NcMax, NewISize, newJSize, Compress, Symmetric>;
+    using withCompression    = GpuSuperclusterNbListNeighborhoodConfig<NcMax, ISize, JSize, true, Symmetric>;
+    using withoutCompression = GpuSuperclusterNbListNeighborhoodConfig<NcMax, ISize, JSize, false, Symmetric>;
+    using withSymmetry       = GpuSuperclusterNbListNeighborhoodConfig<NcMax, ISize, JSize, Compress, true>;
+    using withoutSymmetry    = GpuSuperclusterNbListNeighborhoodConfig<NcMax, ISize, JSize, Compress, false>;
 };
 
 } // namespace gpu_supercluster_nb_list_neighborhood_detail
@@ -959,12 +948,10 @@ template<class Config = gpu_supercluster_nb_list_neighborhood_detail::GpuSupercl
 struct GpuSuperclusterNbListNeighborhood
 {
     template<unsigned NcMax>
-    using withNcMax = GpuSuperclusterNbListNeighborhood<typename Config::withNcMax<NcMax>>;
+    using withNcMax = GpuSuperclusterNbListNeighborhood<typename Config::template withNcMax<NcMax>>;
     template<unsigned ISize, unsigned JSize>
-    using withClusterSize = GpuSuperclusterNbListNeighborhood<typename Config::withClusterSize<ISize, JSize>>;
-    template<unsigned ExpectedCompressionRate>
-    using withCompression =
-        GpuSuperclusterNbListNeighborhood<typename Config::withCompression<ExpectedCompressionRate>>;
+    using withClusterSize = GpuSuperclusterNbListNeighborhood<typename Config::template withClusterSize<ISize, JSize>>;
+    using withCompression = GpuSuperclusterNbListNeighborhood<typename Config::withCompression>;
     using withoutCompression = GpuSuperclusterNbListNeighborhood<typename Config::withoutCompression>;
     using withSymmetry       = GpuSuperclusterNbListNeighborhood<typename Config::withSymmetry>;
     using withoutSymmetry    = GpuSuperclusterNbListNeighborhood<typename Config::withoutSymmetry>;

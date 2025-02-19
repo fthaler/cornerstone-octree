@@ -101,11 +101,11 @@ void benchmarkMain()
 
     using BaseSuperclusterNb = ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<512>::withClusterSize<8, 8>;
     runBenchmark("SUPERCLUSTERED TWO-STAGE", BaseSuperclusterNb::withoutSymmetry::withoutCompression{});
-    runBenchmark("COMPRESSED SUPERCLUSTERED TWO-STAGE", BaseSuperclusterNb::withoutSymmetry::withCompression<9>{});
+    runBenchmark("COMPRESSED SUPERCLUSTERED TWO-STAGE", BaseSuperclusterNb::withoutSymmetry::withCompression{});
 
     using SymmetricSuperclusterNb = BaseSuperclusterNb::withNcMax<512>::withSymmetry;
     runBenchmark("SUPERCLUSTERED TWO-STAGE SYMMETRIC", SymmetricSuperclusterNb::withoutCompression{});
-    runBenchmark("COMPRESSED SUPERCLUSTERED TWO-STAGE SYMMETRIC", SymmetricSuperclusterNb::withCompression<7>{});
+    runBenchmark("COMPRESSED SUPERCLUSTERED TWO-STAGE SYMMETRIC", SymmetricSuperclusterNb::withCompression{});
 }
 
 int main()
