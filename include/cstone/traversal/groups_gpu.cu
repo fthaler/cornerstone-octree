@@ -94,7 +94,7 @@ void computeGroupSplitsImpl(
     splitMasks.resize(numFixedGroups);
 
     numSplitsPerGroup.reserve(numFixedGroups * 1.1);
-    numSplitsPerGroup.resize(numFixedGroups);
+    numSplitsPerGroup.resize(numFixedGroups + 1);
 
     groupSplitsKernel<groupSize><<<iceil(gridSize, numThreads), numThreads>>>(
         first, last, x, y, z, h, leaves, numLeaves, layout, box, tolFactor, rawPtr(splitMasks),
@@ -107,7 +107,7 @@ void computeGroupSplitsImpl(
     memcpyD2H(rawPtr(groups) + groups.size() - 1, 1, &newNumGroups);
 
     auto& newGroupSizes = numSplitsPerGroup;
-    newGroupSizes.resize(newNumGroups);
+    newGroupSizes.resize(newNumGroups + 1);
 
     makeSplitsKernel<<<numFixedGroups, numThreads>>>(rawPtr(splitMasks), rawPtr(groups), numFixedGroups,
                                                      rawPtr(newGroupSizes));
