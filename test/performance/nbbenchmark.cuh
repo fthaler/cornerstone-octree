@@ -157,12 +157,13 @@ void benchmarkNeighborhood(const Coords& coords,
     constexpr unsigned groupSize = TravConfig::targetSize;
     DeviceVector<LocalIndex> temp, groups;
     computeGroupSplits(0, n, rawPtr(dX), rawPtr(dY), rawPtr(dZ), rawPtr(dH), dNsView.leaves, dNsView.numLeafNodes,
-                       dNsView.layout, box, groupSize, 2, temp, groups);
+                       dNsView.layout, box, groupSize, 8, temp, groups);
     const GroupView dGroupView{.firstBody  = 0,
                                .lastBody   = n,
                                .numGroups  = unsigned(groups.size() - 1),
                                .groupStart = rawPtr(groups),
                                .groupEnd   = rawPtr(groups) + 1};
+    printf("Number of groups: %u (unsplit: %u)\n", dGroupView.numGroups, (n + groupSize - 1) / groupSize);
 
     const auto neighborhoodGPU =
         neighborhood.build(dNsView, box, n, dGroupView, rawPtr(dX), rawPtr(dY), rawPtr(dZ), rawPtr(dH));
