@@ -36,6 +36,7 @@
 #include <utility>
 #include <vector>
 
+#include "cstone/traversal/groups.hpp"
 #include "cstone/traversal/ijloop/ijloop.hpp"
 #include "cstone/tree/octree.hpp"
 
@@ -95,17 +96,16 @@ struct CpuDirectNeighborhood
     unsigned ngmax;
 
     template<class Tc, class KeyType, class Th>
-    detail::CpuDirectNeighborhoodImpl<Tc, KeyType, Th> build(OctreeNsView<Tc, KeyType> tree,
-                                                             Box<Tc> box,
-                                                             LocalIndex /* totalParticles */,
-                                                             LocalIndex firstIParticle,
-                                                             LocalIndex lastIParticle,
-                                                             const Tc* x,
-                                                             const Tc* y,
-                                                             const Tc* z,
-                                                             const Th* h) const
+    detail::CpuDirectNeighborhoodImpl<Tc, KeyType, Th> build(const OctreeNsView<Tc, KeyType>& tree,
+                                                             const Box<Tc>& box,
+                                                             const LocalIndex /* totalParticles */,
+                                                             const GroupView & groups,
+                                                             const Tc* const x,
+                                                             const Tc* const y,
+                                                             const Tc* const z,
+                                                             const Th* const h) const
     {
-        return {std::move(tree), std::move(box), firstIParticle, lastIParticle, x, y, z, h, ngmax};
+        return {tree, box, groups.firstBody, groups.lastBody, x, y, z, h, ngmax};
     }
 };
 

@@ -147,18 +147,17 @@ struct GpuFullNbListNeighborhood
     detail::GpuFullNbListNeighborhoodImpl<Tc, Th> build(const OctreeNsView<Tc, KeyType>& tree,
                                                         const Box<Tc>& box,
                                                         const LocalIndex /*totalParticles*/,
-                                                        const LocalIndex firstIParticle,
-                                                        const LocalIndex lastIParticle,
+                                                        const GroupView& groups,
                                                         const Tc* x,
                                                         const Tc* y,
                                                         const Tc* z,
                                                         const Th* h) const
     {
-        const LocalIndex numParticles = lastIParticle - firstIParticle;
+        const LocalIndex numParticles = groups.lastBody - groups.firstBody;
         detail::GpuFullNbListNeighborhoodImpl<Tc, Th> nbList{
             box,
-            firstIParticle,
-            lastIParticle,
+            groups.firstBody,
+            groups.lastBody,
             x,
             y,
             z,
@@ -168,7 +167,7 @@ struct GpuFullNbListNeighborhood
             thrust::device_vector<int>(numParticles)};
         constexpr int numThreads = 128;
         detail::gpuFullNbListNeighborhoodBuild<numThreads><<<iceil(numParticles, numThreads), numThreads>>>(
-            tree, box, firstIParticle, lastIParticle, x, y, z, h, ngmax, rawPtr(nbList.neighbors),
+            tree, box, groups.firstBody, groups.lastBody, x, y, z, h, ngmax, rawPtr(nbList.neighbors),
             rawPtr(nbList.neighborsCount));
         checkGpuErrors(cudaGetLastError());
         return nbList;

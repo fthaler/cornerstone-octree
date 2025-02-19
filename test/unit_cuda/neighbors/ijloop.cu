@@ -35,11 +35,12 @@
 
 #include <thrust/universal_vector.h>
 
+#include "cstone/traversal/groups_gpu.cuh"
 #include "cstone/traversal/ijloop/cpu.hpp"
 #include "cstone/traversal/ijloop/gpu_alwaystraverse.cuh"
 #include "cstone/traversal/ijloop/gpu_clusternblist.cuh"
-#include "cstone/traversal/ijloop/gpu_superclusternblist.cuh"
 #include "cstone/traversal/ijloop/gpu_fullnblist.cuh"
+#include "cstone/traversal/ijloop/gpu_superclusternblist.cuh"
 
 #include "../../coord_samples/random.hpp"
 
@@ -98,11 +99,11 @@ Result reference(const Box<double>& box,
                  const LocalIndex firstIParticle,
                  const LocalIndex lastIParticle)
 {
-    thrust::universal_vector<LocalIndex> iSum(lastIParticle), jSum(lastIParticle);
-    thrust::universal_vector<Vec3<double>> iPosSum(lastIParticle), jPosSum(lastIParticle), ijPosDiffSum(lastIParticle);
-    thrust::universal_vector<double> d2Sum(lastIParticle), hiSum(lastIParticle), hjSum(lastIParticle),
-        viSum(lastIParticle), vjSum(lastIParticle);
-    thrust::universal_vector<unsigned> neighborsCount(lastIParticle);
+    thrust::universal_vector<LocalIndex> iSum(numParticles), jSum(numParticles);
+    thrust::universal_vector<Vec3<double>> iPosSum(numParticles), jPosSum(numParticles), ijPosDiffSum(numParticles);
+    thrust::universal_vector<double> d2Sum(numParticles), hiSum(numParticles), hjSum(numParticles), viSum(numParticles),
+        vjSum(numParticles);
+    thrust::universal_vector<unsigned> neighborsCount(numParticles);
 
     for (unsigned i = firstIParticle; i < lastIParticle; ++i)
     {
@@ -200,7 +201,7 @@ void validate(const Result& expected, const Result& actual)
         {
             ASSERT_EQ(e.size(), a.size());
             for (std::size_t i = 0; i < e.size(); ++i)
-                EXPECT_TRUE(validateElem(e[i], a[i], name, i));
+                ASSERT_TRUE(validateElem(e[i], a[i], name, i));
         },
         expected, actual, resultNames);
 }
@@ -243,32 +244,42 @@ auto initialData()
                                     rawPtr(octree.childOffsets),
                                     rawPtr(octree.internalToLeaf),
                                     rawPtr(octree.levelRange),
-                                    nullptr,
+                                    rawPtr(codes),
                                     rawPtr(layout),
                                     rawPtr(centers),
                                     rawPtr(sizes)};
 
-    auto treeData =
-        std::make_tuple(std::move(codes), std::move(octree), std::move(layout), std::move(centers), std::move(sizes));
+    constexpr unsigned groupSize = TravConfig::targetSize;
+    DeviceVector<LocalIndex> temp, groups;
+    computeGroupSplits(firstIParticle, lastIParticle, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), view.leaves,
+                       view.numLeafNodes, view.layout, box, groupSize, 2, temp, groups);
 
-    return std::make_tuple(box, totalParticles, firstIParticle, lastIParticle, std::move(x), std::move(y), std::move(z),
-                           std::move(h), std::move(v), std::move(treeData), std::move(view), std::move(ref));
+    const GroupView groupView{.firstBody  = firstIParticle,
+                              .lastBody   = lastIParticle,
+                              .numGroups  = unsigned(groups.size() - 1),
+                              .groupStart = rawPtr(groups),
+                              .groupEnd   = rawPtr(groups) + 1};
+
+    auto treeData = std::make_tuple(std::move(codes), std::move(octree), std::move(codes), std::move(layout),
+                                    std::move(centers), std::move(sizes), std::move(groups));
+
+    return std::make_tuple(box, totalParticles, groupView, std::move(x), std::move(y), std::move(z), std::move(h),
+                           std::move(v), std::move(treeData), std::move(view), std::move(ref));
 }
 
 template<ijloop::Neighborhood Neighborhood>
 auto run(Neighborhood const& nb)
 {
-    auto [box, totalParticles, firstIParticle, lastIParticle, x, y, z, h, v, treeData, nsView, ref] = initialData();
+    auto [box, totalParticles, groupView, x, y, z, h, v, treeData, nsView, ref] = initialData();
 
     Result actual;
-    const auto built = nb.build(nsView, box, totalParticles, firstIParticle, lastIParticle, rawPtr(x), rawPtr(y),
-                                rawPtr(z), rawPtr(h));
+    const auto built = nb.build(nsView, box, totalParticles, groupView, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h));
 
     built.ijLoop(std::make_tuple(rawPtr(v)),
                  util::tupleMap(
-                     [lastIParticle = lastIParticle](auto& vec)
+                     [totalParticles = totalParticles](auto& vec)
                      {
-                         vec.resize(lastIParticle);
+                         vec.resize(totalParticles);
                          return rawPtr(vec);
                      },
                      actual),

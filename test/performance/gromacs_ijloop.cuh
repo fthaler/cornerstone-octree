@@ -451,8 +451,7 @@ struct GromacsLikeNeighborhood
     gromacs_like_neighborhood_detail::GromacsLikeNeighborhoodImpl<Tc, Th> build(const OctreeNsView<Tc, KeyType>& tree,
                                                                                 const Box<Tc>& box,
                                                                                 const LocalIndex totalParticles,
-                                                                                const LocalIndex firstIParticle,
-                                                                                const LocalIndex lastIParticle,
+                                                                                const GroupView& groups,
                                                                                 const Tc* x,
                                                                                 const Tc* y,
                                                                                 const Tc* z,
@@ -460,16 +459,16 @@ struct GromacsLikeNeighborhood
     {
         using namespace gromacs_like_neighborhood_detail;
 
-        assert(firstIParticle == 0 && totalParticles == lastIParticle);
-        const unsigned numSuperclusters = iceil(lastIParticle, superClusterSize);
-        const unsigned numClusters      = iceil(lastIParticle, clusterSize);
+        assert(groups.firstBody == 0 && totalParticles == groups.lastBody);
+        const unsigned numSuperclusters = iceil(groups.lastBody, superClusterSize);
+        const unsigned numClusters      = iceil(groups.lastBody, clusterSize);
 
         GromacsLikeNeighborhoodImpl<Tc, Th> nbList{thrust::universal_vector<Sci>(numSuperclusters),
                                                    thrust::universal_vector<CjPacked>(0),
                                                    thrust::universal_vector<Excl>(1),
                                                    box,
-                                                   firstIParticle,
-                                                   lastIParticle,
+                                                   groups.firstBody,
+                                                   groups.lastBody,
                                                    x,
                                                    y,
                                                    z,
@@ -506,8 +505,8 @@ struct GromacsLikeNeighborhood
 #pragma omp for
             for (unsigned sci = 0; sci < numSuperclusters; ++sci)
             {
-                const auto superClusterNeighbors =
-                    clusterNeighborsOfSuperCluster(tree, box, x, y, z, h, lastIParticle, ngmax, neighbors.data(), sci);
+                const auto superClusterNeighbors = clusterNeighborsOfSuperCluster(
+                    tree, box, x, y, z, h, groups.lastBody, ngmax, neighbors.data(), sci);
 
                 const unsigned ncjPacked = iceil(superClusterNeighbors.size(), jGroupSize);
                 unsigned cjPackedBegin, cjPackedEnd;
@@ -517,7 +516,7 @@ struct GromacsLikeNeighborhood
                     cjPackedEnd   = cjPackedBegin + ncjPacked;
                     nbList.cjPacked.resize(cjPackedEnd);
                 }
-                auto it                  = superClusterNeighbors.begin();
+                auto it = superClusterNeighbors.begin();
                 for (unsigned n = 0; n < ncjPacked; ++n)
                 {
                     CjPacked next                               = {};
@@ -535,7 +534,7 @@ struct GromacsLikeNeighborhood
                                 nextExcl[split].pair[e] |= data[split].excl.pair[e] << (jm * numClusterPerSupercluster);
                         }
                     }
-                    optimizeExcl(lastIParticle, sci, next, nextExcl);
+                    optimizeExcl(groups.lastBody, sci, next, nextExcl);
                     for (unsigned split = 0; split < clusterPairSplit; ++split)
                         next.imei[split].exclInd = exclIndex(nextExcl[split]);
                     {

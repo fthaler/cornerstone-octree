@@ -34,10 +34,11 @@
 #include <tuple>
 #include <type_traits>
 
-#include "cstone/tree/definitions.h"
 #include "cstone/sfc/box.hpp"
-#include "cstone/util/tuple_util.hpp"
+#include "cstone/traversal/groups.hpp"
+#include "cstone/tree/definitions.h"
 #include "cstone/tree/octree.hpp"
+#include "cstone/util/tuple_util.hpp"
 
 namespace cstone::ijloop
 {
@@ -160,19 +161,18 @@ concept Neighborhood = requires(T nb,
                                 OctreeNsView<double, unsigned> tree,
                                 Box<double> box,
                                 LocalIndex totalParticles,
-                                LocalIndex firstIParticle,
-                                LocalIndex lastIParticle,
+                                GroupView groups,
                                 const double* x,
                                 const double* y,
                                 const double* z,
                                 const float* h)
 {
-    nb.build(tree, box, totalParticles, firstIParticle, lastIParticle, x, y, z, h);
+    nb.build(tree, box, totalParticles, groups, x, y, z, h);
     {
-        nb.build(tree, box, totalParticles, firstIParticle, lastIParticle, x, y, z, h).stats()
+        nb.build(tree, box, totalParticles, groups, x, y, z, h).stats()
     } -> std::same_as<Statistics>;
     {
-        nb.build(tree, box, totalParticles, firstIParticle, lastIParticle, x, y, z, h)
+        nb.build(tree, box, totalParticles, groups, x, y, z, h)
             .ijLoop(std::tuple(), std::tuple<int*>(), detail::ConceptTestInteraction{}, symmetry::asymmetric)
     } -> std::same_as<void>;
 };

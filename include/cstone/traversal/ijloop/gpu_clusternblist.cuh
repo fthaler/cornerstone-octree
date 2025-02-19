@@ -823,15 +823,14 @@ struct GpuClusterNbListNeighborhood
     detail::GpuClusterNbListNeighborhoodImpl<Config, Tc, Th> build(const OctreeNsView<Tc, KeyType>& tree,
                                                                    const Box<Tc>& box,
                                                                    const LocalIndex totalParticles,
-                                                                   const LocalIndex firstIParticle,
-                                                                   const LocalIndex lastIParticle,
+                                                                   const GroupView& groups,
                                                                    const Tc* x,
                                                                    const Tc* y,
                                                                    const Tc* z,
                                                                    const Th* h) const
     {
-        const LocalIndex firstICluster = firstIParticle / Config::iSize;
-        const LocalIndex lastICluster  = iceil(lastIParticle, Config::iSize);
+        const LocalIndex firstICluster = groups.firstBody / Config::iSize;
+        const LocalIndex lastICluster  = iceil(groups.lastBody, Config::iSize);
         const LocalIndex numIClusters  = lastICluster - firstICluster;
         const LocalIndex numJClusters  = iceil(totalParticles, Config::jSize);
 
@@ -840,8 +839,8 @@ struct GpuClusterNbListNeighborhood
         detail::GpuClusterNbListNeighborhoodImpl<Config, Tc, Th> nbList{
             box,
             totalParticles,
-            firstIParticle,
-            lastIParticle,
+            groups.firstBody,
+            groups.lastBody,
             x,
             y,
             z,
@@ -868,7 +867,7 @@ struct GpuClusterNbListNeighborhood
 
             resetTraversalCounters<<<1, 1>>>();
             detail::gpuClusterNbListBuild<Config, numWarpsPerBlock, true><<<numBlocks, blockSize>>>(
-                tree, box, totalParticles, firstIParticle, lastIParticle, x, y, z, h, rawPtr(jClusterBboxes),
+                tree, box, totalParticles, groups.firstBody, groups.lastBody, x, y, z, h, rawPtr(jClusterBboxes),
                 rawPtr(nbList.clusterNeighbors), rawPtr(nbList.clusterNeighborsCount), rawPtr(pool), maxH);
             checkGpuErrors(cudaGetLastError());
 

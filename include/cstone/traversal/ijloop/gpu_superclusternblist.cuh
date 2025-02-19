@@ -985,8 +985,7 @@ struct GpuSuperclusterNbListNeighborhood
     build(const OctreeNsView<Tc, KeyType>& tree,
           const Box<Tc>& box,
           const LocalIndex totalParticles,
-          const LocalIndex firstIParticle,
-          const LocalIndex lastIParticle,
+          const GroupView& groups,
           const Tc* x,
           const Tc* y,
           const Tc* z,
@@ -994,16 +993,16 @@ struct GpuSuperclusterNbListNeighborhood
     {
         using namespace gpu_supercluster_nb_list_neighborhood_detail;
 
-        const LocalIndex firstISupercluster = firstIParticle / Config::superclusterSize;
-        const LocalIndex lastISupercluster  = iceil(lastIParticle, Config::superclusterSize);
+        const LocalIndex firstISupercluster = groups.firstBody / Config::superclusterSize;
+        const LocalIndex lastISupercluster  = iceil(groups.lastBody, Config::superclusterSize);
         const LocalIndex numISuperclusters  = lastISupercluster - firstISupercluster;
         const LocalIndex numJClusters       = iceil(totalParticles, Config::jSize);
 
         GpuSuperclusterNbListNeighborhoodImpl<Config, Tc, Th> nbList{
             box,
             totalParticles,
-            firstIParticle,
-            lastIParticle,
+            groups.firstBody,
+            groups.lastBody,
             x,
             y,
             z,
@@ -1051,7 +1050,7 @@ struct GpuSuperclusterNbListNeighborhood
             auto run = [&](auto usePbc)
             {
                 gpuSuperclusterNbListBuild<Config, numSuperclustersPerBlock, decltype(usePbc)::value>
-                    <<<numBlocks, blockSize>>>(tree, box, totalParticles, firstIParticle, lastIParticle, x, y, z, h,
+                    <<<numBlocks, blockSize>>>(tree, box, totalParticles, groups.firstBody, groups.lastBody, x, y, z, h,
                                                maxH, rawPtr(jClusterBboxCenters), rawPtr(jClusterBboxSizes),
                                                rawPtr(nbList.neighborData), nbList.neighborData.size(),
                                                rawPtr(nbList.superclusterInfo), nbList.superclusterInfo.size(),

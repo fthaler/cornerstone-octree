@@ -41,6 +41,9 @@
 #include "cstone/cuda/thrust_util.cuh"
 #include "cstone/sfc/box.hpp"
 #include "cstone/traversal/ijloop/cpu.hpp"
+#include "cstone/traversal/find_neighbors.cuh"
+#include "cstone/traversal/groups.hpp"
+#include "cstone/traversal/groups_gpu.cuh"
 #include "cstone/tree/octree.hpp"
 #include "cstone/util/tuple_util.hpp"
 
@@ -98,16 +101,18 @@ void benchmarkNeighborhood(const Coords& coords,
                                            octree.childOffsets.data(),
                                            octree.internalToLeaf.data(),
                                            octree.levelRange.data(),
-                                           nullptr,
+                                           codes,
                                            layout.data(),
                                            centers.data(),
                                            sizes.data()};
+    LocalIndex zero = 0;
+    const GroupView groupView{.firstBody = 0, .lastBody = n, .numGroups = 1, .groupStart = &zero, .groupEnd = &n};
 
     const auto allocVec = [n]<class Tv>(Tv initialValue) { return std::vector<Tv>(n, initialValue); };
     const std::tuple<std::vector<InputTs>...> inputs = util::tupleMap(allocVec, inputValues);
     std::tuple<std::vector<OutputTs>...> outputs     = util::tupleMap(allocVec, initialOutputValues);
     ijloop::CpuDirectNeighborhood{ngmax}
-        .build(nsView, box, n, 0, n, x, y, z, h.data())
+        .build(nsView, box, n, groupView, x, y, z, h.data())
         .ijLoop(util::tupleMap([](auto const& v) { return v.data(); }, inputs),
                 util::tupleMap([](auto& v) { return v.data(); }, outputs), interaction, Sym{});
 
@@ -138,13 +143,29 @@ void benchmarkNeighborhood(const Coords& coords,
             sizeof(LocalIndex) * dLayout.size() + sizeof(Vec3<Tc>) * (dCenters.size() + dSizes.size())) /
                1.0e6);
 
-    const OctreeNsView<Tc, KeyType> dNsView{octree.numLeafNodes,     rawPtr(dPrefixes),   rawPtr(dChildOffsets),
-                                            rawPtr(dInternalToLeaf), rawPtr(dLevelRange), nullptr,
-                                            rawPtr(dLayout),         rawPtr(dCenters),    rawPtr(dSizes)};
     const thrust::universal_vector<KeyType> dCodes(coords.particleKeys().begin(), coords.particleKeys().end());
+    const OctreeNsView<Tc, KeyType> dNsView{.numLeafNodes   = octree.numLeafNodes,
+                                            .prefixes       = rawPtr(dPrefixes),
+                                            .childOffsets   = rawPtr(dChildOffsets),
+                                            .internalToLeaf = rawPtr(dInternalToLeaf),
+                                            .levelRange     = rawPtr(dLevelRange),
+                                            .leaves         = rawPtr(dCodes),
+                                            .layout         = rawPtr(dLayout),
+                                            .centers        = rawPtr(dCenters),
+                                            .sizes          = rawPtr(dSizes)};
+
+    constexpr unsigned groupSize = TravConfig::targetSize;
+    DeviceVector<LocalIndex> temp, groups;
+    computeGroupSplits(0, n, rawPtr(dX), rawPtr(dY), rawPtr(dZ), rawPtr(dH), dNsView.leaves, dNsView.numLeafNodes,
+                       dNsView.layout, box, groupSize, 2, temp, groups);
+    const GroupView dGroupView{.firstBody  = 0,
+                               .lastBody   = n,
+                               .numGroups  = unsigned(groups.size() - 1),
+                               .groupStart = rawPtr(groups),
+                               .groupEnd   = rawPtr(groups) + 1};
 
     const auto neighborhoodGPU =
-        neighborhood.build(dNsView, box, n, 0, n, rawPtr(dX), rawPtr(dY), rawPtr(dZ), rawPtr(dH));
+        neighborhood.build(dNsView, box, n, dGroupView, rawPtr(dX), rawPtr(dY), rawPtr(dZ), rawPtr(dH));
     const ijloop::Statistics stats = neighborhoodGPU.stats();
     printf("Memory usage of neighborhood data: %.2f MB (%.1f B/particle)\n", stats.numBytes / 1.0e6,
            stats.numBytes / double(stats.numParticles));
