@@ -713,8 +713,7 @@ __global__
 __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) void gpuClusterNbListNeighborhoodKernel(
     const Box<Tc> __grid_constant__ box,
     const LocalIndex totalParticles,
-    const LocalIndex firstIParticle,
-    const LocalIndex lastIParticle,
+    const GroupView groups,
     const Tc* const __restrict__ x,
     const Tc* const __restrict__ y,
     const Tc* const __restrict__ z,
@@ -735,8 +734,8 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
     assert(block.dim_threads().y == Config::jSize);
     assert(block.dim_threads().z == NumSuperclustersPerBlock);
 
-    const unsigned firstISupercluster = firstIParticle / Config::superclusterSize;
-    const unsigned lastISupercluster  = iceil(lastIParticle, Config::superclusterSize);
+    const unsigned firstISupercluster = groups.firstBody / Config::superclusterSize;
+    const unsigned lastISupercluster  = iceil(groups.lastBody, Config::superclusterSize);
     const unsigned numISuperclusters  = lastISupercluster - firstISupercluster;
     const unsigned iSuperclusterIndex = block.group_index().x * NumSuperclustersPerBlock + block.thread_index().z;
     if (iSuperclusterIndex >= numISuperclusters) return;
@@ -831,7 +830,7 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
                         auto ijInteraction             = interaction(iData, jData, ijPosDiff, distSq);
                         if (distSq < radiusSq(iData)) updateResult(iResults[c / iClustersPerWarp], ijInteraction);
                         if (Config::symmetric & (distSq < radiusSq(jData)) &
-                            ((i != j) | ((i == j) & ((i < firstIParticle) | (i >= lastIParticle)))))
+                            ((i != j) | ((i == j) & ((i < groups.firstBody) | (i >= groups.lastBody)))))
                         {
                             if constexpr (std::is_same_v<Sym, symmetry::Asymmetric>)
                                 ijInteraction = interaction(jData, iData, -ijPosDiff, distSq);
@@ -846,7 +845,7 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
                 if constexpr (std::is_same_v<Sym, symmetry::Odd>)
                     util::for_each_tuple([](auto& v) { v = -v; }, jResult);
 
-                storeTupleJSum<Config>(jResult, output, j, j >= firstIParticle & j < lastIParticle);
+                storeTupleJSum<Config>(jResult, output, j, j >= groups.firstBody & j < groups.lastBody);
             }
         }
     }
@@ -856,7 +855,7 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
         const unsigned ci = c + iClusterOffset;
         const auto i =
             iSupercluster * Config::superclusterSize + ci * Config::iSize + block.thread_index().x % Config::iSize;
-        storeTupleISum<Config>(iResults[c / iClustersPerWarp], output, i, i >= firstIParticle & i < lastIParticle);
+        storeTupleISum<Config>(iResults[c / iClustersPerWarp], output, i, i >= groups.firstBody & i < groups.lastBody);
     }
 }
 
@@ -864,7 +863,8 @@ template<class Config, class Tc, class Th>
 struct GpuSuperclusterNbListNeighborhoodImpl
 {
     Box<Tc> box;
-    LocalIndex totalParticles, firstIParticle, lastIParticle;
+    LocalIndex totalParticles;
+    GroupView groups;
     const Tc *x, *y, *z;
     const Th* h;
     thrust::universal_vector<std::uint32_t> neighborData;
@@ -874,19 +874,19 @@ struct GpuSuperclusterNbListNeighborhoodImpl
     void
     ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Sym) const
     {
-        const LocalIndex numParticles = lastIParticle - firstIParticle;
+        const LocalIndex numParticles = groups.lastBody - groups.firstBody;
         if (Config::symmetric | (Config::numWarpsPerInteraction > 1))
         {
             util::for_each_tuple(
                 [&](auto* ptr)
-                { checkGpuErrors(cudaMemsetAsync(ptr + firstIParticle, 0, sizeof(decltype(*ptr)) * numParticles)); },
+                { checkGpuErrors(cudaMemsetAsync(ptr + groups.firstBody, 0, sizeof(decltype(*ptr)) * numParticles)); },
                 output);
         }
 
         assert(firstIParticle < lastIParticle);
         constexpr unsigned superclusterSize = Config::iSize * Config::iClustersPerSupercluster;
-        const LocalIndex firstISupercluster = firstIParticle / superclusterSize;
-        const LocalIndex lastISupercluster  = iceil(lastIParticle, superclusterSize);
+        const LocalIndex firstISupercluster = groups.firstBody / superclusterSize;
+        const LocalIndex lastISupercluster  = iceil(groups.lastBody, superclusterSize);
         const LocalIndex numISuperclusters  = lastISupercluster - firstISupercluster;
 
         constexpr unsigned numSuperclustersPerBlock = 64 / (Config::iThreads * Config::jSize);
@@ -895,9 +895,9 @@ struct GpuSuperclusterNbListNeighborhoodImpl
         const auto runKernel                        = [&](auto usePbc)
         {
             gpuClusterNbListNeighborhoodKernel<Config, numSuperclustersPerBlock, decltype(usePbc)::value, Sym>
-                <<<numBlocks, blockSize>>>(box, totalParticles, firstIParticle, lastIParticle, x, y, z, h,
-                                           makeConstRestrict(input), output, std::forward<Interaction>(interaction),
-                                           rawPtr(neighborData), rawPtr(superclusterInfo));
+                <<<numBlocks, blockSize>>>(box, totalParticles, groups, x, y, z, h, makeConstRestrict(input), output,
+                                           std::forward<Interaction>(interaction), rawPtr(neighborData),
+                                           rawPtr(superclusterInfo));
             checkGpuErrors(cudaGetLastError());
         };
         if (box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
@@ -909,7 +909,7 @@ struct GpuSuperclusterNbListNeighborhoodImpl
 
     Statistics stats() const
     {
-        return {.numParticles = lastIParticle - firstIParticle,
+        return {.numParticles = groups.lastBody - groups.firstBody,
                 .numBytes     = neighborData.size() * sizeof(typename decltype(neighborData)::value_type) +
                             superclusterInfo.size() * sizeof(typename decltype(superclusterInfo)::value_type)};
     }
@@ -996,8 +996,7 @@ struct GpuSuperclusterNbListNeighborhood
         GpuSuperclusterNbListNeighborhoodImpl<Config, Tc, Th> nbList{
             box,
             totalParticles,
-            groups.firstBody,
-            groups.lastBody,
+            groups,
             x,
             y,
             z,
