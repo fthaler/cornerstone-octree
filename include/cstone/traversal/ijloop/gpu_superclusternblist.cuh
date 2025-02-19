@@ -110,7 +110,7 @@ __global__ void initSuperclusterInfo(const LocalIndex firstISupercluster,
 }
 
 template<class Config, class Tc>
-__global__ void gpuClusterNbListComputeBboxes(LocalIndex totalNumParticles,
+__global__ void gpuClusterNbListComputeBboxes(LocalIndex totalParticles,
                                               const Tc* const __restrict__ x,
                                               const Tc* const __restrict__ y,
                                               const Tc* const __restrict__ z,
@@ -124,12 +124,12 @@ __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalNumParticles,
 
     const unsigned i = block.thread_index().x + block.group_dim().x * block.group_index().x;
 
-    const Tc xi = x[std::min(i, totalNumParticles - 1)];
-    const Tc yi = y[std::min(i, totalNumParticles - 1)];
-    const Tc zi = z[std::min(i, totalNumParticles - 1)];
+    const Tc xi = x[std::min(i, totalParticles - 1)];
+    const Tc yi = y[std::min(i, totalParticles - 1)];
+    const Tc zi = z[std::min(i, totalParticles - 1)];
 
-    const unsigned jClusters = iceil(totalNumParticles, Config::jSize);
-    const unsigned bboxIdx   = i / Config::jSize;
+    const unsigned numJClusters = iceil(totalParticles, Config::jSize);
+    const unsigned jCluster     = i / Config::jSize;
 
     if constexpr (Config::jSize >= 3)
     {
@@ -143,10 +143,10 @@ __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalNumParticles,
         const Tc size   = (vMax - vMin) * Tc(0.5);
 
         const unsigned idx = warp.thread_rank() % Config::jSize;
-        if (idx < 3 & bboxIdx < jClusters)
+        if (idx < 3 & jCluster < numJClusters)
         {
-            Tc* centerPtr = (Tc*)&bboxCenters[bboxIdx] + idx;
-            Tc* sizePtr   = (Tc*)&bboxSizes[bboxIdx] + idx;
+            Tc* centerPtr = (Tc*)&bboxCenters[jCluster] + idx;
+            Tc* sizePtr   = (Tc*)&bboxSizes[jCluster] + idx;
             *centerPtr    = center;
             *sizePtr      = size;
         }
@@ -170,10 +170,10 @@ __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalNumParticles,
         Vec3<Tc> center = (bboxMax + bboxMin) * Tc(0.5);
         Vec3<Tc> size   = (bboxMax - bboxMin) * Tc(0.5);
 
-        if (i % Config::jSize == 0 && bboxIdx < jClusters)
+        if (i % Config::jSize == 0 && jCluster < numJClusters)
         {
-            bboxCenters[bboxIdx] = center;
-            bboxSizes[bboxIdx]   = size;
+            bboxCenters[jCluster] = center;
+            bboxSizes[jCluster]   = size;
         }
     }
 }
