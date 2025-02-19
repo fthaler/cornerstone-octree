@@ -250,9 +250,10 @@ auto initialData()
                                     rawPtr(sizes)};
 
     constexpr unsigned groupSize = TravConfig::targetSize;
-    DeviceVector<LocalIndex> temp, groups;
+    DeviceVector<LocalIndex> temp, dGroups;
     computeGroupSplits(firstIParticle, lastIParticle, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), view.leaves,
-                       view.numLeafNodes, view.layout, box, groupSize, 2, temp, groups);
+                       view.numLeafNodes, view.layout, box, groupSize, 2, temp, dGroups);
+    thrust::universal_vector<LocalIndex> groups(dGroups.data(), dGroups.data() + dGroups.size());
 
     const GroupView groupView{.firstBody  = firstIParticle,
                               .lastBody   = lastIParticle,
