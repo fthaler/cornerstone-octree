@@ -66,6 +66,12 @@ struct SuperclusterInfo
     constexpr bool operator<(const SuperclusterInfo& other) const { return neighborsCount > other.neighborsCount; }
 };
 
+struct GlobalBuildData
+{
+    unsigned long long neighborDataSize;
+    unsigned index;
+};
+
 constexpr __forceinline__ bool includeNbSymmetric(unsigned i, unsigned j, unsigned first, unsigned last)
 {
     const bool s = i % 2 == j % 2;
@@ -513,14 +519,13 @@ __device__ __forceinline__ void pruneCandidatesAndComputeMasks(const Box<Tc>& bo
     }
 }
 
-static __device__ unsigned long long globalNeighborDataSize;
-
 template<class Config, unsigned NumSuperclustersPerBlock>
 __device__ __forceinline__ void storeNeighborData(const std::uint32_t* const __restrict__ jClusters,
                                                   const std::uint32_t* const __restrict__ masks,
                                                   std::uint32_t* const __restrict__ neighborData,
                                                   const unsigned neighborDataSize,
-                                                  SuperclusterInfo& info)
+                                                  SuperclusterInfo& info,
+                                                  GlobalBuildData* __restrict__ globalBuildData)
 {
     const auto block = cooperative_groups::this_thread_block();
     const auto warp  = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
@@ -537,7 +542,7 @@ __device__ __forceinline__ void storeNeighborData(const std::uint32_t* const __r
     }
 
     const unsigned long long totalSize = nbSize + mSize;
-    if (warp.thread_rank() == 0) info.dataIndex = atomicAdd(&globalNeighborDataSize, totalSize);
+    if (warp.thread_rank() == 0) info.dataIndex = atomicAdd(&globalBuildData->neighborDataSize, totalSize);
     info.dataIndex = warp.shfl(info.dataIndex, 0);
 
     for (unsigned n = warp.thread_rank(); n < mSize; n += warp.num_threads())
@@ -553,8 +558,6 @@ __device__ __forceinline__ void storeNeighborData(const std::uint32_t* const __r
             neighborData[index] = (Config::compress ? compressedJClusters[warp.meta_group_rank()] : jClusters)[n];
     }
 }
-
-static __device__ unsigned globalIndex;
 
 template<class Config, unsigned NumSuperclustersPerBlock, bool UsePbc, class Tc, class Th, class KeyType>
 __global__ __maxnreg__(72) void gpuSuperclusterNbListBuild(const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
@@ -573,7 +576,8 @@ __global__ __maxnreg__(72) void gpuSuperclusterNbListBuild(const OctreeNsView<Tc
                                                            const std::size_t neighborDataSize,
                                                            SuperclusterInfo* const __restrict__ superclusterInfo,
                                                            const unsigned numSuperClusters,
-                                                           int* __restrict__ globalPool)
+                                                           int* __restrict__ globalPool,
+                                                           GlobalBuildData* __restrict__ globalBuildData)
 {
     const auto block = cooperative_groups::this_thread_block();
     const auto warp  = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
@@ -585,7 +589,7 @@ __global__ __maxnreg__(72) void gpuSuperclusterNbListBuild(const OctreeNsView<Tc
     while (true)
     {
         unsigned index;
-        if (warp.thread_rank() == 0) index = atomicAdd(&globalIndex, 1);
+        if (warp.thread_rank() == 0) index = atomicAdd(&globalBuildData->index, 1);
         index = warp.shfl(index, 0);
         if (index >= numSuperClusters) return;
 
@@ -611,7 +615,8 @@ __global__ __maxnreg__(72) void gpuSuperclusterNbListBuild(const OctreeNsView<Tc
             box, totalParticles, firstIParticle, lastIParticle, x, y, z, h, info.index, jClusters, masks, numCandidates,
             info.neighborsCount);
 
-        storeNeighborData<Config, NumSuperclustersPerBlock>(jClusters, masks, neighborData, neighborDataSize, info);
+        storeNeighborData<Config, NumSuperclustersPerBlock>(jClusters, masks, neighborData, neighborDataSize, info,
+                                                            globalBuildData);
 
         if (warp.thread_rank() == 0) superclusterInfo[index] = info;
     }
@@ -1025,10 +1030,7 @@ struct GpuSuperclusterNbListNeighborhood
             checkGpuErrors(cudaGetLastError());
         }
 
-        unsigned* globalIndexPtr;
-        unsigned long long* globalNeighborDataSizePtr;
-        checkGpuErrors(cudaGetSymbolAddress((void**)&globalIndexPtr, globalIndex));
-        checkGpuErrors(cudaGetSymbolAddress((void**)&globalNeighborDataSizePtr, globalNeighborDataSize));
+        thrust::device_vector<GlobalBuildData> globalBuildData(1);
 
         constexpr unsigned numSuperclustersPerBlock =
             64 / (Config::iThreads * Config::jSize / Config::numWarpsPerInteraction);
@@ -1037,15 +1039,14 @@ struct GpuSuperclusterNbListNeighborhood
         const unsigned numBlocks = std::min(GpuConfig::smCount * (TravConfig::numWarpsPerSm / numSuperclustersPerBlock),
                                             numISuperclusters / numSuperclustersPerBlock);
 
-        thrust::device_vector<int> pool(TravConfig::memPerWarp * numSuperclustersPerBlock * numBlocks);
+        thrust::device_vector<int> globalPool(TravConfig::memPerWarp * numSuperclustersPerBlock * numBlocks);
         Th maxH = 0;
         if constexpr (Config::symmetric)
             maxH = thrust::reduce(thrust::device, h, h + totalParticles, Th(0), thrust::maximum<Th>());
 
         const auto runBuildKernel = [&]
         {
-            checkGpuErrors(cudaMemsetAsync(globalNeighborDataSizePtr, 0, sizeof(unsigned long long)));
-            checkGpuErrors(cudaMemsetAsync(globalIndexPtr, 0, sizeof(unsigned)));
+            checkGpuErrors(cudaMemsetAsync(rawPtr(globalBuildData), 0, sizeof(GlobalBuildData)));
 
             auto run = [&](auto usePbc)
             {
@@ -1054,7 +1055,7 @@ struct GpuSuperclusterNbListNeighborhood
                                                maxH, rawPtr(jClusterBboxCenters), rawPtr(jClusterBboxSizes),
                                                rawPtr(nbList.neighborData), nbList.neighborData.size(),
                                                rawPtr(nbList.superclusterInfo), nbList.superclusterInfo.size(),
-                                               rawPtr(pool));
+                                               rawPtr(globalPool), rawPtr(globalBuildData));
             };
             if (box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
                 box.boundaryZ() == BoundaryType::periodic)
@@ -1067,8 +1068,8 @@ struct GpuSuperclusterNbListNeighborhood
         runBuildKernel();
 
         unsigned long long requiredSize;
-        checkGpuErrors(
-            cudaMemcpy(&requiredSize, globalNeighborDataSizePtr, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+        checkGpuErrors(cudaMemcpy(&requiredSize, &rawPtr(globalBuildData)->neighborDataSize, sizeof(unsigned long long),
+                                  cudaMemcpyDeviceToHost));
         if (requiredSize > nbList.neighborData.size())
         {
             nbList.neighborData.resize(requiredSize);
