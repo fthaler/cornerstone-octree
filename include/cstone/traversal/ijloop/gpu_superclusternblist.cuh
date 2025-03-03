@@ -897,7 +897,7 @@ struct GpuSuperclusterNbListNeighborhoodImpl
                 output);
         }
 
-        assert(firstIParticle < lastIParticle);
+        assert(groups.firstBody < groups.lastBody);
         const LocalIndex firstISupercluster = superclusterIndex<Config>(groups.firstBody);
         const LocalIndex lastISupercluster  = superclusterIndex<Config>(groups.lastBody - 1) + 1;
         const LocalIndex numISuperclusters  = lastISupercluster - firstISupercluster;
