@@ -1016,7 +1016,7 @@ struct GpuSuperclusterNbListNeighborhood
 
         {
             constexpr unsigned numThreads = 128;
-            unsigned numBlocks            = iceil(totalParticles, numThreads);
+            unsigned numBlocks            = iceil(numJClusters * Config::jSize, numThreads);
             gpu_supercluster_nb_list_neighborhood_detail::gpuClusterNbListComputeBboxes<Config>
                 <<<numBlocks, numThreads>>>(totalParticles, x, y, z, rawPtr(jClusterBboxCenters),
                                             rawPtr(jClusterBboxSizes));
