@@ -84,6 +84,18 @@ constexpr __forceinline__ unsigned masksSize(unsigned numJClusters)
     return (numJClusters * Config::iClustersPerSupercluster * Config::numWarpsPerInteraction + 31) / 32;
 }
 
+template<class Config>
+constexpr __forceinline__ unsigned superclusterIndex(unsigned i)
+{
+    return i / Config::superclusterSize;
+}
+
+template<class Config>
+constexpr __forceinline__ unsigned jClusterIndex(unsigned j)
+{
+    return j / Config::jSize;
+}
+
 template<class T>
 constexpr __forceinline__ void atomicAddScalarOrVec(T* ptr, T value)
 {
@@ -128,8 +140,8 @@ __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalParticles,
     const Tc yi = y[std::min(i, totalParticles - 1)];
     const Tc zi = z[std::min(i, totalParticles - 1)];
 
-    const unsigned numJClusters = iceil(totalParticles, Config::jSize);
-    const unsigned jCluster     = i / Config::jSize;
+    const unsigned numJClusters = jClusterIndex<Config>(totalParticles - 1) + 1;
+    const unsigned jCluster     = jClusterIndex<Config>(i);
 
     if constexpr (Config::jSize >= 3)
     {
@@ -225,10 +237,10 @@ __device__ __forceinline__ void collectJClusterCandidates(const OctreeNsView<Tc,
     const Vec3<Tc> groupCenter = (bbMax + bbMin) * Tc(0.5);
     const Vec3<Tc> groupSize   = (bbMax - bbMin) * Tc(0.5);
 
-    const unsigned firstISupercluster = groups.firstBody / Config::superclusterSize;
-    const unsigned lastISupercluster  = iceil(groups.lastBody, Config::superclusterSize);
-    const unsigned iSupercluster      = firstGroupParticle / Config::superclusterSize;
-    const unsigned numJClusters       = iceil(totalParticles, Config::jSize);
+    const unsigned firstISupercluster = superclusterIndex<Config>(groups.firstBody);
+    const unsigned lastISupercluster  = superclusterIndex<Config>(groups.lastBody - 1) + 1;
+    const unsigned iSupercluster      = superclusterIndex<Config>(firstGroupParticle);
+    const unsigned numJClusters       = jClusterIndex<Config>(totalParticles - 1) + 1;
     numCandidates                     = 0;
 
     const auto checkOverlap = [&](const unsigned jCluster, const unsigned numLanesValid)
@@ -244,7 +256,7 @@ __device__ __forceinline__ void collectJClusterCandidates(const OctreeNsView<Tc,
             isNeighbor = !Config::symmetric;
             if constexpr (Config::symmetric)
             {
-                const unsigned jSupercluster = jCluster * Config::jSize / Config::superclusterSize;
+                const unsigned jSupercluster = superclusterIndex<Config>(jCluster * Config::jSize);
                 isNeighbor |= includeNbSymmetric(iSupercluster, jSupercluster, firstISupercluster, lastISupercluster);
             }
 
@@ -318,9 +330,9 @@ __device__ __forceinline__ void collectJClusterCandidates(const OctreeNsView<Tc,
         if (stackUsed > TravConfig::memPerWarp) return;                    // Exit if cellQueue overflows
 
         // Direct
-        const int firstJCluster = layout[leafIdx] / Config::jSize;
-        const int numJClusters =
-            (iceil(layout[leafIdx + 1], Config::jSize) - firstJCluster) & -int(isDirect); // Number of jClusters in cell
+        const int firstJCluster = jClusterIndex<Config>(layout[leafIdx]);
+        const int numJClusters  = (jClusterIndex<Config>(layout[leafIdx + 1] - 1) + 1 - firstJCluster) &
+                                 -int(isDirect); // Number of jClusters in cell
         bool directTodo            = numJClusters;
         const int numJClustersScan = inclusiveScanInt(numJClusters);  // Inclusive scan of numJClusters
         int numJClustersLane       = numJClustersScan - numJClusters; // Exclusive scan of numJClusters
@@ -462,7 +474,7 @@ __device__ __forceinline__ void pruneCandidatesAndComputeMasks(const Box<Tc>& bo
         {
             const unsigned j = jCluster * Config::jSize + (Config::jSize / Config::numWarpsPerInteraction) * w +
                                block.thread_index().y;
-            const unsigned jSupercluster = j / Config::superclusterSize;
+            const unsigned jSupercluster = superclusterIndex<Config>(j);
             if (j < totalParticles)
             {
                 const Tc xj = x[j];
@@ -734,8 +746,8 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
     assert(block.dim_threads().y == Config::jSize);
     assert(block.dim_threads().z == NumSuperclustersPerBlock);
 
-    const unsigned firstISupercluster = groups.firstBody / Config::superclusterSize;
-    const unsigned lastISupercluster  = iceil(groups.lastBody, Config::superclusterSize);
+    const unsigned firstISupercluster = superclusterIndex<Config>(groups.firstBody);
+    const unsigned lastISupercluster  = superclusterIndex<Config>(groups.lastBody - 1) + 1;
     const unsigned numISuperclusters  = lastISupercluster - firstISupercluster;
     const unsigned iSuperclusterIndex = block.group_index().x * NumSuperclustersPerBlock + block.thread_index().z;
     if (iSuperclusterIndex >= numISuperclusters) return;
@@ -806,7 +818,7 @@ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) voi
         {
             const unsigned jCluster      = nb < iSuperclusterNeighborsCount ? nbData[nb + maskSize] : ~0u;
             const unsigned j             = jCluster * Config::jSize + block.thread_index().y;
-            const unsigned jSupercluster = j / Config::superclusterSize;
+            const unsigned jSupercluster = superclusterIndex<Config>(j);
             const auto jData             = (nb < iSuperclusterNeighborsCount & j < totalParticles)
                                                ? loadParticleData(x, y, z, h, input, j)
                                                : dummyParticleData(x, y, z, h, input, j);
@@ -875,6 +887,8 @@ struct GpuSuperclusterNbListNeighborhoodImpl
     ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Sym) const
     {
         const LocalIndex numParticles = groups.lastBody - groups.firstBody;
+        if (numParticles == 0) return;
+
         if (Config::symmetric | (Config::numWarpsPerInteraction > 1))
         {
             util::for_each_tuple(
@@ -884,9 +898,8 @@ struct GpuSuperclusterNbListNeighborhoodImpl
         }
 
         assert(firstIParticle < lastIParticle);
-        constexpr unsigned superclusterSize = Config::iSize * Config::iClustersPerSupercluster;
-        const LocalIndex firstISupercluster = groups.firstBody / superclusterSize;
-        const LocalIndex lastISupercluster  = iceil(groups.lastBody, superclusterSize);
+        const LocalIndex firstISupercluster = superclusterIndex<Config>(groups.firstBody);
+        const LocalIndex lastISupercluster  = superclusterIndex<Config>(groups.lastBody - 1) + 1;
         const LocalIndex numISuperclusters  = lastISupercluster - firstISupercluster;
 
         constexpr unsigned numSuperclustersPerBlock = 64 / (Config::iThreads * Config::jSize);
@@ -988,10 +1001,10 @@ struct GpuSuperclusterNbListNeighborhood
     {
         using namespace gpu_supercluster_nb_list_neighborhood_detail;
 
-        const LocalIndex firstISupercluster = groups.firstBody / Config::superclusterSize;
-        const LocalIndex lastISupercluster  = iceil(groups.lastBody, Config::superclusterSize);
+        const LocalIndex firstISupercluster = superclusterIndex<Config>(groups.firstBody);
+        const LocalIndex lastISupercluster  = superclusterIndex<Config>(groups.lastBody - 1) + 1;
         const LocalIndex numISuperclusters  = lastISupercluster - firstISupercluster;
-        const LocalIndex numJClusters       = iceil(totalParticles, Config::jSize);
+        const LocalIndex numJClusters       = jClusterIndex<Config>(totalParticles - 1) + 1;
 
         GpuSuperclusterNbListNeighborhoodImpl<Config, Tc, Th> nbList{
             box,
@@ -1003,6 +1016,8 @@ struct GpuSuperclusterNbListNeighborhood
             h,
             thrust::universal_vector<std::uint32_t>(),
             thrust::universal_vector<SuperclusterInfo>(numISuperclusters)};
+
+        if (numISuperclusters == 0) return nbList;
 
         {
             constexpr unsigned numThreads = 128;
