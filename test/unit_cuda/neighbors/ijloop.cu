@@ -252,7 +252,7 @@ auto initialData()
     constexpr unsigned groupSize = TravConfig::targetSize;
     DeviceVector<LocalIndex> temp, dGroups;
     computeGroupSplits(firstIParticle, lastIParticle, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), view.leaves,
-                       view.numLeafNodes, view.layout, box, groupSize, 2, temp, dGroups);
+                       view.numLeafNodes, view.layout, box, groupSize, 7, temp, dGroups);
     thrust::universal_vector<LocalIndex> groups(dGroups.data(), dGroups.data() + dGroups.size());
 
     const GroupView groupView{.firstBody  = firstIParticle,
@@ -333,63 +333,67 @@ TEST(IjLoop, GpuClusterNbList8x4WithSymmetryWithCompression)
     run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<8, 4>::withSymmetry::withCompression<
         8>{});
 }
+// TEST(IjLoop, GromacsLikeNeighborhood) { run(ijloop::GromacsLikeNeighborhood{ngmax}); }
+
+constexpr unsigned superclusterNcMax = 1024; // needs to be pretty big due to many split groups
+
 TEST(IjLoop, GpuSuperclusterNbList4x4WithoutSymmetryWithoutCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         4, 4>::withoutSymmetry::withoutCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList4x4WithSymmetryWithoutCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         4, 4>::withSymmetry::withoutCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList4x4WithoutSymmetryWithCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         4, 4>::withoutSymmetry::withCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList4x4WithSymmetryWithCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         4, 4>::withSymmetry::withCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList8x4WithoutSymmetryWithoutCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         8, 4>::withoutSymmetry::withoutCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList8x4WithSymmetryWithoutCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         8, 4>::withSymmetry::withoutCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList8x4WithoutSymmetryWithCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         8, 4>::withoutSymmetry::withCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList8x4WithSymmetryWithCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         8, 4>::withSymmetry::withCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList8x8WithoutSymmetryWithoutCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         8, 8>::withoutSymmetry::withoutCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList8x8WithSymmetryWithoutCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         8, 8>::withSymmetry::withoutCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList8x8WithoutSymmetryWithCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         8, 8>::withoutSymmetry::withCompression{});
 }
 TEST(IjLoop, GpuSuperclusterNbList8x8WithSymmetryWithCompression)
 {
-    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<
+    run(ijloop::GpuSuperclusterNbListNeighborhood<>::withNcMax<superclusterNcMax>::withClusterSize<
         8, 8>::withSymmetry::withCompression{});
 }
