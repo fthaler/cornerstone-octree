@@ -131,13 +131,13 @@ __global__ void initSuperclusterInfo(const LocalIndex firstISupercluster,
 }
 
 template<class Config, class Tc>
-__global__ void gpuClusterNbListComputeBboxes(const LocalIndex firstValidParticle,
-                                              const LocalIndex totalParticles,
-                                              const Tc* const __restrict__ x,
-                                              const Tc* const __restrict__ y,
-                                              const Tc* const __restrict__ z,
-                                              Vec3<Tc>* const __restrict__ bboxCenters,
-                                              Vec3<Tc>* const __restrict__ bboxSizes)
+__global__ void computeJClusterBboxes(const LocalIndex firstValidParticle,
+                                      const LocalIndex totalParticles,
+                                      const Tc* const __restrict__ x,
+                                      const Tc* const __restrict__ y,
+                                      const Tc* const __restrict__ z,
+                                      Vec3<Tc>* const __restrict__ bboxCenters,
+                                      Vec3<Tc>* const __restrict__ bboxSizes)
 {
     static_assert(GpuConfig::warpSize % Config::jSize == 0);
 
@@ -583,24 +583,24 @@ __device__ __forceinline__ void storeNeighborData(const std::uint32_t* const __r
 }
 
 template<class Config, unsigned NumSuperclustersPerBlock, bool UsePbc, class Tc, class Th, class KeyType>
-__global__ __maxnreg__(72) void gpuSuperclusterNbListBuild(const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
-                                                           const Box<Tc> __grid_constant__ box,
-                                                           const LocalIndex firstValidParticle,
-                                                           const LocalIndex totalParticles,
-                                                           const GroupView __grid_constant__ groups,
-                                                           const Tc* const __restrict__ x,
-                                                           const Tc* const __restrict__ y,
-                                                           const Tc* const __restrict__ z,
-                                                           const Th* const __restrict__ h,
-                                                           const Th maxH,
-                                                           const Vec3<Tc>* const __restrict__ jClusterBboxCenters,
-                                                           const Vec3<Tc>* const __restrict__ jClusterBboxSizes,
-                                                           std::uint32_t* const __restrict__ neighborData,
-                                                           const std::size_t neighborDataSize,
-                                                           SuperclusterInfo* const __restrict__ superclusterInfo,
-                                                           const unsigned numSuperClusters,
-                                                           int* __restrict__ globalPool,
-                                                           GlobalBuildData* __restrict__ globalBuildData)
+__global__ __maxnreg__(72) void buildNbList(const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
+                                            const Box<Tc> __grid_constant__ box,
+                                            const LocalIndex firstValidParticle,
+                                            const LocalIndex totalParticles,
+                                            const GroupView __grid_constant__ groups,
+                                            const Tc* const __restrict__ x,
+                                            const Tc* const __restrict__ y,
+                                            const Tc* const __restrict__ z,
+                                            const Th* const __restrict__ h,
+                                            const Th maxH,
+                                            const Vec3<Tc>* const __restrict__ jClusterBboxCenters,
+                                            const Vec3<Tc>* const __restrict__ jClusterBboxSizes,
+                                            std::uint32_t* const __restrict__ neighborData,
+                                            const std::size_t neighborDataSize,
+                                            SuperclusterInfo* const __restrict__ superclusterInfo,
+                                            const unsigned numSuperClusters,
+                                            int* __restrict__ globalPool,
+                                            GlobalBuildData* __restrict__ globalBuildData)
 {
     const auto block = cooperative_groups::this_thread_block();
     const auto warp  = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
@@ -737,8 +737,7 @@ template<class Config,
          class In,
          class Out,
          class Interaction>
-__global__
-__launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) void gpuClusterNbListNeighborhoodKernel(
+__global__ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPerBlock) void runIjLoop(
     const Box<Tc> __grid_constant__ box,
     const LocalIndex firstValidParticle,
     const LocalIndex totalParticles,
@@ -929,10 +928,9 @@ struct GpuSuperclusterNbListNeighborhoodImpl
         const unsigned numBlocks                    = iceil(numISuperclusters, numSuperclustersPerBlock);
         const auto runKernel                        = [&](auto usePbc)
         {
-            gpuClusterNbListNeighborhoodKernel<Config, numSuperclustersPerBlock, decltype(usePbc)::value, Sym>
-                <<<numBlocks, blockSize>>>(box, firstValidParticle, totalParticles, groups, x, y, z, h,
-                                           makeConstRestrict(input), output, std::forward<Interaction>(interaction),
-                                           rawPtr(neighborData), rawPtr(superclusterInfo));
+            runIjLoop<Config, numSuperclustersPerBlock, decltype(usePbc)::value, Sym><<<numBlocks, blockSize>>>(
+                box, firstValidParticle, totalParticles, groups, x, y, z, h, makeConstRestrict(input), output,
+                std::forward<Interaction>(interaction), rawPtr(neighborData), rawPtr(superclusterInfo));
             checkGpuErrors(cudaGetLastError());
         };
         if (box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
@@ -1065,9 +1063,8 @@ struct GpuSuperclusterNbListNeighborhood
         {
             constexpr unsigned numThreads = 128;
             unsigned numBlocks            = iceil(numJClusters * Config::jSize, numThreads);
-            gpu_supercluster_nb_list_neighborhood_detail::gpuClusterNbListComputeBboxes<Config>
-                <<<numBlocks, numThreads>>>(firstValidParticle, totalParticles, x, y, z, rawPtr(jClusterBboxCenters),
-                                            rawPtr(jClusterBboxSizes));
+            computeJClusterBboxes<Config><<<numBlocks, numThreads>>>(
+                firstValidParticle, totalParticles, x, y, z, rawPtr(jClusterBboxCenters), rawPtr(jClusterBboxSizes));
             checkGpuErrors(cudaGetLastError());
         }
 
@@ -1093,12 +1090,11 @@ struct GpuSuperclusterNbListNeighborhood
 
             auto run = [&](auto usePbc)
             {
-                gpuSuperclusterNbListBuild<Config, numSuperclustersPerBlock, decltype(usePbc)::value>
-                    <<<numBlocks, blockSize>>>(tree, box, firstValidParticle, totalParticles, groups, x, y, z, h, maxH,
-                                               rawPtr(jClusterBboxCenters), rawPtr(jClusterBboxSizes),
-                                               rawPtr(nbList.neighborData), nbList.neighborData.size(),
-                                               rawPtr(nbList.superclusterInfo), nbList.superclusterInfo.size(),
-                                               rawPtr(globalPool), rawPtr(globalBuildData));
+                buildNbList<Config, numSuperclustersPerBlock, decltype(usePbc)::value><<<numBlocks, blockSize>>>(
+                    tree, box, firstValidParticle, totalParticles, groups, x, y, z, h, maxH,
+                    rawPtr(jClusterBboxCenters), rawPtr(jClusterBboxSizes), rawPtr(nbList.neighborData),
+                    nbList.neighborData.size(), rawPtr(nbList.superclusterInfo), nbList.superclusterInfo.size(),
+                    rawPtr(globalPool), rawPtr(globalBuildData));
             };
             if (box.boundaryX() == BoundaryType::periodic | box.boundaryY() == BoundaryType::periodic |
                 box.boundaryZ() == BoundaryType::periodic)
