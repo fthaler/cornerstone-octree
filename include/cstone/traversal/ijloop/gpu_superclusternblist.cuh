@@ -634,7 +634,7 @@ __device__ __forceinline__ void storeNeighborData(const std::uint32_t* const __r
 }
 
 template<class Config, unsigned NumSuperclustersPerBlock, bool UsePbc, class Tc, class Th, class KeyType>
-__global__ __maxnreg__(72) void buildNbList(
+__global__ __launch_bounds__(GpuConfig::warpSize* NumSuperclustersPerBlock) void buildNbList(
     const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
     const Box<Tc> __grid_constant__ box,
     const LocalIndex firstValidParticle,
