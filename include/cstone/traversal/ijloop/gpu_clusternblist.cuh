@@ -83,7 +83,7 @@ using nbStoragePerICluster =
                            (Config::compress ? Config::ncMax / Config::expectedCompressionRate : Config::ncMax)>;
 
 template<class Config, class Tc>
-__global__ void gpuClusterNbListComputeBboxes(LocalIndex totalParticles,
+__global__ void gpuClusterNbListComputeBboxes(LocalIndex totalBodies,
                                               const Tc* const __restrict__ x,
                                               const Tc* const __restrict__ y,
                                               const Tc* const __restrict__ z,
@@ -96,11 +96,11 @@ __global__ void gpuClusterNbListComputeBboxes(LocalIndex totalParticles,
 
     const unsigned i = block.thread_index().x + block.group_dim().x * block.group_index().x;
 
-    const Tc xi = x[std::min(i, totalParticles - 1)];
-    const Tc yi = y[std::min(i, totalParticles - 1)];
-    const Tc zi = z[std::min(i, totalParticles - 1)];
+    const Tc xi = x[std::min(i, totalBodies - 1)];
+    const Tc yi = y[std::min(i, totalBodies - 1)];
+    const Tc zi = z[std::min(i, totalBodies - 1)];
 
-    const unsigned jClusters = iceil(totalParticles, Config::jSize);
+    const unsigned jClusters = iceil(totalBodies, Config::jSize);
     const unsigned bboxIdx   = i / Config::jSize;
 
     if constexpr (Config::jSize >= 3)
@@ -231,9 +231,9 @@ template<class Config, unsigned NumWarpsPerBlock, bool UsePbc, class Tc, class T
 __global__
     __maxnreg__(72) void gpuClusterNbListBuild(const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
                                                const Box<Tc> __grid_constant__ box,
-                                               const LocalIndex totalParticles,
-                                               const LocalIndex firstIParticle,
-                                               const LocalIndex lastIParticle,
+                                               const LocalIndex totalBodies,
+                                               const LocalIndex firstBody,
+                                               const LocalIndex lastBody,
                                                const Tc* const __restrict__ x,
                                                const Tc* const __restrict__ y,
                                                const Tc* const __restrict__ z,
@@ -259,11 +259,10 @@ __global__
     volatile __shared__ int sharedPool[GpuConfig::warpSize * NumWarpsPerBlock];
     __shared__ unsigned nidx[NumWarpsPerBlock][GpuConfig::warpSize / Config::iSize][Config::ncMax + Config::ncMaxExtra];
 
-    const unsigned numTargets =
-        iceil(lastIParticle - firstIParticle / Config::iSize * Config::iSize, GpuConfig::warpSize);
-    const unsigned firstICluster = firstIParticle / Config::iSize;
-    const unsigned lastICluster  = iceil(lastIParticle, Config::iSize);
-    const unsigned numJClusters  = iceil(totalParticles, Config::jSize);
+    const unsigned numTargets    = iceil(lastBody - firstBody / Config::iSize * Config::iSize, GpuConfig::warpSize);
+    const unsigned firstICluster = firstBody / Config::iSize;
+    const unsigned lastICluster  = iceil(lastBody, Config::iSize);
+    const unsigned numJClusters  = iceil(totalBodies, Config::jSize);
 
     const TreeNodeIndex* __restrict__ childOffsets   = tree.childOffsets;
     const TreeNodeIndex* __restrict__ internalToLeaf = tree.internalToLeaf;
@@ -283,9 +282,9 @@ __global__
             firstICluster + target * (GpuConfig::warpSize / Config::iSize) + block.thread_index().y;
 
         const unsigned i = std::min(
-            std::max(target * GpuConfig::warpSize + warp.thread_rank() + firstIParticle / Config::iSize * Config::iSize,
-                     firstIParticle),
-            totalParticles - 1);
+            std::max(target * GpuConfig::warpSize + warp.thread_rank() + firstBody / Config::iSize * Config::iSize,
+                     firstBody),
+            totalBodies - 1);
         const Vec3<Tc> iPos = {x[i], y[i], z[i]};
         const Th hi         = h[i];
 
@@ -472,7 +471,7 @@ __global__
             const unsigned ic = warp.shfl(iCluster, c * Config::iSize);
             if (ic < firstICluster | ic >= lastICluster) continue;
 
-            const unsigned i    = std::min(ic * Config::iSize + block.thread_index().x, totalParticles - 1);
+            const unsigned i    = std::min(ic * Config::iSize + block.thread_index().x, totalBodies - 1);
             const Vec3<Tc> iPos = {x[i], y[i], z[i]};
             const Th hi         = h[i];
 
@@ -505,11 +504,11 @@ __global__
                 const unsigned jCluster =
                     nb < imin(ncc, Config::ncMax + Config::ncMaxExtra) ? nidx[block.thread_index().z][c][nb] : ~0u;
                 const unsigned j         = jCluster * Config::jSize + block.thread_index().y % Config::jSize;
-                const Vec3<Tc> jPos      = j < totalParticles
+                const Vec3<Tc> jPos      = j < totalBodies
                                                ? Vec3<Tc>{x[j], y[j], z[j]}
                                                : Vec3<Tc>{std::numeric_limits<Tc>::max(), std::numeric_limits<Tc>::max(),
                                                           std::numeric_limits<Tc>::max()};
-                const Th hj              = j < totalParticles ? h[j] : 0;
+                const Th hj              = j < totalBodies ? h[j] : 0;
                 const Vec3<Tc> ijPosDiff = posDiff(jPos);
                 const Th d2              = norm2(ijPosDiff);
                 const Th iRadiusSq       = Th(4) * hi * hi;
@@ -625,9 +624,9 @@ template<class Config,
          class Interaction>
 __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClusterNbListNeighborhoodKernel(
     const Box<Tc> __grid_constant__ box,
-    const LocalIndex totalParticles,
-    const LocalIndex firstIParticle,
-    const LocalIndex lastIParticle,
+    const LocalIndex totalBodies,
+    const LocalIndex firstBody,
+    const LocalIndex lastBody,
     const Tc* __restrict__ x,
     const Tc* __restrict__ y,
     const Tc* __restrict__ z,
@@ -648,8 +647,8 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
     assert(block.dim_threads().z == NumWarpsPerBlock);
     const auto warp = cooperative_groups::tiled_partition<GpuConfig::warpSize>(block);
 
-    const unsigned firstICluster = firstIParticle / Config::iSize;
-    const unsigned lastICluster  = iceil(lastIParticle, Config::iSize);
+    const unsigned firstICluster = firstBody / Config::iSize;
+    const unsigned lastICluster  = iceil(lastBody, Config::iSize);
     const unsigned iCluster      = block.group_index().x * NumWarpsPerBlock + block.thread_index().z + firstICluster;
 
     if (iCluster >= lastICluster) return;
@@ -676,7 +675,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
     }
 
     const auto iData =
-        i < totalParticles ? loadParticleData(x, y, z, h, input, i) : dummyParticleData(x, y, z, h, input, i);
+        i < totalBodies ? loadParticleData(x, y, z, h, input, i) : dummyParticleData(x, y, z, h, input, i);
 
     using result_t                       = decltype(interaction(iData, iData, Vec3<Tc>(), Tc(0)));
     result_t result                      = {};
@@ -684,7 +683,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
     {
         const unsigned j = jCluster * Config::jSize + block.thread_index().y % Config::jSize;
         result_t jResult = {};
-        if (i < totalParticles & j < totalParticles & (!Config::symmetric | !self | (i <= j)))
+        if (i < totalBodies & j < totalBodies & (!Config::symmetric | !self | (i <= j)))
         {
             const auto jData = loadParticleData(x, y, z, h, input, j);
 
@@ -706,7 +705,7 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
         if constexpr (Config::symmetric)
         {
             if constexpr (std::is_same_v<Sym, symmetry::Odd>) util::for_each_tuple([](auto& r) { r = -r; }, jResult);
-            storeTupleJSum<Config>(jResult, output, j, j >= firstIParticle & j < lastIParticle);
+            storeTupleJSum<Config>(jResult, output, j, j >= firstBody & j < lastBody);
         }
     };
 
@@ -726,14 +725,14 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumWarpsPerBlock) void gpuClus
         computeClusterInteraction(jCluster, false);
     }
 
-    storeTupleISum<Config>(result, output, i, i >= firstIParticle & i < lastIParticle);
+    storeTupleISum<Config>(result, output, i, i >= firstBody & i < lastBody);
 }
 
 template<class Config, class Tc, class Th>
 struct GpuClusterNbListNeighborhoodImpl
 {
     Box<Tc> box;
-    LocalIndex totalParticles, firstIParticle, lastIParticle;
+    LocalIndex totalBodies, firstBody, lastBody;
     const Tc *x, *y, *z;
     const Th* h;
     thrust::device_vector<LocalIndex> clusterNeighbors;
@@ -743,17 +742,16 @@ struct GpuClusterNbListNeighborhoodImpl
     void
     ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Sym) const
     {
-        const LocalIndex numParticles = lastIParticle - firstIParticle;
+        const LocalIndex numBodies = lastBody - firstBody;
         if (Config::symmetric)
         {
             util::for_each_tuple(
                 [&](auto* ptr)
-                { checkGpuErrors(cudaMemsetAsync(ptr + firstIParticle, 0, sizeof(decltype(*ptr)) * numParticles)); },
-                output);
+                { checkGpuErrors(cudaMemsetAsync(ptr + firstBody, 0, sizeof(decltype(*ptr)) * numBodies)); }, output);
         }
 
-        const LocalIndex firstICluster = firstIParticle / Config::iSize;
-        const LocalIndex lastICluster  = iceil(lastIParticle, Config::iSize);
+        const LocalIndex firstICluster = firstBody / Config::iSize;
+        const LocalIndex lastICluster  = iceil(lastBody, Config::iSize);
         const LocalIndex numIClusters  = lastICluster - firstICluster;
 
         constexpr unsigned threads          = 128;
@@ -761,14 +759,14 @@ struct GpuClusterNbListNeighborhoodImpl
         const dim3 blockSize                = {Config::iSize, GpuConfig::warpSize / Config::iSize, numWarpsPerBlock};
         const unsigned numBlocks            = iceil(numIClusters, numWarpsPerBlock);
         gpuClusterNbListNeighborhoodKernel<Config, numWarpsPerBlock, true, Sym><<<numBlocks, blockSize>>>(
-            box, totalParticles, firstIParticle, lastIParticle, x, y, z, h, makeConstRestrict(input), output,
+            box, totalBodies, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
             std::forward<Interaction>(interaction), rawPtr(clusterNeighbors), rawPtr(clusterNeighborsCount));
         checkGpuErrors(cudaGetLastError());
     }
 
     Statistics stats() const
     {
-        return {.numParticles = lastIParticle - firstIParticle,
+        return {.numBodies = lastBody - firstBody,
                 .numBytes =
                     clusterNeighbors.size() * sizeof(typename decltype(clusterNeighbors)::value_type) +
                     clusterNeighborsCount.size() * sizeof(typename decltype(clusterNeighborsCount)::value_type)};
@@ -822,7 +820,7 @@ struct GpuClusterNbListNeighborhood
     template<class Tc, class KeyType, class Th>
     detail::GpuClusterNbListNeighborhoodImpl<Config, Tc, Th> build(const OctreeNsView<Tc, KeyType>& tree,
                                                                    const Box<Tc>& box,
-                                                                   const LocalIndex totalParticles,
+                                                                   const LocalIndex totalBodies,
                                                                    const GroupView& groups,
                                                                    const Tc* x,
                                                                    const Tc* y,
@@ -832,13 +830,13 @@ struct GpuClusterNbListNeighborhood
         const LocalIndex firstICluster = groups.firstBody / Config::iSize;
         const LocalIndex lastICluster  = iceil(groups.lastBody, Config::iSize);
         const LocalIndex numIClusters  = lastICluster - firstICluster;
-        const LocalIndex numJClusters  = iceil(totalParticles, Config::jSize);
+        const LocalIndex numJClusters  = iceil(totalBodies, Config::jSize);
 
         thrust::device_vector<util::tuple<Vec3<Tc>, Vec3<Tc>>> jClusterBboxes(numJClusters);
 
         detail::GpuClusterNbListNeighborhoodImpl<Config, Tc, Th> nbList{
             box,
-            totalParticles,
+            totalBodies,
             groups.firstBody,
             groups.lastBody,
             x,
@@ -850,9 +848,9 @@ struct GpuClusterNbListNeighborhood
 
         {
             constexpr unsigned numThreads = 128;
-            unsigned numBlocks            = iceil(totalParticles, numThreads);
+            unsigned numBlocks            = iceil(totalBodies, numThreads);
             detail::gpuClusterNbListComputeBboxes<Config>
-                <<<numBlocks, numThreads>>>(totalParticles, x, y, z, rawPtr(jClusterBboxes));
+                <<<numBlocks, numThreads>>>(totalBodies, x, y, z, rawPtr(jClusterBboxes));
             checkGpuErrors(cudaGetLastError());
         }
         {
@@ -863,11 +861,11 @@ struct GpuClusterNbListNeighborhood
             thrust::device_vector<int> pool(TravConfig::memPerWarp * numWarpsPerBlock * numBlocks);
             Th maxH = 0;
             if constexpr (Config::symmetric)
-                maxH = thrust::reduce(thrust::device, h, h + totalParticles, Th(0), thrust::maximum<Th>());
+                maxH = thrust::reduce(thrust::device, h, h + totalBodies, Th(0), thrust::maximum<Th>());
 
             resetTraversalCounters<<<1, 1>>>();
             detail::gpuClusterNbListBuild<Config, numWarpsPerBlock, true><<<numBlocks, blockSize>>>(
-                tree, box, totalParticles, groups.firstBody, groups.lastBody, x, y, z, h, rawPtr(jClusterBboxes),
+                tree, box, totalBodies, groups.firstBody, groups.lastBody, x, y, z, h, rawPtr(jClusterBboxes),
                 rawPtr(nbList.clusterNeighbors), rawPtr(nbList.clusterNeighborsCount), rawPtr(pool), maxH);
             checkGpuErrors(cudaGetLastError());
 

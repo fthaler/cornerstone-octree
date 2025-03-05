@@ -149,7 +149,7 @@ struct ConceptTestInteraction
 
 struct Statistics
 {
-    const std::size_t numParticles, numBytes;
+    const std::size_t numBodies, numBytes;
 };
 
 template<class T>
@@ -160,19 +160,19 @@ template<class T>
 concept Neighborhood = requires(T nb,
                                 OctreeNsView<double, unsigned> tree,
                                 Box<double> box,
-                                LocalIndex totalParticles,
+                                LocalIndex totalBodies,
                                 GroupView groups,
                                 const double* x,
                                 const double* y,
                                 const double* z,
                                 const float* h)
 {
-    nb.build(tree, box, totalParticles, groups, x, y, z, h);
+    nb.build(tree, box, totalBodies, groups, x, y, z, h);
     {
-        nb.build(tree, box, totalParticles, groups, x, y, z, h).stats()
+        nb.build(tree, box, totalBodies, groups, x, y, z, h).stats()
     } -> std::same_as<Statistics>;
     {
-        nb.build(tree, box, totalParticles, groups, x, y, z, h)
+        nb.build(tree, box, totalBodies, groups, x, y, z, h)
             .ijLoop(std::tuple(), std::tuple<int*>(), detail::ConceptTestInteraction{}, symmetry::asymmetric)
     } -> std::same_as<void>;
 };

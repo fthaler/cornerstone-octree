@@ -49,8 +49,8 @@ template<int MaxThreads, class Tc, class Th, class KeyType>
 __global__ __launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodBuild(
     const OctreeNsView<Tc, KeyType> __grid_constant__ tree,
     const Box<Tc> __grid_constant__ box,
-    const LocalIndex firstIParticle,
-    const LocalIndex lastIParticle,
+    const LocalIndex firstBody,
+    const LocalIndex lastBody,
     const Tc* __restrict__ x,
     const Tc* __restrict__ y,
     const Tc* __restrict__ z,
@@ -60,18 +60,18 @@ __global__ __launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodBuild(
     unsigned* neighborsCount)
 {
     const LocalIndex threadId = blockDim.x * blockIdx.x + threadIdx.x;
-    const LocalIndex i        = firstIParticle + threadId;
-    if (i >= lastIParticle) return;
+    const LocalIndex i        = firstBody + threadId;
+    if (i >= lastBody) return;
 
-    const std::size_t neighborsStride = lastIParticle - firstIParticle;
+    const std::size_t neighborsStride = lastBody - firstBody;
     neighborsCount[threadId] = findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors + threadId, neighborsStride);
 }
 
 template<int MaxThreads, class Tc, class Th, class In, class Out, class Interaction>
 __global__
 __launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodKernel(const Box<Tc> __grid_constant__ box,
-                                                                   const LocalIndex firstIParticle,
-                                                                   const LocalIndex lastIParticle,
+                                                                   const LocalIndex firstBody,
+                                                                   const LocalIndex lastBody,
                                                                    const Tc* __restrict__ x,
                                                                    const Tc* __restrict__ y,
                                                                    const Tc* __restrict__ z,
@@ -84,10 +84,10 @@ __launch_bounds__(MaxThreads) void gpuFullNbListNeighborhoodKernel(const Box<Tc>
                                                                    const unsigned* __restrict__ neighborsCount)
 {
     const LocalIndex threadId = blockDim.x * blockIdx.x + threadIdx.x;
-    const LocalIndex i        = firstIParticle + threadId;
-    if (i >= lastIParticle) return;
+    const LocalIndex i        = firstBody + threadId;
+    if (i >= lastBody) return;
 
-    const std::size_t neighborsStride = lastIParticle - firstIParticle;
+    const std::size_t neighborsStride = lastBody - firstBody;
     const unsigned nbs                = imin(neighborsCount[threadId], ngmax);
 
     const auto iData  = loadParticleData(x, y, z, h, input, i);
@@ -111,7 +111,7 @@ template<class Tc, class Th>
 struct GpuFullNbListNeighborhoodImpl
 {
     Box<Tc> box;
-    LocalIndex firstIParticle, lastIParticle;
+    LocalIndex firstBody, lastBody;
     const Tc *x, *y, *z;
     const Th* h;
     unsigned ngmax;
@@ -122,18 +122,18 @@ struct GpuFullNbListNeighborhoodImpl
     void
     ijLoop(std::tuple<In*...> const& input, std::tuple<Out*...> const& output, Interaction&& interaction, Sym) const
     {
-        const LocalIndex numParticles = lastIParticle - firstIParticle;
-        constexpr int numThreads      = 128;
-        detail::gpuFullNbListNeighborhoodKernel<numThreads><<<iceil(numParticles, numThreads), numThreads>>>(
-            box, firstIParticle, lastIParticle, x, y, z, h, makeConstRestrict(input), output,
+        const LocalIndex numBodies = lastBody - firstBody;
+        constexpr int numThreads   = 128;
+        detail::gpuFullNbListNeighborhoodKernel<numThreads><<<iceil(numBodies, numThreads), numThreads>>>(
+            box, firstBody, lastBody, x, y, z, h, makeConstRestrict(input), output,
             std::forward<Interaction>(interaction), ngmax, rawPtr(neighbors), rawPtr(neighborsCount));
         checkGpuErrors(cudaGetLastError());
     }
 
     Statistics stats() const
     {
-        return {.numParticles = lastIParticle - firstIParticle,
-                .numBytes     = neighbors.size() * sizeof(typename decltype(neighbors)::value_type) +
+        return {.numBodies = lastBody - firstBody,
+                .numBytes  = neighbors.size() * sizeof(typename decltype(neighbors)::value_type) +
                             neighborsCount.size() * sizeof(typename decltype(neighborsCount)::value_type)};
     }
 };
@@ -146,14 +146,14 @@ struct GpuFullNbListNeighborhood
     template<class Tc, class KeyType, class Th>
     detail::GpuFullNbListNeighborhoodImpl<Tc, Th> build(const OctreeNsView<Tc, KeyType>& tree,
                                                         const Box<Tc>& box,
-                                                        const LocalIndex /*totalParticles*/,
+                                                        const LocalIndex /*totalBodies*/,
                                                         const GroupView& groups,
                                                         const Tc* x,
                                                         const Tc* y,
                                                         const Tc* z,
                                                         const Th* h) const
     {
-        const LocalIndex numParticles = groups.lastBody - groups.firstBody;
+        const LocalIndex numBodies = groups.lastBody - groups.firstBody;
         detail::GpuFullNbListNeighborhoodImpl<Tc, Th> nbList{
             box,
             groups.firstBody,
@@ -163,10 +163,10 @@ struct GpuFullNbListNeighborhood
             z,
             h,
             ngmax,
-            thrust::device_vector<LocalIndex>(ngmax * std::size_t(numParticles)),
-            thrust::device_vector<int>(numParticles)};
+            thrust::device_vector<LocalIndex>(ngmax * std::size_t(numBodies)),
+            thrust::device_vector<int>(numBodies)};
         constexpr int numThreads = 128;
-        detail::gpuFullNbListNeighborhoodBuild<numThreads><<<iceil(numParticles, numThreads), numThreads>>>(
+        detail::gpuFullNbListNeighborhoodBuild<numThreads><<<iceil(numBodies, numThreads), numThreads>>>(
             tree, box, groups.firstBody, groups.lastBody, x, y, z, h, ngmax, rawPtr(nbList.neighbors),
             rawPtr(nbList.neighborsCount));
         checkGpuErrors(cudaGetLastError());

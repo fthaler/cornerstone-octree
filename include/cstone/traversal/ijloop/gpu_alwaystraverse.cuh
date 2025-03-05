@@ -139,8 +139,8 @@ struct GpuAlwaysTraverseNeighborhoodImpl
 
     Statistics stats() const
     {
-        return {.numParticles = groups.lastBody - groups.firstBody,
-                .numBytes     = neighbors.size() * sizeof(typename decltype(neighbors)::value_type) +
+        return {.numBodies = groups.lastBody - groups.firstBody,
+                .numBytes  = neighbors.size() * sizeof(typename decltype(neighbors)::value_type) +
                             globalPool.size() * sizeof(typename decltype(globalPool)::value_type)};
     }
 };
@@ -153,7 +153,7 @@ struct GpuAlwaysTraverseNeighborhood
     template<class Tc, class KeyType, class Th>
     detail::GpuAlwaysTraverseNeighborhoodImpl<Tc, KeyType, Th> build(const OctreeNsView<Tc, KeyType>& tree,
                                                                      const Box<Tc>& box,
-                                                                     const LocalIndex /* totalParticles */,
+                                                                     const LocalIndex /* totalBodies */,
                                                                      const GroupView& groups,
                                                                      const Tc* x,
                                                                      const Tc* y,

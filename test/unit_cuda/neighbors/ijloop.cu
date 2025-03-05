@@ -95,19 +95,19 @@ Result reference(const Box<double>& box,
                  const double* const z,
                  const double* const h,
                  const double* const v,
-                 const LocalIndex numParticles,
-                 const LocalIndex firstIParticle,
-                 const LocalIndex lastIParticle)
+                 const LocalIndex numBodies,
+                 const LocalIndex firstBody,
+                 const LocalIndex lastBody)
 {
-    thrust::universal_vector<LocalIndex> iSum(numParticles), jSum(numParticles);
-    thrust::universal_vector<Vec3<double>> iPosSum(numParticles), jPosSum(numParticles), ijPosDiffSum(numParticles);
-    thrust::universal_vector<double> d2Sum(numParticles), hiSum(numParticles), hjSum(numParticles), viSum(numParticles),
-        vjSum(numParticles);
-    thrust::universal_vector<unsigned> neighborsCount(numParticles);
+    thrust::universal_vector<LocalIndex> iSum(numBodies), jSum(numBodies);
+    thrust::universal_vector<Vec3<double>> iPosSum(numBodies), jPosSum(numBodies), ijPosDiffSum(numBodies);
+    thrust::universal_vector<double> d2Sum(numBodies), hiSum(numBodies), hjSum(numBodies), viSum(numBodies),
+        vjSum(numBodies);
+    thrust::universal_vector<unsigned> neighborsCount(numBodies);
 
-    for (unsigned i = firstIParticle; i < lastIParticle; ++i)
+    for (unsigned i = firstBody; i < lastBody; ++i)
     {
-        for (unsigned j = 0; j < numParticles; ++j)
+        for (unsigned j = 0; j < numBodies; ++j)
         {
             const double xi = x[i];
             const double yi = y[i];
@@ -208,23 +208,23 @@ void validate(const Result& expected, const Result& actual)
 
 auto initialData()
 {
-    const unsigned totalParticles = 997;
-    const unsigned firstIParticle = 241;
-    const unsigned lastIParticle  = 701;
+    const unsigned totalBodies = 997;
+    const unsigned firstBody   = 241;
+    const unsigned lastBody    = 701;
     Box<double> box{0, 1, BoundaryType::periodic};
-    RandomCoordinates<double, StrongKeyT> coords(totalParticles, box);
+    RandomCoordinates<double, StrongKeyT> coords(totalBodies, box);
 
     thrust::universal_vector<double> x   = coords.x();
     thrust::universal_vector<double> y   = coords.y();
     thrust::universal_vector<double> z   = coords.z();
     thrust::universal_vector<KeyT> codes = coords.particleKeys();
 
-    thrust::universal_vector<double> h(totalParticles), v(totalParticles);
+    thrust::universal_vector<double> h(totalBodies), v(totalBodies);
     std::mt19937 gen(42);
     std::generate(h.begin(), h.end(), std::bind(std::uniform_real_distribution<double>(0.03, 0.15), std::ref(gen)));
     std::generate(v.begin(), v.end(), std::bind(std::uniform_real_distribution<double>(-100, 100), std::ref(gen)));
 
-    auto [csTree, counts] = computeOctree(rawPtr(codes), rawPtr(codes) + totalParticles, 8);
+    auto [csTree, counts] = computeOctree(rawPtr(codes), rawPtr(codes) + totalBodies, 8);
     OctreeData<KeyT, CpuTag> octree;
     octree.resize(nNodes(csTree));
     updateInternalTree<KeyT>(csTree, octree.data());
@@ -236,8 +236,8 @@ auto initialData()
     gsl::span<const KeyT> nodeKeys(rawPtr(octree.prefixes), octree.numNodes);
     nodeFpCenters(nodeKeys, rawPtr(centers), rawPtr(sizes), box);
 
-    Result ref = reference(box, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), rawPtr(v), totalParticles, firstIParticle,
-                           lastIParticle);
+    Result ref =
+        reference(box, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), rawPtr(v), totalBodies, firstBody, lastBody);
 
     OctreeNsView<double, KeyT> view{octree.numLeafNodes,
                                     rawPtr(octree.prefixes),
@@ -251,12 +251,12 @@ auto initialData()
 
     constexpr unsigned groupSize = TravConfig::targetSize;
     DeviceVector<LocalIndex> temp, dGroups;
-    computeGroupSplits(firstIParticle, lastIParticle, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), view.leaves,
-                       view.numLeafNodes, view.layout, box, groupSize, 7, temp, dGroups);
+    computeGroupSplits(firstBody, lastBody, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h), view.leaves, view.numLeafNodes,
+                       view.layout, box, groupSize, 7, temp, dGroups);
     thrust::universal_vector<LocalIndex> groups(dGroups.data(), dGroups.data() + dGroups.size());
 
-    const GroupView groupView{.firstBody  = firstIParticle,
-                              .lastBody   = lastIParticle,
+    const GroupView groupView{.firstBody  = firstBody,
+                              .lastBody   = lastBody,
                               .numGroups  = unsigned(groups.size() - 1),
                               .groupStart = rawPtr(groups),
                               .groupEnd   = rawPtr(groups) + 1};
@@ -264,23 +264,23 @@ auto initialData()
     auto treeData = std::make_tuple(std::move(codes), std::move(octree), std::move(codes), std::move(layout),
                                     std::move(centers), std::move(sizes), std::move(groups));
 
-    return std::make_tuple(box, totalParticles, groupView, std::move(x), std::move(y), std::move(z), std::move(h),
+    return std::make_tuple(box, totalBodies, groupView, std::move(x), std::move(y), std::move(z), std::move(h),
                            std::move(v), std::move(treeData), std::move(view), std::move(ref));
 }
 
 template<ijloop::Neighborhood Neighborhood>
 auto run(Neighborhood const& nb)
 {
-    auto [box, totalParticles, groupView, x, y, z, h, v, treeData, nsView, ref] = initialData();
+    auto [box, totalBodies, groupView, x, y, z, h, v, treeData, nsView, ref] = initialData();
 
     Result actual;
-    const auto built = nb.build(nsView, box, totalParticles, groupView, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h));
+    const auto built = nb.build(nsView, box, totalBodies, groupView, rawPtr(x), rawPtr(y), rawPtr(z), rawPtr(h));
 
     built.ijLoop(std::make_tuple(rawPtr(v)),
                  util::tupleMap(
-                     [totalParticles = totalParticles](auto& vec)
+                     [totalBodies = totalBodies](auto& vec)
                      {
-                         vec.resize(totalParticles);
+                         vec.resize(totalBodies);
                          return rawPtr(vec);
                      },
                      actual),

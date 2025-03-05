@@ -119,7 +119,7 @@ clusterNeighborsOfSuperCluster(OctreeNsView<Tc, KeyType> const& tree,
                                const Tc* y,
                                const Tc* z,
                                const Th* h,
-                               const unsigned lastIParticle,
+                               const unsigned lastBody,
                                const unsigned ngmax,
                                LocalIndex* neighbors,
                                const unsigned sci)
@@ -132,7 +132,7 @@ clusterNeighborsOfSuperCluster(OctreeNsView<Tc, KeyType> const& tree,
         for (unsigned ii = 0; ii < clusterSize; ++ii)
         {
             const unsigned i = ci * clusterSize + ii;
-            if (i >= lastIParticle) break;
+            if (i >= lastBody) break;
             unsigned nci = std::min(findNeighbors(i, x, y, z, h, tree, box, ngmax, neighbors), ngmax);
             if (nci < ngmax) neighbors[nci++] = i;
             for (unsigned nb = 0; nb < nci; ++nb)
@@ -154,16 +154,16 @@ clusterNeighborsOfSuperCluster(OctreeNsView<Tc, KeyType> const& tree,
     return superClusterNeighbors;
 }
 
-void optimizeExcl(const unsigned lastIParticle,
+void optimizeExcl(const unsigned lastBody,
                   const unsigned sci,
                   const CjPacked& cjPacked,
                   std::array<Excl, clusterPairSplit>& excl)
 {
     // Keep exact interaction on last super cluster to avoid OOB accesses
-    const unsigned numSuperclusters = iceil(lastIParticle, superClusterSize);
+    const unsigned numSuperclusters = iceil(lastBody, superClusterSize);
     if (sci == numSuperclusters - 1) return;
 
-    const unsigned numClusters = iceil(lastIParticle, clusterSize);
+    const unsigned numClusters = iceil(lastBody, clusterSize);
     bool selfInteraction       = false;
     for (unsigned cj : cjPacked.cj)
     {
@@ -291,8 +291,8 @@ storeTupleJSum(std::tuple<T0, T...> tuple, std::tuple<T0*, T*...> const& ptrs, c
 template<bool UsePbc, Symmetry Sym, class Tc, class Th, class In, class Out, class Interaction>
 __global__
 __launch_bounds__(clusterSize* clusterSize) void gromacsLikeNeighborhoodKernel(const Box<Tc> __grid_constant__ box,
-                                                                               const LocalIndex firstIParticle,
-                                                                               const LocalIndex lastIParticle,
+                                                                               const LocalIndex firstBody,
+                                                                               const LocalIndex lastBody,
                                                                                const Tc* __restrict__ x,
                                                                                const Tc* __restrict__ y,
                                                                                const Tc* __restrict__ z,
@@ -324,7 +324,7 @@ __launch_bounds__(clusterSize* clusterSize) void gromacsLikeNeighborhoodKernel(c
         const unsigned ci = sci * numClusterPerSupercluster + block.thread_index().y;
         const unsigned ai = ci * clusterSize + block.thread_index().x;
         xqib[block.thread_index().y * clusterSize + block.thread_index().x] =
-            loadParticleData(x, y, z, h, input, std::min(ai, lastIParticle - 1));
+            loadParticleData(x, y, z, h, input, std::min(ai, lastBody - 1));
     }
     block.sync();
 
@@ -346,7 +346,7 @@ __launch_bounds__(clusterSize* clusterSize) void gromacsLikeNeighborhoodKernel(c
                     unsigned maskJi     = 1u << (jm * numClusterPerSupercluster);
                     const unsigned cj   = cjPacked[jPacked].cj[jm];
                     const unsigned aj   = cj * clusterSize + block.thread_index().y;
-                    const auto jData    = loadParticleData(x, y, z, h, input, std::min(aj, lastIParticle - 1));
+                    const auto jData    = loadParticleData(x, y, z, h, input, std::min(aj, lastBody - 1));
                     result_t jResultBuf = {};
 
 #pragma unroll
@@ -356,7 +356,7 @@ __launch_bounds__(clusterSize* clusterSize) void gromacsLikeNeighborhoodKernel(c
                         {
                             const unsigned ci = sci * numClusterPerSupercluster + i;
                             const unsigned ai = ci * clusterSize + block.thread_index().x;
-                            if (ai < lastIParticle)
+                            if (ai < lastBody)
                             {
                                 const auto iData               = xqib[i * clusterSize + block.thread_index().x];
                                 const auto [ijPosDiff, distSq] = posDiffAndDistSq(UsePbc, box, iData, jData);
@@ -378,7 +378,7 @@ __launch_bounds__(clusterSize* clusterSize) void gromacsLikeNeighborhoodKernel(c
                     if constexpr (std::is_same_v<Sym, symmetry::Odd>)
                         util::for_each_tuple([](auto& v) { v = -v; }, jResultBuf);
 
-                    storeTupleJSum(jResultBuf, output, aj, aj >= firstIParticle & aj < lastIParticle);
+                    storeTupleJSum(jResultBuf, output, aj, aj >= firstBody & aj < lastBody);
                 }
             }
         }
@@ -387,7 +387,7 @@ __launch_bounds__(clusterSize* clusterSize) void gromacsLikeNeighborhoodKernel(c
     for (unsigned i = 0; i < numClusterPerSupercluster; ++i)
     {
         const unsigned ai = (sci * numClusterPerSupercluster + i) * clusterSize + block.thread_index().x;
-        storeTupleISum(iResultBuf[i], output, ai, ai >= firstIParticle & ai < lastIParticle);
+        storeTupleISum(iResultBuf[i], output, ai, ai >= firstBody & ai < lastBody);
     }
 }
 
@@ -398,7 +398,7 @@ struct GromacsLikeNeighborhoodImpl
     thrust::universal_vector<CjPacked> cjPacked;
     thrust::universal_vector<Excl> excl;
     Box<Tc> box;
-    LocalIndex firstIParticle, lastIParticle;
+    LocalIndex firstBody, lastBody;
     const Tc *x, *y, *z;
     const Th* h;
 
@@ -408,10 +408,9 @@ struct GromacsLikeNeighborhoodImpl
     {
         const auto constInput = makeConstRestrict(input);
 
-        const LocalIndex numParticles = lastIParticle - firstIParticle;
+        const LocalIndex numBodies = lastBody - firstBody;
         util::for_each_tuple(
-            [&](auto* ptr)
-            { checkGpuErrors(cudaMemsetAsync(ptr + firstIParticle, 0, sizeof(decltype(*ptr)) * numParticles)); },
+            [&](auto* ptr) { checkGpuErrors(cudaMemsetAsync(ptr + firstBody, 0, sizeof(decltype(*ptr)) * numBodies)); },
             output);
 
         const dim3 blockSize     = {clusterSize, clusterSize, 1};
@@ -420,22 +419,22 @@ struct GromacsLikeNeighborhoodImpl
             box.boundaryZ() == BoundaryType::periodic)
         {
             gromacsLikeNeighborhoodKernel<true, Sym><<<numBlocks, blockSize>>>(
-                box, firstIParticle, lastIParticle, x, y, z, h, constInput, output,
-                std::forward<Interaction>(interaction), rawPtr(sciSorted), rawPtr(cjPacked), rawPtr(excl));
+                box, firstBody, lastBody, x, y, z, h, constInput, output, std::forward<Interaction>(interaction),
+                rawPtr(sciSorted), rawPtr(cjPacked), rawPtr(excl));
         }
         else
         {
             gromacsLikeNeighborhoodKernel<false, Sym><<<numBlocks, blockSize>>>(
-                box, firstIParticle, lastIParticle, x, y, z, h, constInput, output,
-                std::forward<Interaction>(interaction), rawPtr(sciSorted), rawPtr(cjPacked), rawPtr(excl));
+                box, firstBody, lastBody, x, y, z, h, constInput, output, std::forward<Interaction>(interaction),
+                rawPtr(sciSorted), rawPtr(cjPacked), rawPtr(excl));
         }
         checkGpuErrors(cudaGetLastError());
     }
 
     Statistics stats() const
     {
-        return {.numParticles = lastIParticle - firstIParticle,
-                .numBytes     = sciSorted.size() * sizeof(typename decltype(sciSorted)::value_type) +
+        return {.numBodies = lastBody - firstBody,
+                .numBytes  = sciSorted.size() * sizeof(typename decltype(sciSorted)::value_type) +
                             cjPacked.size() * sizeof(typename decltype(cjPacked)::value_type) +
                             excl.size() * sizeof(typename decltype(excl)::value_type)};
     }
@@ -450,7 +449,7 @@ struct GromacsLikeNeighborhood
     template<class Tc, class KeyType, class Th>
     gromacs_like_neighborhood_detail::GromacsLikeNeighborhoodImpl<Tc, Th> build(const OctreeNsView<Tc, KeyType>& tree,
                                                                                 const Box<Tc>& box,
-                                                                                const LocalIndex totalParticles,
+                                                                                const LocalIndex /* totalBodies */,
                                                                                 const GroupView& groups,
                                                                                 const Tc* x,
                                                                                 const Tc* y,
@@ -459,9 +458,8 @@ struct GromacsLikeNeighborhood
     {
         using namespace gromacs_like_neighborhood_detail;
 
-        assert(groups.firstBody == 0 && totalParticles == groups.lastBody);
+        assert(groups.firstBody == 0 && totalBodies == groups.lastBody);
         const unsigned numSuperclusters = iceil(groups.lastBody, superClusterSize);
-        const unsigned numClusters      = iceil(groups.lastBody, clusterSize);
 
         GromacsLikeNeighborhoodImpl<Tc, Th> nbList{thrust::universal_vector<Sci>(numSuperclusters),
                                                    thrust::universal_vector<CjPacked>(0),

@@ -50,7 +50,7 @@ struct CpuDirectNeighborhoodImpl
 {
     OctreeNsView<Tc, KeyType> tree;
     Box<Tc> box;
-    LocalIndex firstIParticle, lastIParticle;
+    LocalIndex firstBody, lastBody;
     const Tc *x, *y, *z;
     const Th* h;
     unsigned ngmax;
@@ -65,7 +65,7 @@ struct CpuDirectNeighborhoodImpl
             std::vector<LocalIndex> neighbors(ngmax);
 
 #pragma omp for
-            for (LocalIndex i = firstIParticle; i < lastIParticle; ++i)
+            for (LocalIndex i = firstBody; i < lastBody; ++i)
             {
                 const auto iData  = loadParticleData(x, y, z, h, constInput, i);
                 const bool usePbc = requiresPbcHandling(box, iData);
@@ -87,7 +87,7 @@ struct CpuDirectNeighborhoodImpl
         }
     }
 
-    Statistics stats() const { return {.numParticles = lastIParticle - firstIParticle, .numBytes = 0}; }
+    Statistics stats() const { return {.numBodies = lastBody - firstBody, .numBytes = 0}; }
 };
 } // namespace detail
 
@@ -98,8 +98,8 @@ struct CpuDirectNeighborhood
     template<class Tc, class KeyType, class Th>
     detail::CpuDirectNeighborhoodImpl<Tc, KeyType, Th> build(const OctreeNsView<Tc, KeyType>& tree,
                                                              const Box<Tc>& box,
-                                                             const LocalIndex /* totalParticles */,
-                                                             const GroupView & groups,
+                                                             const LocalIndex /* totalBodies */,
+                                                             const GroupView& groups,
                                                              const Tc* const x,
                                                              const Tc* const y,
                                                              const Tc* const z,

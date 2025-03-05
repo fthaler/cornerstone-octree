@@ -169,7 +169,7 @@ void benchmarkNeighborhood(const Coords& coords,
         neighborhood.build(dNsView, box, n, dGroupView, rawPtr(dX), rawPtr(dY), rawPtr(dZ), rawPtr(dH));
     const ijloop::Statistics stats = neighborhoodGPU.stats();
     printf("Memory usage of neighborhood data: %.2f MB (%.1f B/particle)\n", stats.numBytes / 1.0e6,
-           stats.numBytes / double(stats.numParticles));
+           stats.numBytes / double(stats.numBodies));
 
     std::array<float, 11> times;
     std::array<cudaEvent_t, times.size() + 1> events;
