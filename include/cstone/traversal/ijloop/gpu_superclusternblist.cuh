@@ -45,7 +45,7 @@
 #include <thrust/reduce.h>
 #include <thrust/sort.h>
 
-#include "cstone/compressneighbors.hpp"
+#include "cstone/compressneighbors.cuh"
 #include "cstone/cuda/thrust_util.cuh"
 #include "cstone/primitives/math.hpp"
 #include "cstone/reducearray.cuh"
