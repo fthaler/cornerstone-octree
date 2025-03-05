@@ -551,8 +551,7 @@ __device__ __forceinline__ void pruneCandidatesAndComputeMasks(const Box<Tc>& bo
                 {
                     const unsigned ci = c + iClusterOffset;
                     const unsigned i  = ci * Config::iSize + block.thread_index().x % Config::iSize;
-                    if (!Config::symmetric | (iSupercluster != jSupercluster) |
-                        ((iSupercluster == jSupercluster) & (i <= j)))
+                    if (!Config::symmetric | (iSupercluster != jSupercluster) | (i <= j))
                     {
                         const unsigned si = ci * Config::iSize + block.thread_index().x % Config::iSize;
                         const Tc xi       = xis[si];
@@ -898,7 +897,7 @@ __global__ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPe
     {
         const unsigned maskStartIndex = nb * (Config::iClustersPerSupercluster * Config::numWarpsPerInteraction) +
                                         (warpIndex * Config::iClustersPerSupercluster);
-        const unsigned warpMask =
+        unsigned warpMask =
             (nbData[maskStartIndex / 32] >> (maskStartIndex % 32)) & ((1 << Config::iClustersPerSupercluster) - 1);
 
         if (warpMask)
@@ -912,25 +911,20 @@ __global__ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPe
             std::get<0>(jData) -= firstValidBody;
             result_t jResult = {};
 
+            warpMask >>= iClusterOffset;
+            unsigned i = iSupercluster * Config::superclusterSize + block.thread_index().x;
             for (unsigned c = 0; c < Config::iClustersPerSupercluster; c += iClustersPerWarp)
             {
-                const unsigned ci = c + iClusterOffset;
-                const bool mask   = (warpMask >> ci) & 1;
-                if (mask)
+                if ((warpMask & 1) && (!Config::symmetric | (iSupercluster != jSupercluster) | (i <= j)))
                 {
-                    const unsigned i =
-                        iSupercluster * Config::superclusterSize + c * Config::iSize + block.thread_index().x;
-                    if (!Config::symmetric | (iSupercluster != jSupercluster) |
-                        ((iSupercluster == jSupercluster) & (i <= j)))
+                    const auto& iData = iSuperclusterData[c * Config::iSize + block.thread_index().x];
+                    assert(std::get<0>(iData) == i - firstValidBody);
+                    const auto [ijPosDiff, distSq] = posDiffAndDistSq(UsePbc, box, iData, jData);
+                    auto ijInteraction             = interaction(iData, jData, ijPosDiff, distSq);
+                    if (distSq < radiusSq(iData)) updateResult(iResults[c / iClustersPerWarp], ijInteraction);
+                    if constexpr (Config::symmetric)
                     {
-                        const auto iData =
-                            iSuperclusterData[ci * Config::iSize + block.thread_index().x % Config::iSize];
-                        assert(std::get<0>(iData) == i - firstValidBody);
-                        const auto [ijPosDiff, distSq] = posDiffAndDistSq(UsePbc, box, iData, jData);
-                        auto ijInteraction             = interaction(iData, jData, ijPosDiff, distSq);
-                        if (distSq < radiusSq(iData)) updateResult(iResults[c / iClustersPerWarp], ijInteraction);
-                        if (Config::symmetric & (distSq < radiusSq(jData)) &
-                            ((i != j) | ((i == j) & ((i < firstBody) | (i >= lastBody)))))
+                        if ((distSq < radiusSq(jData)) & ((i != j) | (i < firstBody) | (i >= lastBody)))
                         {
                             if constexpr (std::is_same_v<Sym, symmetry::Asymmetric>)
                                 ijInteraction = interaction(jData, iData, -ijPosDiff, distSq);
@@ -938,6 +932,8 @@ __global__ __launch_bounds__(Config::iThreads* Config::jSize* NumSuperclustersPe
                         }
                     }
                 }
+                warpMask >>= iClustersPerWarp;
+                i += Config::iThreads;
             }
 
             if constexpr (Config::symmetric)
