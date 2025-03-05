@@ -143,7 +143,6 @@ warpDecompressNeighbors(const char* const __restrict__ input, std::uint32_t* con
 
     unsigned dataSize = 0;
     unsigned previous = 0;
-#pragma unroll 2
     for (unsigned offset = 0; offset < n; offset += GpuConfig::warpSize)
     {
         const auto nonOneBits = nonOnes[offset / GpuConfig::warpSize];
