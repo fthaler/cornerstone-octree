@@ -333,7 +333,6 @@ TEST(IjLoop, GpuClusterNbList8x4WithSymmetryWithCompression)
     run(ijloop::GpuClusterNbListNeighborhood<>::withNcMax<ngmax>::withClusterSize<8, 4>::withSymmetry::withCompression<
         8>{});
 }
-// TEST(IjLoop, GromacsLikeNeighborhood) { run(ijloop::GromacsLikeNeighborhood{ngmax}); }
 
 constexpr unsigned superclusterNcMax = 1024; // needs to be pretty big due to many split groups
 
